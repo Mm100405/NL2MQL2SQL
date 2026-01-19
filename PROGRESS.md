@@ -121,7 +121,7 @@
 ```bash
 cd backend
 pip install -r requirements.txt
-uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8010
 ```
 
 ### 前端启动
@@ -133,7 +133,7 @@ npm run dev
 
 ### 访问地址
 - 前端: http://localhost:5173
-- 后端API文档: http://localhost:8000/docs
+- 后端API文档: http://localhost:8010/docs
 
 ---
 

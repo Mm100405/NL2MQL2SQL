@@ -1,0 +1,93 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.venv/
+.env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backend
+/backend/nl2mql2sql.db
+/backend/__pycache__/
+/backend/app/__pycache__/
+/backend/app/models/__pycache__/
+/backend/app/api/__pycache__/
+/backend/app/services/__pycache__/
+/backend/app/utils/__pycache__/
+/backend/app/core/__pycache__/
+/backend/.pytest_cache/
+/backend/logs/
+/backend/log/
+
+# Frontend
+/frontend/dist/
+/frontend/node_modules/
+/frontend/.vite/
+/frontend/.vs/
+/frontend/public/uploads/
+/frontend/src/assets/temp/
+/frontend/src/assets/cache/
+
+# Logs
+*.log
+logs/
+log/
+
+# Environment variables
+.env
+.env.local
+.env.dev
+.env.production
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.cov/
+coverage.xml
+
+# Processed files
+*.tmp
+*.temp
+*.bak
+
+# SQLite
+*.db
+*.db-journal
+
+# pycache
+__pycache__/
+*.pyc
