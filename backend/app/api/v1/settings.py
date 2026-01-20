@@ -13,6 +13,7 @@ router = APIRouter()
 
 # Pydantic Schemas
 class ModelConfigCreate(BaseModel):
+    model_config = {"protected_namespaces": ()}
     name: str
     provider: str
     model_name: str
@@ -23,6 +24,7 @@ class ModelConfigCreate(BaseModel):
 
 
 class ModelConfigUpdate(BaseModel):
+    model_config = {"protected_namespaces": ()}
     name: Optional[str] = None
     provider: Optional[str] = None
     model_name: Optional[str] = None
@@ -33,6 +35,10 @@ class ModelConfigUpdate(BaseModel):
 
 
 class ModelConfigResponse(BaseModel):
+    model_config = {
+        "protected_namespaces": (),
+        "from_attributes": True
+    }
     id: str
     name: str
     provider: str
@@ -43,9 +49,6 @@ class ModelConfigResponse(BaseModel):
     config_params: Optional[dict]
     created_at: str
     updated_at: str
-
-    class Config:
-        from_attributes = True
 
 
 class ModelConfigStatusResponse(BaseModel):

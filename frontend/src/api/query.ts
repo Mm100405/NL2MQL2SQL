@@ -9,9 +9,19 @@ import type {
   PaginatedResponse
 } from './types'
 
-// NL转MQL
+// 分析意图
+export function analyzeIntent(data: QueryRequest): Promise<any> {
+  return request.post('/query/analyze-intent', data)
+}
+
+// 生成MQL
+export function generateMQL(data: QueryRequest): Promise<NL2MQLResponse> {
+  return request.post('/query/generate-mql', data)
+}
+
+// NL转MQL (保留兼容性)
 export function nl2mql(data: QueryRequest): Promise<NL2MQLResponse> {
-  return request.post('/query/nl2mql', data)
+  return request.post('/query/generate-mql', data)
 }
 
 // MQL转SQL

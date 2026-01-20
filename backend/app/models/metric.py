@@ -21,6 +21,19 @@ class AggregationType(str, enum.Enum):
     COUNT_DISTINCT = "COUNT_DISTINCT"
 
 
+class CalculationMethod(str, enum.Enum):
+    field = "field"
+    expression = "expression"
+
+
+class DerivationType(str, enum.Enum):
+    none = "none"
+    yoy = "yoy"
+    mom = "mom"
+    yoy_growth = "yoy_growth"
+    mom_growth = "mom_growth"
+
+
 class Metric(Base):
     __tablename__ = "metrics"
 
@@ -30,8 +43,15 @@ class Metric(Base):
     metric_type = Column(String(20), nullable=False, default=MetricType.basic.value)
     dataset_id = Column(String(36), ForeignKey("datasets.id"), nullable=True)
     aggregation = Column(String(20), nullable=True)  # SUM, COUNT, AVG, etc.
+    calculation_method = Column(String(20), nullable=True, default=CalculationMethod.field.value)
     measure_column = Column(String(255), nullable=True)  # Physical column for basic metrics
     calculation_formula = Column(Text, nullable=True)  # MQL formula for derived/composite
+    is_semi_additive = Column(JSON, nullable=True) # JSON to store semi-additive settings
+    date_column_id = Column(String(36), nullable=True) # Metric Date Identifier
+    base_metric_id = Column(String(36), ForeignKey("metrics.id"), nullable=True)
+    derivation_type = Column(String(20), nullable=True, default=DerivationType.none.value)
+    time_constraint = Column(Text, nullable=True)
+    analysis_dimensions = Column(JSON, nullable=True)  # List of dimension IDs
     filters = Column(JSON, nullable=True)  # Default filters [{field, operator, value}]
     synonyms = Column(JSON, nullable=True)  # Alternative names for NL recognition
     unit = Column(String(50), nullable=True)  # e.g., "元", "个", "%"
@@ -48,8 +68,15 @@ class Metric(Base):
             "metric_type": self.metric_type,
             "dataset_id": self.dataset_id,
             "aggregation": self.aggregation,
+            "calculation_method": self.calculation_method,
             "measure_column": self.measure_column,
             "calculation_formula": self.calculation_formula,
+            "is_semi_additive": self.is_semi_additive,
+            "date_column_id": self.date_column_id,
+            "base_metric_id": self.base_metric_id,
+            "derivation_type": self.derivation_type,
+            "time_constraint": self.time_constraint,
+            "analysis_dimensions": self.analysis_dimensions or [],
             "filters": self.filters or [],
             "synonyms": self.synonyms or [],
             "unit": self.unit,

@@ -6,8 +6,8 @@
       </template>
       <template #description>
         <div class="description">
-          <h3>暂未配置AI模型</h3>
-          <p>智能问数功能需要配置AI模型才能使用</p>
+          <h3>{{ settingsStore.isModelConfigured ? 'AI模型不可用' : '暂未配置AI模型' }}</h3>
+          <p>{{ settingsStore.isModelConfigured ? '当前配置的AI模型无法连接，请检查配置' : '智能问数功能需要配置AI模型才能使用' }}</p>
           <p class="hint">支持 OpenAI、Ollama、Azure OpenAI 等多种模型</p>
         </div>
       </template>
@@ -21,8 +21,10 @@
 
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
+import { useSettingsStore } from '@/stores/settings'
 
 const router = useRouter()
+const settingsStore = useSettingsStore()
 
 function goToConfig() {
   router.push({ name: 'ModelConfig' })

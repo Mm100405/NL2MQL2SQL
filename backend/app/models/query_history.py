@@ -10,7 +10,7 @@ class QueryHistory(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     natural_language = Column(Text, nullable=False)
-    mql_query = Column(Text, nullable=True)
+    mql_query = Column(JSON, nullable=True)
     sql_query = Column(Text, nullable=True)
     execution_time = Column(Integer, nullable=True)  # milliseconds
     result_count = Column(Integer, nullable=True)

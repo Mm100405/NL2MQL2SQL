@@ -19,6 +19,14 @@
             <a-tag v-if="record.is_default" color="arcoblue" size="small">默认</a-tag>
           </a-space>
         </template>
+        <template #connectionStatus="{ record }">
+          <a-space>
+            <a-badge :status="record.connectionStatus?.connected ? 'success' : record.connectionStatus?.loading ? 'processing' : 'default'" />
+            <span v-if="record.connectionStatus?.loading">测试中...</span>
+            <span v-else-if="record.connectionStatus?.connected">已连接</span>
+            <span v-else>未连接</span>
+          </a-space>
+        </template>
         <template #actions="{ record }">
           <a-space>
             <a-button type="text" size="small" @click="handleTest(record)">
@@ -135,7 +143,15 @@ const modalVisible = ref(false)
 const isEdit = ref(false)
 const editingId = ref('')
 const formRef = ref<FormInstance>()
-const modelConfigs = ref<ModelConfig[]>([])
+interface ExtendedModelConfig extends ModelConfig {
+  connectionStatus?: {
+    loading?: boolean;
+    connected?: boolean;
+    lastTested?: string;
+  };
+}
+
+const modelConfigs = ref<ExtendedModelConfig[]>([])
 
 const form = reactive({
   name: '',
@@ -160,6 +176,7 @@ const columns = [
   { title: '配置名称', dataIndex: 'name' },
   { title: '提供商', slotName: 'provider' },
   { title: '模型', dataIndex: 'model_name' },
+  { title: '连接状态', slotName: 'connectionStatus', width: 120 },
   { title: '状态', slotName: 'status' },
   { title: '操作', slotName: 'actions', width: 280 }
 ]
@@ -187,8 +204,18 @@ function getApiBasePlaceholder() {
 async function fetchConfigs() {
   loading.value = true
   try {
-    modelConfigs.value = await getModelConfigs()
-    settingsStore.setModelConfigs(modelConfigs.value)
+    const configs = await getModelConfigs()
+    // 初始化连接状态
+    modelConfigs.value = configs.map(config => ({
+      ...config,
+      connectionStatus: { connected: false, loading: false }
+    }))
+    settingsStore.setModelConfigs(modelConfigs.value as ModelConfig[])
+    
+    // 只测试默认配置的连接状态
+    setTimeout(() => {
+      testDefaultConnection()
+    }, 100)  // 延迟执行，确保UI已更新
   } catch (error) {
     console.error('Failed to fetch configs:', error)
   } finally {
@@ -260,16 +287,66 @@ function resetForm() {
   formRef.value?.resetFields()
 }
 
-async function handleTest(record: ModelConfig) {
+// 测试默认配置的连接状态
+async function testDefaultConnection() {
+  const defaultConfig = modelConfigs.value.find(config => config.is_default);
+  if (defaultConfig) {
+    await testSingleConnection(defaultConfig);
+  }
+}
+
+// 测试单个配置的连接状态
+async function testSingleConnection(config: ExtendedModelConfig) {
+  config.connectionStatus = {
+    ...config.connectionStatus,
+    loading: true,
+    connected: false
+  }
+  
   try {
-    const result = await testModelConnection(record.id)
-    if (result.success) {
-      Message.success('连接测试成功')
-    } else {
-      Message.error(`连接测试失败: ${result.message}`)
+    const result = await testModelConnection(config.id)
+    config.connectionStatus = {
+      ...config.connectionStatus,
+      loading: false,
+      connected: result.success
     }
   } catch (error) {
-    Message.error('连接测试失败')
+    config.connectionStatus = {
+      ...config.connectionStatus,
+      loading: false,
+      connected: false
+    }
+  }
+}
+
+async function handleTest(record: ExtendedModelConfig) {
+  // 更新记录的连接状态为测试中
+  record.connectionStatus = {
+    ...record.connectionStatus,
+    loading: true,
+    connected: false
+  };
+  
+  try {
+    const result = await testModelConnection(record.id);
+    record.connectionStatus = {
+      ...record.connectionStatus,
+      loading: false,
+      connected: result.success
+    };
+    
+    if (result.success) {
+      Message.success('连接测试成功');
+    } else {
+      Message.error(`连接测试失败: ${result.message}`);
+    }
+  } catch (error) {
+    record.connectionStatus = {
+      ...record.connectionStatus,
+      loading: false,
+      connected: false
+    };
+    Message.error('连接测试失败');
   }
 }
 

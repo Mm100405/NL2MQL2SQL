@@ -41,8 +41,15 @@ class MetricCreate(BaseModel):
     metric_type: str = "basic"
     dataset_id: Optional[str] = None
     aggregation: Optional[str] = None
+    calculation_method: Optional[str] = "field"
     measure_column: Optional[str] = None
     calculation_formula: Optional[str] = None
+    is_semi_additive: Optional[dict] = None
+    date_column_id: Optional[str] = None
+    base_metric_id: Optional[str] = None
+    derivation_type: Optional[str] = "none"
+    time_constraint: Optional[str] = None
+    analysis_dimensions: Optional[List[str]] = None
     filters: Optional[List[dict]] = None
     synonyms: Optional[List[str]] = None
     unit: Optional[str] = None

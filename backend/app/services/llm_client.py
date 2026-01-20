@@ -199,17 +199,22 @@ async def _call_custom(prompt: str, api_key: Optional[str], api_base: str, model
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         
-        response = await client.post(
-            f"{api_base}/chat/completions",
-            headers=headers,
-            json={
-                "model": model_name,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": temperature,
-                "max_tokens": max_tokens
-            },
-            timeout=60.0
-        )
-        
-        data = response.json()
-        return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        try:
+            response = await client.post(
+                f"{api_base}/chat/completions",
+                headers=headers,
+                json={
+                    "model": model_name,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": temperature,
+                    "max_tokens": max_tokens
+                },
+                timeout=30.0
+            )
+            response.raise_for_status()
+            data = response.json()
+            return data.get("choices", [{}])[0].get("message", {}).get("content", "")
+        except httpx.TimeoutException:
+            raise Exception("LLM request timed out after 30 seconds")
+        except Exception as e:
+            raise Exception(f"LLM request failed: {str(e)}")

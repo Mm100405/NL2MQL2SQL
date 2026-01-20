@@ -1,133 +1,61 @@
 <template>
-  <a-card class="query-steps">
-    <a-steps :current="currentStep" direction="vertical">
-      <!-- 自然语言 -->
-      <a-step title="自然语言">
-        <template #description>
-          <div class="step-content">
-            <div class="step-text">{{ naturalLanguage }}</div>
-          </div>
-        </template>
-      </a-step>
+  <div class="analysis-process">
+    <div class="process-header" @click="expanded = !expanded">
+      <icon-bulb />
+      <span>分析过程</span>
+      <icon-up v-if="expanded" />
+      <icon-down v-else />
+    </div>
 
-      <!-- MQL -->
-      <a-step title="MQL (指标查询语言)">
-        <template #description>
-          <div class="step-content">
-            <div class="code-block">
-              <pre v-if="!editingMql">{{ mql }}</pre>
-              <a-textarea
-                v-else
-                v-model="editedMql"
-                :auto-size="{ minRows: 3, maxRows: 10 }"
-              />
+    <div v-if="expanded" class="process-content">
+      <div v-for="(step, index) in steps" :key="index" class="process-step">
+        <div class="step-line" :class="{ last: index === steps.length - 1 }">
+          <div class="step-dot">
+            <icon-check-circle-fill v-if="step.status === 'success'" />
+            <icon-loading v-else-if="step.status === 'loading'" />
+            <div v-else class="dot-inner"></div>
+          </div>
+        </div>
+        <div class="step-main">
+          <div class="step-title">{{ step.title }}</div>
+          <div class="step-body">
+            <div v-if="step.title === '指标查询' && mql" class="mql-section">
+              <div v-for="(line, lIdx) in step.content.split('\n')" :key="lIdx" class="content-line">
+                {{ line }}
+              </div>
+              <div class="mql-code-wrapper">
+                <div class="mql-code-header">
+                  <icon-copy class="copy-btn" @click="copyToClipboard(JSON.stringify(mql, null, 2))" />
+                </div>
+                <pre class="mql-code">{{ JSON.stringify(mql, null, 2) }}</pre>
+                <div class="mql-expand">
+                  <icon-down />
+                </div>
+              </div>
             </div>
-            <div class="step-actions">
-              <a-button v-if="!editingMql" size="small" type="text" @click="startEditMql">
-                <template #icon><icon-edit /></template>
-                编辑
-              </a-button>
-              <template v-else>
-                <a-button size="small" type="primary" @click="saveMql">保存</a-button>
-                <a-button size="small" @click="cancelEditMql">取消</a-button>
-              </template>
-              <a-button size="small" type="text" @click="copyToClipboard(mql)">
-                <template #icon><icon-copy /></template>
-                复制
-              </a-button>
+            <div v-else class="content-text">
+              <div v-for="(line, lIdx) in step.content.split('\n')" :key="lIdx" class="content-line">
+                {{ line }}
+              </div>
             </div>
           </div>
-        </template>
-      </a-step>
-
-      <!-- SQL -->
-      <a-step title="SQL">
-        <template #description>
-          <div class="step-content">
-            <div class="code-block sql">
-              <pre v-if="!editingSql">{{ sql }}</pre>
-              <a-textarea
-                v-else
-                v-model="editedSql"
-                :auto-size="{ minRows: 3, maxRows: 10 }"
-              />
-            </div>
-            <div class="step-actions">
-              <a-button v-if="!editingSql" size="small" type="text" @click="startEditSql">
-                <template #icon><icon-edit /></template>
-                编辑
-              </a-button>
-              <template v-else>
-                <a-button size="small" type="primary" @click="saveSql">保存</a-button>
-                <a-button size="small" @click="cancelEditSql">取消</a-button>
-              </template>
-              <a-button size="small" type="text" @click="copyToClipboard(sql)">
-                <template #icon><icon-copy /></template>
-                复制
-              </a-button>
-            </div>
-          </div>
-        </template>
-      </a-step>
-    </a-steps>
-  </a-card>
+        </div>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref } from 'vue'
 import { Message } from '@arco-design/web-vue'
+import type { AnalysisStep } from '@/api/types'
 
 const props = defineProps<{
-  naturalLanguage: string
-  mql: string
-  sql: string
-  loading?: boolean
+  steps: AnalysisStep[]
+  mql?: any
 }>()
 
-const emit = defineEmits<{
-  (e: 'edit-mql', mql: string): void
-  (e: 'edit-sql', sql: string): void
-}>()
-
-const editingMql = ref(false)
-const editingSql = ref(false)
-const editedMql = ref('')
-const editedSql = ref('')
-
-const currentStep = computed(() => {
-  if (props.loading) return 1
-  if (props.sql) return 3
-  if (props.mql) return 2
-  return 1
-})
-
-function startEditMql() {
-  editedMql.value = props.mql
-  editingMql.value = true
-}
-
-function saveMql() {
-  emit('edit-mql', editedMql.value)
-  editingMql.value = false
-}
-
-function cancelEditMql() {
-  editingMql.value = false
-}
-
-function startEditSql() {
-  editedSql.value = props.sql
-  editingSql.value = true
-}
-
-function saveSql() {
-  emit('edit-sql', editedSql.value)
-  editingSql.value = false
-}
-
-function cancelEditSql() {
-  editingSql.value = false
-}
+const expanded = ref(true)
 
 async function copyToClipboard(text: string) {
   try {
@@ -140,44 +68,136 @@ async function copyToClipboard(text: string) {
 </script>
 
 <style scoped>
-.query-steps {
-  background: var(--color-bg-1);
+.analysis-process {
+  margin: 16px 0;
+  border-radius: 8px;
 }
 
-.step-content {
-  margin-top: 8px;
-}
-
-.step-text {
-  padding: 12px;
-  background: var(--color-fill-2);
-  border-radius: 4px;
-  color: var(--color-text-1);
-}
-
-.code-block {
-  padding: 12px;
-  background: var(--color-fill-1);
-  border-radius: 4px;
-  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-  font-size: 13px;
-  overflow-x: auto;
-}
-
-.code-block pre {
-  margin: 0;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.code-block.sql {
-  background: #1e1e1e;
-  color: #d4d4d4;
-}
-
-.step-actions {
+.process-header {
   display: flex;
+  align-items: center;
   gap: 8px;
-  margin-top: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  color: var(--color-text-2);
+  font-size: 13px;
+  width: fit-content;
+  background: var(--color-fill-1);
+  border-radius: 20px;
+}
+
+.process-content {
+  margin-top: 16px;
+  padding-left: 8px;
+}
+
+.process-step {
+  display: flex;
+  gap: 16px;
+}
+
+.step-line {
+  position: relative;
+  width: 20px;
+  display: flex;
+  justify-content: center;
+}
+
+.step-line::before {
+  content: '';
+  position: absolute;
+  top: 20px;
+  bottom: 0;
+  width: 1px;
+  background: var(--color-border);
+}
+
+.step-line.last::before {
+  display: none;
+}
+
+.step-dot {
+  position: relative;
+  z-index: 1;
+  width: 16px;
+  height: 16px;
+  background: var(--color-bg-1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #165dff;
+  font-size: 16px;
+}
+
+.dot-inner {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-border);
+}
+
+.step-main {
+  padding-bottom: 24px;
+  flex: 1;
+}
+
+.step-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--color-text-1);
+  margin-bottom: 8px;
+}
+
+.step-body {
+  color: var(--color-text-2);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.content-line {
+  margin-bottom: 4px;
+}
+
+.mql-code-wrapper {
+  margin-top: 12px;
+  background: #f8f9fb;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  position: relative;
+  max-width: 600px;
+}
+
+.mql-code-header {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px;
+}
+
+.copy-btn {
+  cursor: pointer;
+  color: var(--color-text-3);
+}
+
+.copy-btn:hover {
+  color: #165dff;
+}
+
+.mql-code {
+  margin: 0;
+  padding: 0 16px 16px;
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 12px;
+  color: #4e5969;
+  overflow-x: auto;
+  white-space: pre-wrap;
+}
+
+.mql-expand {
+  display: flex;
+  justify-content: center;
+  padding: 4px;
+  border-top: 1px solid #e5e6eb;
+  cursor: pointer;
+  color: #165dff;
 }
 </style>

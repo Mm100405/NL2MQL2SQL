@@ -149,8 +149,9 @@ const columns = [
           h(Button, { 
             type: 'text', 
             size: 'small',
+            status: 'normal',
             onClick: () => handleEdit(record)
-          }, { default: () => h('icon-edit') }),
+          }, { default: () => [h('icon-edit'), ' 编辑'] }),
           
           h(Popconfirm, { 
             content: '确定删除此数据集？',
@@ -159,13 +160,14 @@ const columns = [
             default: () => h(Button, { 
               type: 'text', 
               size: 'small', 
-              status: 'danger'
-            }, { default: () => h('icon-delete') })
+              status: 'danger',
+              danger: true
+            }, { default: () => [h('icon-delete'), ' 删除'] })
           })
         ]
       })
     },
-    width: 200 
+    width: 240 
   }
 ]
 

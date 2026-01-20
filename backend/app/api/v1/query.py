@@ -21,14 +21,21 @@ class QueryRequest(BaseModel):
     context: Optional[dict] = None
 
 
+class AnalysisStep(BaseModel):
+    title: str
+    content: str
+    status: str = "success"
+
+
 class NL2MQLResponse(BaseModel):
-    mql: str
+    mql: dict
+    steps: List[AnalysisStep]
     confidence: float
     interpretation: str
 
 
 class MQL2SQLRequest(BaseModel):
-    mql: str
+    mql: dict
 
 
 class MQL2SQLResponse(BaseModel):
@@ -53,9 +60,10 @@ class ExecuteResponse(BaseModel):
 
 class FullQueryResponse(BaseModel):
     natural_language: str
-    mql: str
+    mql: dict
     sql: str
     result: ExecuteResponse
+    steps: List[AnalysisStep]
     query_id: str
 
 
@@ -72,17 +80,64 @@ class AttributionRequest(BaseModel):
 
 
 # ============ Routes ============
-@router.post("/nl2mql", response_model=NL2MQLResponse)
-async def nl_to_mql(request: QueryRequest, db: Session = Depends(get_db)):
-    """将自然语言转换为MQL"""
-    # Get default model config
+class IntentResponse(BaseModel):
+    intent: str
+    suggested_metrics: List[str]
+    suggested_dimensions: List[str]
+    steps: List[AnalysisStep]
+
+
+@router.post("/analyze-intent", response_model=IntentResponse)
+async def analyze_intent(request: QueryRequest, db: Session = Depends(get_db)):
+    """分析查询意图和相关元数据"""
+    from app.models.metric import Metric
+    from app.models.dimension import Dimension
+    
+    # 简单的关键词匹配模拟检索 (实际应使用向量检索)
+    q = request.natural_language.lower()
+    all_metrics = db.query(Metric).all()
+    all_dimensions = db.query(Dimension).all()
+    
+    suggested_metrics = [m for m in all_metrics if any(word in m.name.lower() or word in (m.description or "").lower() for word in q.split())]
+    if not suggested_metrics: suggested_metrics = all_metrics[:5]
+    
+    suggested_dims = [d for d in all_dimensions if any(word in d.name.lower() or word in (d.description or "").lower() for word in q.split())]
+    if not suggested_dims: suggested_dims = all_dimensions[:5]
+    
+    metrics_str = ", ".join([m.name for m in suggested_metrics[:10]])
+    dims_str = ", ".join([d.name for d in suggested_dims[:10]])
+    
+    steps = [
+        {
+            "title": "意图识别",
+            "content": f"正在分析您的查询：'{request.natural_language}'...",
+            "status": "success"
+        },
+        {
+            "title": "指标检索",
+            "content": f"检索到相关指标：{metrics_str}\n相关维度：{dims_str}",
+            "status": "success"
+        }
+    ]
+    
+    return IntentResponse(
+        intent="具体指标和维度的精准查询",
+        suggested_metrics=[m.name for m in suggested_metrics],
+        suggested_dimensions=[d.name for d in suggested_dims],
+        steps=steps
+    )
+
+
+@router.post("/generate-mql", response_model=NL2MQLResponse)
+async def generate_mql(request: QueryRequest, db: Session = Depends(get_db)):
+    """基于意图生成 MQL JSON"""
     model_config = db.query(ModelConfig).filter(
         ModelConfig.is_default == True,
         ModelConfig.is_active == True
     ).first()
     
     if not model_config:
-        raise HTTPException(status_code=400, detail="No active model configured. Please configure an AI model first.")
+        raise HTTPException(status_code=400, detail="No active model configured.")
     
     api_key = decrypt_api_key(model_config.api_key) if model_config.api_key else None
     
@@ -93,7 +148,8 @@ async def nl_to_mql(request: QueryRequest, db: Session = Depends(get_db)):
         api_key=api_key,
         api_base=model_config.api_base,
         config_params=model_config.config_params,
-        db=db
+        db=db,
+        context=request.context
     )
     
     return NL2MQLResponse(**result)
@@ -151,6 +207,7 @@ async def nl_to_result(request: QueryRequest, db: Session = Depends(get_db)):
         db=db
     )
     mql = nl_result["mql"]
+    steps = nl_result["steps"]
     
     # Step 2: MQL to SQL
     sql_result = await mql_to_sql(mql, db)
@@ -163,13 +220,13 @@ async def nl_to_result(request: QueryRequest, db: Session = Depends(get_db)):
     else:
         # Use demo data if no datasource
         query_result = {
-            "columns": ["日期", "销售额"],
+            "columns": ["日期", "销售额", "销售额年同比"],
             "data": [
-                ["2024-01-01", 10000],
-                ["2024-01-02", 12000],
-                ["2024-01-03", 9500],
-                ["2024-01-04", 11000],
-                ["2024-01-05", 13000]
+                ["2025-04-01", 1000000, 0.12],
+                ["2025-04-02", 1200000, 0.15],
+                ["2025-04-03", 950000, -0.05],
+                ["2025-04-04", 1100000, 0.08],
+                ["2025-04-05", 1300000, 0.20]
             ],
             "total_count": 5,
             "chart_recommendation": "line"
@@ -196,6 +253,7 @@ async def nl_to_result(request: QueryRequest, db: Session = Depends(get_db)):
         mql=mql,
         sql=sql,
         result=ExecuteResponse(**query_result),
+        steps=steps,
         query_id=history.id
     )
 

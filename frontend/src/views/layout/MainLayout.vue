@@ -3,26 +3,71 @@
     <!-- 侧边栏 -->
     <a-layout-sider
       :collapsed="appStore.sidebarCollapsed"
-      :width="220"
+      :width="260"
       :collapsed-width="48"
       collapsible
       breakpoint="lg"
       @collapse="appStore.toggleSidebar"
+      class="sidebar-sider"
     >
       <!-- Logo -->
       <div class="logo">
-        <icon-robot :size="28" />
-        <span v-if="!appStore.sidebarCollapsed" class="logo-text">NL2MQL2SQL</span>
+        <span v-if="!appStore.sidebarCollapsed" class="logo-text">Aloudata Agent</span>
+        <icon-menu-unfold v-if="appStore.sidebarCollapsed" @click="appStore.toggleSidebar" />
+        <icon-menu-fold v-else class="fold-icon" @click="appStore.toggleSidebar" />
       </div>
 
-      <!-- 导航菜单 -->
+      <!-- 问数页面特有侧边栏 -->
+      <template v-if="route.name === 'Query' && !appStore.sidebarCollapsed && showAgentSidebar">
+        <div class="sidebar-header-actions">
+          <a-button type="text" size="small" @click="toggleSidebarMode">
+            <template #icon><icon-left /></template>
+            返回导航
+          </a-button>
+        </div>
+
+        <div class="new-chat-wrapper">
+          <a-button type="primary" long class="new-chat-btn" @click="handleNewChat">
+            <template #icon><icon-plus-circle-fill /></template>
+            新建对话
+          </a-button>
+        </div>
+
+        <div class="chat-history">
+          <div class="history-group">
+            <div class="group-title">历史查询</div>
+            <div 
+              v-for="item in chatHistory" 
+              :key="item.id" 
+              class="history-item"
+              :class="{ active: route.query.id === item.id }"
+              @click="handleHistoryClick(item.id)"
+            >
+              {{ item.natural_language.slice(0, 20) }}{{ item.natural_language.length > 20 ? '...' : '' }}
+            </div>
+            <div v-if="chatHistory.length === 0" class="empty-history">暂无历史</div>
+          </div>
+        </div>
+
+        <div class="user-info">
+          <a-avatar :size="24">demo</a-avatar>
+          <span>demo</span>
+        </div>
+      </template>
+
+      <!-- 导航菜单 (非问数页面或折叠时显示) -->
       <a-menu
+        v-else
         :selected-keys="selectedKeys"
         v-model:open-keys="openKeys"
         :auto-open-selected="true"
         :accordion="false"
         @menu-item-click="handleMenuClick"
       >
+        <a-menu-item v-if="route.name === 'Query'" key="toggle" @click="toggleSidebarMode">
+          <template #icon><icon-apps /></template>
+          返回 Agent 视图
+        </a-menu-item>
         <!-- 智能问数 -->
         <a-menu-item key="Query">
           <template #icon><icon-search /></template>
@@ -104,7 +149,13 @@
               模型未配置
             </a-button>
           </a-tooltip>
-          <a-tooltip v-else content="AI模型已配置">
+          <a-tooltip v-else-if="!settingsStore.isModelAvailable" content="AI模型已配置但不可用，点击前往配置">
+            <a-button type="text" status="warning" @click="goToModelConfig">
+              <template #icon><icon-exclamation-circle /></template>
+              模型不可用
+            </a-button>
+          </a-tooltip>
+          <a-tooltip v-else content="AI模型已配置且可用">
             <a-button type="text" status="success">
               <template #icon><icon-check-circle /></template>
               模型已就绪
@@ -130,11 +181,37 @@ import { computed, ref, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAppStore } from '@/stores/app'
 import { useSettingsStore } from '@/stores/settings'
+import { getQueryHistory } from '@/api/query'
+import type { QueryHistory } from '@/api/types'
 
 const route = useRoute()
 const router = useRouter()
 const appStore = useAppStore()
 const settingsStore = useSettingsStore()
+
+const showAgentSidebar = ref(true)
+const chatHistory = ref<QueryHistory[]>([])
+
+async function fetchHistory() {
+  try {
+    const res = await getQueryHistory({ page: 1, page_size: 20 })
+    chatHistory.value = res.items
+  } catch (error) {
+    console.error('Failed to fetch history:', error)
+  }
+}
+
+function handleHistoryClick(id: string) {
+  router.push({ name: 'Query', query: { id } })
+}
+
+function handleNewChat() {
+  router.push({ name: 'Query', query: { t: Date.now() } })
+}
+
+function toggleSidebarMode() {
+  showAgentSidebar.value = !showAgentSidebar.value
+}
 
 // 当前选中的菜单项
 const selectedKeys = computed(() => {
@@ -188,6 +265,9 @@ const breadcrumbs = computed(() => {
 
 // 菜单点击处理
 function handleMenuClick(key: string) {
+  if (key === 'Query') {
+    showAgentSidebar.value = true
+  }
   router.push({ name: key })
 }
 
@@ -200,6 +280,14 @@ function goToModelConfig() {
 onMounted(() => {
   settingsStore.checkModelConfigStatus()
   updateOpenKeys()
+  fetchHistory()
+
+  // 定期检查模型可用性（每5分钟）
+  setInterval(async () => {
+    if (settingsStore.isModelConfigured && settingsStore.defaultModelConfig) {
+      await settingsStore.testDefaultModelAvailability()
+    }
+  }, 5 * 60 * 1000)
 })
 
 // 路由变化时更新展开的菜单
@@ -209,26 +297,99 @@ watch(() => route.name, () => {
 </script>
 
 <style scoped>
-.main-layout {
-  height: 100vh;
+.sidebar-header-actions {
+  padding: 0 16px 8px;
+}
+
+.empty-history {
+  padding: 8px 12px;
+  color: var(--color-text-4);
+  font-size: 12px;
+  text-align: center;
+}
+
+.sidebar-sider {
+  background: #f7f8fa !important;
 }
 
 .logo {
   height: 64px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
   padding: 0 16px;
-  background: var(--color-bg-2);
-  border-bottom: 1px solid var(--color-border);
+  background: transparent;
+  border-bottom: none;
 }
 
 .logo-text {
-  margin-left: 8px;
-  font-size: 16px;
+  font-size: 18px;
+  font-weight: 700;
+  color: #1d2129;
+}
+
+.fold-icon {
+  cursor: pointer;
+  color: #4e5969;
+}
+
+.new-chat-wrapper {
+  padding: 0 16px 16px;
+}
+
+.new-chat-btn {
+  height: 36px;
+  border-radius: 6px;
   font-weight: 600;
-  color: var(--color-text-1);
-  white-space: nowrap;
+}
+
+.chat-history {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 8px;
+}
+
+.history-group {
+  margin-bottom: 24px;
+}
+
+.group-title {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: #86909c;
+}
+
+.history-item {
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #4e5969;
+  cursor: pointer;
+  margin-bottom: 2px;
+}
+
+.history-item:hover {
+  background: #e5e6eb;
+}
+
+.history-item.active {
+  background: #e8f3ff;
+  color: #165dff;
+  font-weight: 600;
+}
+
+.user-info {
+  margin-top: auto;
+  padding: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid #e5e6eb;
+  color: #4e5969;
+}
+
+.main-layout {
+  height: 100vh;
 }
 
 .layout-header {

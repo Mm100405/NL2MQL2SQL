@@ -73,10 +73,17 @@ export interface Metric {
   name: string
   display_name: string
   metric_type: MetricType
-  dataset_id: string
+  dataset_id?: string
   aggregation?: AggregationType
+  calculation_method?: 'field' | 'expression'
   measure_column?: string
   calculation_formula?: string
+  is_semi_additive?: any
+  date_column_id?: string
+  base_metric_id?: string
+  derivation_type?: string
+  time_constraint?: string
+  analysis_dimensions?: string[]
   filters?: MetricFilter[]
   synonyms?: string[]
   unit?: string
@@ -136,11 +143,18 @@ export interface JoinCondition {
   operator: '='
 }
 
+// 分析步骤
+export interface AnalysisStep {
+  title: string
+  content: string
+  status: 'success' | 'loading' | 'pending' | 'error'
+}
+
 // 查询历史
 export interface QueryHistory {
   id: string
   natural_language: string
-  mql_query: string
+  mql_query: any
   sql_query: string
   execution_time: number
   result_count: number
@@ -192,12 +206,15 @@ export interface QueryRequest {
   context?: {
     dataset_ids?: string[]
     user_history?: string[]
+    suggested_metrics?: string[]
+    suggested_dimensions?: string[]
   }
 }
 
 // NL转MQL响应
 export interface NL2MQLResponse {
-  mql: string
+  mql: any
+  steps: AnalysisStep[]
   confidence: number
   interpretation: string
 }
@@ -221,8 +238,10 @@ export interface QueryExecuteResponse {
 // 完整查询响应
 export interface FullQueryResponse {
   natural_language: string
-  mql: string
+  mql: any
   sql: string
   result: QueryExecuteResponse
+  steps: AnalysisStep[]
   query_id: string
+  viewType?: 'table' | 'chart'
 }

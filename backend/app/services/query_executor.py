@@ -3,6 +3,7 @@ from typing import Dict, List, Any, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import create_engine, text
 import sqlite3
+import urllib.parse
 
 from app.models.datasource import DataSource
 from app.utils.encryption import decrypt_api_key
@@ -63,24 +64,24 @@ def build_connection_string(datasource: DataSource) -> str:
         host = config.get("host", "localhost")
         port = config.get("port", 5432)
         database = config.get("database", "")
-        username = config.get("username", "")
-        password = config.get("password", "")
+        username = urllib.parse.quote_plus(config.get("username", ""))
+        password = urllib.parse.quote_plus(config.get("password", ""))
         return f"postgresql://{username}:{password}@{host}:{port}/{database}"
     
     elif db_type == "mysql":
         host = config.get("host", "localhost")
         port = config.get("port", 3306)
         database = config.get("database", "")
-        username = config.get("username", "")
-        password = config.get("password", "")
+        username = urllib.parse.quote_plus(config.get("username", ""))
+        password = urllib.parse.quote_plus(config.get("password", ""))
         return f"mysql+pymysql://{username}:{password}@{host}:{port}/{database}"
     
     elif db_type == "clickhouse":
         host = config.get("host", "localhost")
         port = config.get("port", 8123)
         database = config.get("database", "")
-        username = config.get("username", "")
-        password = config.get("password", "")
+        username = urllib.parse.quote_plus(config.get("username", ""))
+        password = urllib.parse.quote_plus(config.get("password", ""))
         return f"clickhouse://{username}:{password}@{host}:{port}/{database}"
     
     else:
