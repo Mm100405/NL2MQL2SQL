@@ -9,6 +9,7 @@ from app.models.datasource import DataSource
 from app.models.dataset import Dataset
 from app.models.metric import Metric
 from app.models.dimension import Dimension
+from app.models.settings import SystemSetting
 import json
 
 def init_test_data():
@@ -30,6 +31,18 @@ def init_test_data():
         db.commit()
         db.refresh(datasource)
         print(f"✓ 创建数据源: {datasource.name} (ID: {datasource.id})")
+
+        # 1.5 创建系统设置
+        time_formats = [
+            {"name": "YYYY-MM-DD", "label": "按日", "suffix": "day", "is_default": True},
+            {"name": "YYYY-MM", "label": "按月", "suffix": "month", "is_default": False},
+            {"name": "YYYY", "label": "按年", "suffix": "year", "is_default": False},
+            {"name": "YYYY-WW", "label": "按周", "suffix": "week", "is_default": False}
+        ]
+        setting = SystemSetting(key="time_formats", value=time_formats, category="query", description="支持的时间格式化类型")
+        db.add(setting)
+        db.commit()
+        print(f"✓ 创建系统设置: {setting.key}")
         
         # 2. 创建数据集
         datasets_data = [
@@ -134,17 +147,20 @@ def init_test_data():
                 "name": "date",
                 "display_name": "日期",
                 "dataset_id": created_datasets[0].id,
-                "column_name": "create_time",
+                "physical_column": "create_time",
                 "dimension_type": "time",
+                "data_type": "datetime",
+                "format_config": {"default_format": "YYYY-MM-DD", "options": ["YYYY-MM-DD", "YYYY-MM", "YYYY"]},
                 "description": "订单日期维度"
             },
             {
-                "name": "user_id",
-                "display_name": "用户",
+                "name": "status",
+                "display_name": "订单状态",
                 "dataset_id": created_datasets[0].id,
-                "column_name": "user_id",
+                "physical_column": "status",
                 "dimension_type": "categorical",
-                "description": "用户维度"
+                "data_type": "string",
+                "description": "订单状态维度"
             }
         ]
         

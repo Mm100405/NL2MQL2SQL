@@ -80,11 +80,38 @@
         </a-row>
         <a-form-item field="dimension_type" label="维度类型">
           <a-radio-group v-model="form.dimension_type">
-            <a-radio value="normal">普通维度</a-radio>
-            <a-radio value="time">时间维度</a-radio>
-            <a-radio value="geo">地理维度</a-radio>
+            <a-radio value="normal">普通</a-radio>
+            <a-radio value="time">时间</a-radio>
+            <a-radio value="geo">地理</a-radio>
+            <a-radio value="categorical">分类</a-radio>
+            <a-radio value="numerical">数值</a-radio>
           </a-radio-group>
         </a-form-item>
+
+        <!-- 时间维度格式化配置 -->
+        <template v-if="form.dimension_type === 'time'">
+          <a-divider>时间格式化配置</a-divider>
+          <a-row :gutter="16">
+            <a-col :span="12">
+              <a-form-item field="format_config.default_format" label="默认格式">
+                <a-select v-model="form.format_config.default_format" placeholder="选择默认展示格式">
+                  <a-option v-for="opt in timeFormatOptions" :key="opt.name" :value="opt.name">
+                    {{ opt.name }} ({{ opt.label }})
+                  </a-option>
+                </a-select>
+              </a-form-item>
+            </a-col>
+            <a-col :span="12">
+              <a-form-item field="format_config.options" label="可选格式列表">
+                <a-select v-model="form.format_config.options" multiple placeholder="选择可选的展示格式">
+                  <a-option v-for="opt in timeFormatOptions" :key="opt.name" :value="opt.name">
+                    {{ opt.name }}
+                  </a-option>
+                </a-select>
+              </a-form-item>
+            </a-col>
+          </a-row>
+        </template>
         <a-form-item field="synonyms" label="同义词">
           <a-input-tag v-model="form.synonyms" placeholder="输入后回车添加" />
         </a-form-item>
@@ -101,7 +128,8 @@ import { ref, reactive, onMounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import type { FormInstance } from '@arco-design/web-vue'
 import { getDimensions, getDatasets, createDimension, updateDimension, deleteDimension } from '@/api/semantic'
-import type { Dimension, Dataset } from '@/api/types'
+import { getSystemSetting } from '@/api/settings'
+import type { Dimension, Dataset, DimensionType } from '@/api/types'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -111,14 +139,19 @@ const editingId = ref('')
 const formRef = ref<FormInstance>()
 const dimensions = ref<Dimension[]>([])
 const datasets = ref<Dataset[]>([])
+const timeFormatOptions = ref<any[]>([])
 
 const form = reactive({
   name: '',
   display_name: '',
   dataset_id: '',
   physical_column: '',
-  data_type: 'string' as const,
-  dimension_type: 'normal' as const,
+  data_type: 'string' as 'string' | 'number' | 'date' | 'datetime',
+  dimension_type: 'normal' as DimensionType,
+  format_config: {
+    default_format: 'YYYY-MM-DD',
+    options: ['YYYY-MM-DD', 'YYYY-MM', 'YYYY']
+  },
   synonyms: [] as string[],
   description: ''
 })
@@ -142,7 +175,9 @@ function getTypeColor(type: string) {
   const colors: Record<string, string> = {
     normal: 'blue',
     time: 'green',
-    geo: 'orange'
+    geo: 'orange',
+    categorical: 'purple',
+    numerical: 'cyan'
   }
   return colors[type] || 'gray'
 }
@@ -151,7 +186,10 @@ function getTypeLabel(type: string) {
   const labels: Record<string, string> = {
     normal: '普通',
     time: '时间',
-    geo: '地理'
+    geo: '地理',
+    categorical: '分类',
+    numerical: '数值',
+    user_defined: '自定义'
   }
   return labels[type] || type
 }
@@ -159,12 +197,14 @@ function getTypeLabel(type: string) {
 async function fetchData() {
   loading.value = true
   try {
-    const [dims, ds] = await Promise.all([
+    const [dims, ds, setting] = await Promise.all([
       getDimensions(),
-      getDatasets()
+      getDatasets(),
+      getSystemSetting('time_formats').catch(() => ({ value: [] }))
     ])
     dimensions.value = dims
     datasets.value = ds
+    timeFormatOptions.value = (setting as any).value || []
   } catch (error) {
     console.error('Failed to fetch data:', error)
   } finally {
@@ -188,6 +228,7 @@ function handleEdit(record: Dimension) {
     physical_column: record.physical_column,
     data_type: record.data_type,
     dimension_type: record.dimension_type,
+    format_config: record.format_config || { default_format: 'YYYY-MM-DD', options: ['YYYY-MM-DD', 'YYYY-MM', 'YYYY'] },
     synonyms: record.synonyms || [],
     description: record.description || ''
   })
@@ -224,6 +265,10 @@ function resetForm() {
     physical_column: '',
     data_type: 'string',
     dimension_type: 'normal',
+    format_config: {
+      default_format: 'YYYY-MM-DD',
+      options: ['YYYY-MM-DD', 'YYYY-MM', 'YYYY']
+    },
     synonyms: [],
     description: ''
   })

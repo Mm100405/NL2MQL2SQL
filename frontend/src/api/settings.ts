@@ -42,3 +42,30 @@ export function activateModelConfig(id: string): Promise<ModelConfig> {
 export function getModelConfigStatus(): Promise<ModelConfigStatus> {
   return request.get('/settings/model/status')
 }
+
+// --- System Settings ---
+
+export interface SystemSetting {
+  id: string
+  key: string
+  value: any
+  category: string
+  description?: string
+  created_at: string
+  updated_at: string
+}
+
+// 获取系统设置
+export function getSystemSettings(category?: string): Promise<SystemSetting[]> {
+  return request.get('/settings/system', { params: { category } })
+}
+
+// 获取单个系统设置
+export function getSystemSetting(key: string): Promise<SystemSetting> {
+  return request.get(`/settings/system/${key}`)
+}
+
+// 更新系统设置
+export function updateSystemSetting(key: string, data: { value: any, description?: string }): Promise<SystemSetting> {
+  return request.put(`/settings/system/${key}`, data)
+}

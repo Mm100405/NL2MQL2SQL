@@ -5,6 +5,7 @@ from app.models.dimension import Dimension
 from app.models.relation import DataRelation
 from app.models.query_history import QueryHistory
 from app.models.model_config import ModelConfig
+from app.models.settings import SystemSetting
 from app.models.air import Workbook, IntegrationTask, ConsolidationRule, DataAcceleration
 from app.models.can import MetricCatalog, MetricApplication, MetricAcceleration, SystemRole, AuditLog
 from app.models.big import LineageNode, LineageConnection, SQLAnalysis
@@ -17,6 +18,7 @@ __all__ = [
     "DataRelation",
     "QueryHistory",
     "ModelConfig",
+    "SystemSetting",
     "Workbook",
     "IntegrationTask",
     "ConsolidationRule",

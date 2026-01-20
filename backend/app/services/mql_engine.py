@@ -7,6 +7,7 @@ from app.models.metric import Metric
 from app.models.dimension import Dimension
 from app.models.dataset import Dataset
 from app.models.datasource import DataSource
+from app.models.settings import SystemSetting
 
 
 # Time function mappings for different SQL dialects
@@ -37,6 +38,7 @@ TIME_FUNCTIONS = {
         "YESTERDAY()": "DATE_SUB(CURDATE(), INTERVAL 1 DAY)",
         "LAST_N_DAYS({n})": "DATE_SUB(CURDATE(), INTERVAL {n} DAY)",
         "LAST_N_MONTHS({n})": "DATE_SUB(CURDATE(), INTERVAL {n} MONTH)",
+        "LAST_N_YEARS({n})": "DATE_SUB(CURDATE(), INTERVAL {n} YEAR)",
         "THIS_WEEK()": "DATE_SUB(CURDATE(), INTERVAL WEEKDAY(CURDATE()) DAY)",
         "THIS_MONTH()": "DATE_FORMAT(CURDATE(), '%Y-%m-01')",
         "THIS_YEAR()": "DATE_FORMAT(CURDATE(), '%Y-01-01')"
@@ -60,6 +62,29 @@ async def mql_to_sql(mql: Dict[str, Any], db: Session) -> Dict[str, Any]:
     datasets = {d.id: d for d in db.query(Dataset).all()}
     datasources = db.query(DataSource).all()
     
+    # Get time format settings
+    time_formats_setting = db.query(SystemSetting).filter(SystemSetting.key == "time_formats").first()
+    time_formats = {} # suffix -> format (YYYY-MM)
+    label_to_format = {} # label (按月) -> format (YYYY-MM)
+    if time_formats_setting:
+        for f in time_formats_setting.value:
+            time_formats[f["suffix"]] = f["name"]
+            label_to_format[f["label"]] = f["name"]
+    else:
+        # Default fallback
+        time_formats = {
+            "day": "YYYY-MM-DD",
+            "month": "YYYY-MM",
+            "year": "YYYY",
+            "week": "YYYY-WW"
+        }
+        label_to_format = {
+            "按日": "YYYY-MM-DD",
+            "按月": "YYYY-MM",
+            "按年": "YYYY",
+            "按周": "YYYY-WW"
+        }
+    
     # Determine dialect (default to sqlite for demo)
     dialect = "sqlite"
     datasource_ids = []
@@ -69,7 +94,7 @@ async def mql_to_sql(mql: Dict[str, Any], db: Session) -> Dict[str, Any]:
         datasource_ids = [ds.id for ds in datasources]
     
     # Parse MQL and build SQL
-    sql = translate_mql_to_sql(mql, metrics, dimensions, datasets, dialect)
+    sql = translate_mql_to_sql(mql, metrics, dimensions, datasets, dialect, time_formats, label_to_format)
     sql = replace_time_functions(sql, dialect)
     
     return {
@@ -118,14 +143,123 @@ def get_metric_expression(metric_obj: Metric, metrics: Dict[str, Metric]) -> str
     return "0"
 
 
+def get_date_format_expr(column: str, fmt: str, dialect: str) -> str:
+    """Get SQL expression for date formatting based on dialect"""
+    if dialect == "sqlite":
+        # SQLite uses strftime
+        mapping = {
+            "YYYY-MM-DD": f"date({column})",
+            "YYYY-MM": f"strftime('%Y-%m', {column})",
+            "YYYY": f"strftime('%Y', {column})",
+            "YYYY-WW": f"strftime('%Y-%W', {column})"
+        }
+        return mapping.get(fmt, column)
+    elif dialect == "mysql":
+        # MySQL uses DATE_FORMAT
+        mapping = {
+            "YYYY-MM-DD": f"DATE_FORMAT({column}, '%Y-%m-%d')",
+            "YYYY-MM": f"DATE_FORMAT({column}, '%Y-%m')",
+            "YYYY": f"DATE_FORMAT({column}, '%Y')",
+            "YYYY-WW": f"DATE_FORMAT({column}, '%Y-%v')"
+        }
+        return mapping.get(fmt, column)
+    elif dialect == "postgresql":
+        # PostgreSQL uses to_char
+        mapping = {
+            "YYYY-MM-DD": f"to_char({column}, 'YYYY-MM-DD')",
+            "YYYY-MM": f"to_char({column}, 'YYYY-MM')",
+            "YYYY": f"to_char({column}, 'YYYY')",
+            "YYYY-WW": f"to_char({column}, 'IYYY-IW')"
+        }
+        return mapping.get(fmt, column)
+    return column
+
+
+def process_mql_expression(expr: str, metrics: Dict[str, Metric], dimensions: Dict[str, Dimension], dialect: str, time_formats: Dict[str, str], label_to_format: Dict[str, str], is_where: bool = False) -> str:
+    """Helper to replace [field] in expressions with physical columns or formatted expressions"""
+    if not expr or expr == "true" or expr == "1=1":
+        return expr
+        
+    processed = expr
+    # Find all [field] references
+    ref_fields = re.findall(r'\[(.*?)\]', processed)
+    for ref_field in ref_fields:
+        actual_lookup_name = ref_field
+        suffix = None
+        if "__" in ref_field:
+            parts = ref_field.split("__", 1)
+            actual_lookup_name = parts[0]
+            suffix = parts[1]
+            
+        found_obj = None
+        # 1. 优先尝试展示名称 (display_name)
+        for d in dimensions.values():
+            if d.display_name == actual_lookup_name:
+                found_obj = d
+                break
+        
+        if not found_obj:
+            for m in metrics.values():
+                if m.display_name == actual_lookup_name:
+                    found_obj = m
+                    break
+        
+        # 2. 尝试逻辑名称 (name)
+        if not found_obj:
+            found_obj = dimensions.get(actual_lookup_name) or metrics.get(actual_lookup_name)
+            
+        # 3. 最后尝试物理列名匹配
+        if not found_obj:
+            for d in dimensions.values():
+                if d.physical_column == actual_lookup_name:
+                    found_obj = d
+                    break
+            if not found_obj:
+                for m in metrics.values():
+                    if m.measure_column == actual_lookup_name:
+                        found_obj = m
+                        break
+        
+        if found_obj:
+            if isinstance(found_obj, Dimension):
+                col_expr = found_obj.physical_column
+                # 如果有后缀且是时间维度，尝试应用格式化
+                fmt = None
+                if suffix and suffix in label_to_format:
+                    fmt = label_to_format[suffix]
+                elif suffix and suffix in time_formats:
+                    fmt = time_formats[suffix]
+                
+                # 关键修复：如果在 WHERE 子句中 (is_where=True)，我们通常跳过格式化以避免嵌套。
+                # 但如果它是直接的等值过滤（下钻分析产生），且没有被 DateTrunc 包装，则必须应用格式化。
+                is_wrapped_by_func = is_where and f"DateTrunc([{ref_field}]" in processed
+                if fmt and found_obj.dimension_type == "time":
+                    if not is_wrapped_by_func:
+                        col_expr = get_date_format_expr(col_expr, fmt, dialect)
+                
+                processed = processed.replace(f"[{ref_field}]", col_expr)
+            else: # Metric
+                processed = processed.replace(f"[{ref_field}]", found_obj.measure_column or "0")
+    
+    # Strip remaining brackets if any
+    processed = re.sub(r'\[(.*?)\]', r'\1', processed)
+    return processed
+
+
 def translate_mql_to_sql(
     mql: Dict[str, Any],
     metrics: Dict[str, Metric],
     dimensions: Dict[str, Dimension],
     datasets: Dict[str, Dataset],
-    dialect: str = "sqlite"
+    dialect: str = "sqlite",
+    time_formats: Dict[str, str] = None,
+    label_to_format: Dict[str, str] = None
 ) -> str:
     """Translate JSON MQL to SQL"""
+    if time_formats is None:
+        time_formats = {}
+    if label_to_format is None:
+        label_to_format = {}
     
     # 1. SELECT clause
     select_items = []
@@ -133,17 +267,56 @@ def translate_mql_to_sql(
     
     # Dimensions
     for dim_name in mql.get("dimensions", []):
-        dim_obj = dimensions.get(dim_name)
+        actual_lookup_name = dim_name
+        suffix = None
+        
+        # 识别后缀 (如 date__year 或 日期__按月)
+        if "__" in dim_name:
+            parts = dim_name.split("__", 1)
+            actual_lookup_name = parts[0]
+            suffix = parts[1]
+            
+        dim_obj = None
+        # 优先按展示名查找
+        for d in dimensions.values():
+            if d.display_name == actual_lookup_name:
+                dim_obj = d
+                break
+        
+        # 次选按逻辑名查找
         if not dim_obj:
-            # Try to find by display name or physical column
+            dim_obj = dimensions.get(actual_lookup_name)
+        
+        # 备选按物理列名查找
+        if not dim_obj:
             for d in dimensions.values():
-                if d.display_name == dim_name or d.physical_column == dim_name:
+                if d.physical_column == actual_lookup_name:
                     dim_obj = d
                     break
         
         if dim_obj:
-            select_items.append(f"{dim_obj.physical_column} AS {dim_name}")
-            group_by_items.append(dim_obj.physical_column)
+            col_expr = dim_obj.physical_column
+            
+            # --- 格式化推断逻辑 ---
+            fmt = None
+            
+            # 1. 优先尝试从 label_to_format 匹配 (针对 "按月" 等)
+            if suffix and suffix in label_to_format:
+                fmt = label_to_format[suffix]
+            # 2. 次选尝试从 time_formats 匹配 (针对 "year" 等)
+            elif suffix and suffix in time_formats:
+                fmt = time_formats[suffix]
+            
+            # 3. 再次：使用元数据默认格式 (如果是时间维度)
+            if not fmt and dim_obj.dimension_type == "time" and dim_obj.format_config:
+                fmt = dim_obj.format_config.get("default_format")
+            
+            # 应用格式化
+            if fmt and dim_obj.dimension_type == "time":
+                col_expr = get_date_format_expr(col_expr, fmt, dialect)
+            
+            select_items.append(f"{col_expr} AS {dim_name}")
+            group_by_items.append(col_expr)
         else:
             select_items.append(f"{dim_name} AS {dim_name}")
             group_by_items.append(dim_name)
@@ -190,46 +363,15 @@ def translate_mql_to_sql(
     # 3. WHERE clause
     where_parts = []
     time_constraint = mql.get("timeConstraint")
-    if time_constraint and time_constraint != "true":
-        # Replace [field_name] with actual physical column name using regex for exact matches
-        processed_time = time_constraint
-        
-        # Find all [field] references
-        ref_fields = re.findall(r'\[(.*?)\]', processed_time)
-        for ref_field in ref_fields:
-            # 1. Try dimension name
-            dim_obj = dimensions.get(ref_field)
-            if dim_obj:
-                processed_time = processed_time.replace(f"[{ref_field}]", dim_obj.physical_column)
-                continue
-            
-            # 2. Try metric name
-            met_obj = metrics.get(ref_field)
-            if met_obj and met_obj.measure_column:
-                processed_time = processed_time.replace(f"[{ref_field}]", met_obj.measure_column)
-                continue
-                
-            # 3. Try fallback (look through all for name or physical_column)
-            found = False
-            for d in dimensions.values():
-                if d.name == ref_field or d.physical_column == ref_field:
-                    processed_time = processed_time.replace(f"[{ref_field}]", d.physical_column)
-                    found = True
-                    break
-            if found: continue
-            
-            for m in metrics.values():
-                if (m.name == ref_field or m.measure_column == ref_field) and m.measure_column:
-                    processed_time = processed_time.replace(f"[{ref_field}]", m.measure_column)
-                    found = True
-                    break
-        
-        # Strip remaining brackets if any
-        processed_time = re.sub(r'\[(.*?)\]', r'\1', processed_time)
-        where_parts.append(processed_time)
+    if time_constraint:
+        processed_time = process_mql_expression(time_constraint, metrics, dimensions, dialect, time_formats, label_to_format, is_where=True)
+        if processed_time and processed_time != "true" and processed_time != "1=1":
+            where_parts.append(processed_time)
         
     for filter_expr in mql.get("filters", []):
-        where_parts.append(filter_expr)
+        processed_filter = process_mql_expression(filter_expr, metrics, dimensions, dialect, time_formats, label_to_format, is_where=True)
+        if processed_filter and processed_filter != "true" and processed_filter != "1=1":
+            where_parts.append(processed_filter)
         
     if where_parts:
         sql += " WHERE " + " AND ".join(where_parts)
@@ -290,6 +432,14 @@ def replace_time_functions(sql: str, dialect: str) -> str:
         n = match.group(1)
         replacement = funcs["LAST_N_MONTHS({n})"].format(n=n)
         sql = sql.replace(match.group(0), replacement)
+    
+    # LAST_N_YEARS(N) pattern
+    pattern = r'LAST_N_YEARS\(\s*(\d+)\s*\)'
+    for match in re.finditer(pattern, sql):
+        n = match.group(1)
+        if "LAST_N_YEARS({n})" in funcs:
+            replacement = funcs["LAST_N_YEARS({n})"].format(n=n)
+            sql = sql.replace(match.group(0), replacement)
     
     # Simple replacements
     simple_funcs = ["TODAY()", "YESTERDAY()", "THIS_WEEK()", "THIS_MONTH()", "THIS_YEAR()"]

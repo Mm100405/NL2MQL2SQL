@@ -64,6 +64,7 @@ class DimensionCreate(BaseModel):
     data_type: str = "string"
     dimension_type: str = "normal"
     hierarchy: Optional[dict] = None
+    format_config: Optional[dict] = None
     synonyms: Optional[List[str]] = None
     description: Optional[str] = None
 
@@ -381,9 +382,62 @@ def get_metric(id: str, db: Session = Depends(get_db)):
     return metric.to_dict()
 
 
+def get_inherited_dimensions(metric_data: dict, db: Session) -> List[str]:
+    """Get inherited dimensions from base metrics"""
+    from app.utils.mql_validator import MQLValidator
+    
+    metric_type = metric_data.get("metric_type")
+    base_dimensions = set()
+    
+    if metric_type == "derived":
+        base_id = metric_data.get("base_metric_id")
+        if base_id:
+            base_metric = db.query(Metric).filter(Metric.id == base_id).first()
+            if base_metric and base_metric.analysis_dimensions:
+                base_dimensions.update(base_metric.analysis_dimensions)
+                
+    elif metric_type == "composite":
+        formula = metric_data.get("calculation_formula")
+        if formula:
+            validator = MQLValidator(db)
+            ref_names = validator.extract_referenced_metrics(formula)
+            for name in ref_names:
+                ref_metric = db.query(Metric).filter(Metric.name == name).first()
+                if ref_metric and ref_metric.analysis_dimensions:
+                    if not base_dimensions:
+                        base_dimensions.update(ref_metric.analysis_dimensions)
+                    else:
+                        # For composite metrics, typically we take the intersection or union?
+                        # User says "inherit all", implying union, but typically it should be intersection to be safe.
+                        # However, "inherit all dimensions of its base metrics" usually means union in this context.
+                        base_dimensions.update(ref_metric.analysis_dimensions)
+    
+    return list(base_dimensions)
+
+
 @router.post("/metrics")
 def create_metric(data: MetricCreate, db: Session = Depends(get_db)):
-    metric = Metric(**data.model_dump())
+    metric_dict = data.model_dump()
+    
+    # Handle dimension inheritance for derived/composite metrics
+    if metric_dict["metric_type"] in ["derived", "composite"]:
+        inherited = get_inherited_dimensions(metric_dict, db)
+        
+        requested = metric_dict.get("analysis_dimensions") or []
+        if not requested:
+            # Default to all inherited dimensions if none requested
+            metric_dict["analysis_dimensions"] = inherited
+        else:
+            # Validate: no new dimensions allowed
+            inherited_set = set(inherited)
+            invalid = [d for d in requested if d not in inherited_set]
+            if invalid:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Cannot add dimensions not present in base metrics: {invalid}"
+                )
+    
+    metric = Metric(**metric_dict)
     db.add(metric)
     db.commit()
     db.refresh(metric)
@@ -395,6 +449,23 @@ def update_metric(id: str, data: dict, db: Session = Depends(get_db)):
     metric = db.query(Metric).filter(Metric.id == id).first()
     if not metric:
         raise HTTPException(status_code=404, detail="Metric not found")
+    
+    # If updating metric_type or base_metric_id or formula, re-evaluate dimensions
+    temp_data = metric.to_dict()
+    temp_data.update(data)
+    
+    if temp_data["metric_type"] in ["derived", "composite"]:
+        inherited = get_inherited_dimensions(temp_data, db)
+        requested = data.get("analysis_dimensions")
+        
+        if requested is not None:
+            inherited_set = set(inherited)
+            invalid = [d for d in requested if d not in inherited_set]
+            if invalid:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Cannot add dimensions not present in base metrics: {invalid}"
+                )
     
     for key, value in data.items():
         if hasattr(metric, key):

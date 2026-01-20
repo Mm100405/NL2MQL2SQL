@@ -6,8 +6,10 @@ from typing import Dict, List, Tuple
 class MQLValidator:
     """Validates MQL formulas"""
     
-    VALID_AGGREGATIONS = {'SUM', 'COUNT', 'AVG', 'MAX', 'MIN', 'COUNT_DISTINCT'}
-    VALID_OPERATORS = {'+', '-', '*', '/', '(', ')'}
+    VALID_TIME_FUNCTIONS = {
+        'DateTrunc', 'AddMonths', 'CurrentDate', 'TODAY', 
+        'LAST_N_DAYS', 'LAST_N_MONTHS', 'LAST_N_YEARS', 'BETWEEN', 'DateAdd'
+    }
     
     def __init__(self, db_session):
         self.db_session = db_session
@@ -18,6 +20,30 @@ class MQLValidator:
         """
         from app.models.metric import Metric
         from app.models.dimension import Dimension
+        from app.models.settings import SystemSetting
+        import json
+
+        # 获取全局时间格式配置
+        time_formats_setting = self.db_session.query(SystemSetting).filter(SystemSetting.key == "time_formats").first()
+        time_formats = []
+        if time_formats_setting:
+            val = time_formats_setting.value
+            if isinstance(val, str):
+                try:
+                    time_formats = json.loads(val)
+                except:
+                    pass
+            elif isinstance(val, list):
+                time_formats = val
+        
+        if not time_formats:
+            time_formats = [
+                {"name": "YYYY-MM-DD", "label": "按日", "suffix": "day"},
+                {"name": "YYYY-MM", "label": "按月", "suffix": "month"},
+                {"name": "YYYY", "label": "按年", "suffix": "year"},
+                {"name": "YYYY-WW", "label": "按周", "suffix": "week"}
+            ]
+        valid_labels = {f["label"] for f in time_formats}
             
         # 0. Validate queryResultType
         result_type = mql.get("queryResultType", "DATA")
@@ -26,15 +52,53 @@ class MQLValidator:
     
         # 1. Validate Dimensions
         dimensions = mql.get("dimensions", [])
+        dim_configs = mql.get("dimensionConfigs", {})
+        
         for dim_name in dimensions:
+            actual_lookup_name = dim_name
+            label = None
+            if "__" in dim_name:
+                parts = dim_name.split("__", 1)
+                actual_lookup_name = parts[0]
+                label = parts[1]
+                
             dim_obj = self.db_session.query(Dimension).filter(
-                (Dimension.name == dim_name) | 
-                (Dimension.physical_column == dim_name)
+                (Dimension.name == actual_lookup_name) | 
+                (Dimension.physical_column == actual_lookup_name) |
+                (Dimension.display_name == actual_lookup_name)
             ).first()
+
             if not dim_obj:
-                dim_obj = self.db_session.query(Dimension).filter(Dimension.display_name == dim_name).first()
-                if not dim_obj:
-                    return False, f"维度 '{dim_name}' 在元数据中不存在，请从可用列表中选择逻辑名。"
+                return False, f"维度 '{actual_lookup_name}' 在元数据中不存在，请从可用列表中选择逻辑名。"
+            
+            # 如果带有标签，校验标签是否合法且维度是否为时间类型
+            if label:
+                if label not in valid_labels:
+                    return False, f"维度 '{dim_name}' 的后缀标签 '{label}' 不合法。有效标签: {list(valid_labels)}"
+                
+                # 兼容 Enum 或 String
+                d_type = str(dim_obj.dimension_type).lower() if dim_obj.dimension_type else ""
+                if hasattr(dim_obj.dimension_type, 'value'):
+                    d_type = dim_obj.dimension_type.value
+                d_data_type = str(dim_obj.data_type).lower() if dim_obj.data_type else ""
+                
+                is_time_dim = (d_type == "time") or (d_data_type in ["date", "datetime", "timestamp"])
+                if not is_time_dim:
+                    return False, f"非时间维度 '{actual_lookup_name}' 不能使用时间格式化后缀 '{label}'。"
+            
+            # Validate dimensionConfigs if present (Optional fallback)
+            if actual_lookup_name in dim_configs:
+                config = dim_configs[actual_lookup_name]
+                if not isinstance(config, dict):
+                    return False, f"维度配置 '{dim_name}' 格式错误，应为 JSON 对象。"
+                
+                fmt = config.get("format")
+                if fmt and dim_obj.dimension_type == "time":
+                    # Optional: validate format against metadata options
+                    if dim_obj.format_config and "options" in dim_obj.format_config:
+                        allowed_options = dim_obj.format_config["options"]
+                        if fmt not in allowed_options:
+                            return False, f"时间维度 '{dim_name}' 不支持格式 '{fmt}'。可选：{allowed_options}"
             
         # 2. Validate Metrics
         metric_aliases = mql.get("metrics", [])
@@ -53,27 +117,60 @@ class MQLValidator:
             if not metric_obj:
                 return False, f"基础指标 '{ref_metric}' 不存在，请使用指标逻辑名。"
                 
-            # 3. Validate timeConstraint
-            time_constraint = mql.get("timeConstraint")
-            if time_constraint and time_constraint != "true":
-                # 3.1 Check supported functions
-                supported_funcs = ['DateTrunc', 'AddMonths', 'CurrentDate', 'TODAY', 'LAST_N_DAYS', 'LAST_N_MONTHS', 'BETWEEN']
-                # Simple check for DateAdd which is explicitly forbidden
-                if 'DateAdd' in time_constraint:
-                    return False, "禁止使用 DateAdd 函数，请使用 AddMonths 或 DateTrunc。"
+        # 3. Validate timeConstraint
+        time_constraint = mql.get("timeConstraint")
+        if time_constraint and time_constraint != "true":
+            # 3.1 Check for unauthorized functions or syntax errors
+            # Find all function calls Word(...)
+            found_funcs = re.findall(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*\(', time_constraint)
+            for func in found_funcs:
+                if func not in self.VALID_TIME_FUNCTIONS:
+                    return False, f"使用了不支持的时间函数 '{func}'。仅允许: {', '.join(self.VALID_TIME_FUNCTIONS)}"
+                        
+            # 3.2 Extract fields from [field] pattern and validate
+            # Brackets should ONLY contain field names, not functions
+            fields = re.findall(r'\[(.*?)\]', time_constraint)
+            for field in fields:
+                if field in self.VALID_TIME_FUNCTIONS:
+                    return False, f"语法错误：函数 '{field}' 不应该被中括号 [] 包裹。只有元数据字段（如 [date]）才需要包裹。"
+                
+                actual_lookup_name = field
+                label = None
+                if "__" in field:
+                    parts = field.split("__", 1)
+                    actual_lookup_name = parts[0]
+                    label = parts[1]
+                            
+                metric_exists = self.db_session.query(Metric).filter(
+                            (Metric.display_name == actual_lookup_name) | 
+                            (Metric.name == actual_lookup_name) | 
+                            (Metric.measure_column == actual_lookup_name)
+                         ).first()
+                
+                dim_obj = self.db_session.query(Dimension).filter(
+                            (Dimension.display_name == actual_lookup_name) |
+                            (Dimension.name == actual_lookup_name) | 
+                            (Dimension.physical_column == actual_lookup_name)
+                         ).first()
+                
+                if not (metric_exists or dim_obj):
+                    return False, f"timeConstraint 中引用的字段 '[{field}]' 在元数据中不存在，请确保使用展示名称或逻辑名。"
+                
+                # 如果是带有后缀的时间维度
+                if label:
+                    if label not in valid_labels:
+                        return False, f"timeConstraint 中字段 '[{field}]' 的后缀标签 '{label}' 不合法。有效标签: {list(valid_labels)}"
                     
-                # 3.2 Extract fields from [field] pattern
-                fields = re.findall(r'\[(.*?)\]', time_constraint)
-                for field in fields:
-                    exists = self.db_session.query(Metric).filter(
-                                (Metric.name == field) | (Metric.measure_column == field)
-                             ).first() or \
-                             self.db_session.query(Dimension).filter(
-                                (Dimension.name == field) | (Dimension.physical_column == field)
-                             ).first()
-                    if not exists:
-                        return False, f"timeConstraint 中引用的字段 '[{field}]' 不存在。"
-    
+                    if dim_obj:
+                        d_type = str(dim_obj.dimension_type).lower() if dim_obj.dimension_type else ""
+                        if hasattr(dim_obj.dimension_type, 'value'):
+                            d_type = dim_obj.dimension_type.value
+                        d_data_type = str(dim_obj.data_type).lower() if dim_obj.data_type else ""
+                        
+                        is_time_dim = (d_type == "time") or (d_data_type in ["date", "datetime", "timestamp"])
+                        if not is_time_dim:
+                            return False, f"timeConstraint 中非时间维度 '[{actual_lookup_name}]' 不能使用时间格式化后缀 '{label}'。"
+        
         return True, "MQL 合规性校验通过"
     
     def validate(self, formula: str) -> Tuple[bool, str]:

@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from typing import List, Optional
+from typing import List, Optional, Any
 from pydantic import BaseModel
 
 from app.database import get_db
 from app.models.model_config import ModelConfig
+from app.models.settings import SystemSetting
 from app.services.llm_client import test_llm_connection
 from app.utils.encryption import encrypt_api_key, decrypt_api_key
 
@@ -54,6 +55,21 @@ class ModelConfigResponse(BaseModel):
 class ModelConfigStatusResponse(BaseModel):
     is_configured: bool
     default_model: Optional[ModelConfigResponse] = None
+
+
+# --- System Settings Schemas ---
+class SystemSettingResponse(BaseModel):
+    id: str
+    key: str
+    value: Any
+    category: str
+    description: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+class SystemSettingUpdate(BaseModel):
+    value: Any
+    description: Optional[str] = None
 
 
 @router.get("/model", response_model=List[ModelConfigResponse])
@@ -183,3 +199,53 @@ def activate_model_config(id: str, db: Session = Depends(get_db)):
     db.refresh(config)
     
     return ModelConfigResponse(**config.to_dict())
+
+
+# --- System Settings Routes ---
+@router.get("/system", response_model=List[SystemSettingResponse])
+def get_system_settings(category: Optional[str] = None, db: Session = Depends(get_db)):
+    """获取系统设置"""
+    query = db.query(SystemSetting)
+    if category:
+        query = query.filter(SystemSetting.category == category)
+    settings = query.all()
+    return [SystemSettingResponse(**s.to_dict()) for s in settings]
+
+
+@router.get("/system/{key}", response_model=SystemSettingResponse)
+def get_system_setting(key: str, db: Session = Depends(get_db)):
+    """获取单个系统设置"""
+    setting = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+    if not setting:
+        # Initial data for time formats if not exists
+        if key == "time_formats":
+            default_formats = [
+                {"name": "YYYY-MM-DD", "label": "按日", "suffix": "day", "is_default": True},
+                {"name": "YYYY-MM", "label": "按月", "suffix": "month", "is_default": False},
+                {"name": "YYYY", "label": "按年", "suffix": "year", "is_default": False},
+                {"name": "YYYY-WW", "label": "按周", "suffix": "week", "is_default": False}
+            ]
+            setting = SystemSetting(key="time_formats", value=default_formats, category="query", description="支持的时间格式化类型")
+            db.add(setting)
+            db.commit()
+            db.refresh(setting)
+        else:
+            raise HTTPException(status_code=404, detail="Setting not found")
+    return SystemSettingResponse(**setting.to_dict())
+
+
+@router.put("/system/{key}", response_model=SystemSettingResponse)
+def update_system_setting(key: str, data: SystemSettingUpdate, db: Session = Depends(get_db)):
+    """更新系统设置"""
+    setting = db.query(SystemSetting).filter(SystemSetting.key == key).first()
+    if not setting:
+        setting = SystemSetting(key=key, value=data.value, category="general", description=data.description)
+        db.add(setting)
+    else:
+        setting.value = data.value
+        if data.description is not None:
+            setting.description = data.description
+    
+    db.commit()
+    db.refresh(setting)
+    return SystemSettingResponse(**setting.to_dict())

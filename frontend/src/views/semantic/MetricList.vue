@@ -238,7 +238,7 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import type { FormInstance } from '@arco-design/web-vue'
-import { getMetrics, getDatasets, createMetric, updateMetric, deleteMetric } from '@/api/semantic'
+import { getMetrics, getDatasets, createMetric, updateMetric, deleteMetric, getDimensions } from '@/api/semantic'
 import type { Metric, Dataset } from '@/api/types'
 
 const router = useRouter()
@@ -283,22 +283,53 @@ const derivationTypes = [
 ]
 
 const currentDatasetDimensions = computed(() => {
-  if (!form.dataset_id) return []
-  return datasetDimensionsMap[form.dataset_id] || []
-})
-
-// Watch for dataset changes to fetch dimensions
-watch(() => form.dataset_id, async (newVal) => {
-  if (newVal && !datasetDimensionsMap[newVal]) {
-    try {
-      const { getDimensions } = await import('@/api/semantic')
-      const dims = await getDimensions({ dataset_id: newVal })
-      datasetDimensionsMap[newVal] = dims
-    } catch (e) {
-      console.error('Failed to fetch dimensions:', e)
+  if (form.metric_type === 'basic') {
+    if (!form.dataset_id) return []
+    return datasetDimensionsMap[form.dataset_id] || []
+  }
+  
+  // For derived and composite, inherit from base metrics
+  const inheritedIds = new Set<string>()
+  if (form.metric_type === 'derived') {
+    if (form.base_metric_id) {
+      const base = metrics.value.find(m => m.id === form.base_metric_id)
+      if (base?.analysis_dimensions) {
+        base.analysis_dimensions.forEach(id => inheritedIds.add(id))
+      }
+    }
+  } else if (form.metric_type === 'composite') {
+    const formula = form.calculation_formula || ''
+    const matches = formula.match(/\[(.*?)\]/g)
+    if (matches) {
+      matches.forEach(m => {
+        const name = m.slice(1, -1)
+        const ref = metrics.value.find(x => x.name === name)
+        if (ref?.analysis_dimensions) {
+          ref.analysis_dimensions.forEach(id => inheritedIds.add(id))
+        }
+      })
     }
   }
+  
+  // Map IDs back to objects (we might need to fetch them if they are from different datasets)
+  // For simplicity, we assume they are already in the datasetDimensionsMap or we can find them in other metrics' context
+  const allDims = Object.values(datasetDimensionsMap).flat()
+  return allDims.filter(d => inheritedIds.has(d.id))
 })
+
+// Watch for changes to base metric or formula to auto-inherit
+watch(() => [form.base_metric_id, form.calculation_formula, form.metric_type], () => {
+  if (form.metric_type !== 'basic') {
+    const inherited = currentDatasetDimensions.value.map(d => d.id)
+    if (inherited.length > 0 && form.analysis_dimensions.length === 0) {
+      form.analysis_dimensions = [...inherited]
+    } else if (form.analysis_dimensions.length > 0) {
+      // Keep only those that are still valid
+      const validIds = new Set(inherited)
+      form.analysis_dimensions = form.analysis_dimensions.filter(id => validIds.has(id))
+    }
+  }
+}, { deep: true })
 
 const rules = {
   name: [{ required: true, message: '请输入指标名称' }],
@@ -349,12 +380,24 @@ function removeFilter(index: number) {
 async function fetchData() {
   loading.value = true
   try {
-    const [m, ds] = await Promise.all([
+    const [m, ds, allDims] = await Promise.all([
       getMetrics(),
-      getDatasets()
+      getDatasets(),
+      getDimensions()
     ])
     metrics.value = m
     datasets.value = ds
+    
+    // Group dimensions by dataset_id
+    allDims.forEach(d => {
+      const dsId = d.dataset_id
+      if (dsId) {
+        if (!datasetDimensionsMap[dsId]) {
+          datasetDimensionsMap[dsId] = []
+        }
+        datasetDimensionsMap[dsId].push(d)
+      }
+    })
   } catch (error) {
     console.error('Failed to fetch data:', error)
   } finally {

@@ -71,6 +71,12 @@ const routes: RouteRecordRaw[] = [
             name: 'ModelConfig',
             component: () => import('@/views/settings/ModelConfigPage.vue'),
             meta: { title: '模型配置' }
+          },
+          {
+            path: 'query',
+            name: 'QueryConfig',
+            component: () => import('@/views/settings/QueryConfigPage.vue'),
+            meta: { title: '问数配置' }
           }
         ]
       },

@@ -101,7 +101,7 @@ export interface MetricFilter {
 }
 
 // 维度类型
-export type DimensionType = 'time' | 'geo' | 'normal'
+export type DimensionType = 'time' | 'geo' | 'normal' | 'categorical' | 'numerical' | 'user_defined'
 
 // 维度
 export interface Dimension {
@@ -113,6 +113,10 @@ export interface Dimension {
   data_type: 'string' | 'number' | 'date' | 'datetime'
   dimension_type: DimensionType
   hierarchy?: DimensionHierarchy
+  format_config?: {
+    default_format?: string
+    options?: string[]
+  }
   synonyms?: string[]
   description?: string
   created_at: string
@@ -208,6 +212,7 @@ export interface QueryRequest {
     user_history?: string[]
     suggested_metrics?: string[]
     suggested_dimensions?: string[]
+    quoted_mql?: any
   }
 }
 

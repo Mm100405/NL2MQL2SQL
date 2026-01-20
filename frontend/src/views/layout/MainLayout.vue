@@ -96,6 +96,7 @@
           <template #icon><icon-settings /></template>
           <template #title>系统设置</template>
           <a-menu-item key="ModelConfig">模型配置</a-menu-item>
+          <a-menu-item key="QueryConfig">问数配置</a-menu-item>
         </a-sub-menu>
 
         <a-divider style="margin: 8px 0" />
@@ -232,6 +233,7 @@ function updateOpenKeys() {
     'Dimensions': 'Semantic',
     'Lineage': 'Semantic',
     'ModelConfig': 'Settings',
+    'QueryConfig': 'Settings',
     'Workbook': 'Air',
     'Integration': 'Air',
     'Consolidation': 'Air',

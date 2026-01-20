@@ -98,14 +98,24 @@ async def analyze_intent(request: QueryRequest, db: Session = Depends(get_db)):
     all_metrics = db.query(Metric).all()
     all_dimensions = db.query(Dimension).all()
     
-    suggested_metrics = [m for m in all_metrics if any(word in m.name.lower() or word in (m.description or "").lower() for word in q.split())]
+    suggested_metrics = [m for m in all_metrics if any(
+        word in m.name.lower() or 
+        word in (m.display_name or "").lower() or 
+        word in (m.description or "").lower() 
+        for word in q.split()
+    )]
     if not suggested_metrics: suggested_metrics = all_metrics[:5]
     
-    suggested_dims = [d for d in all_dimensions if any(word in d.name.lower() or word in (d.description or "").lower() for word in q.split())]
+    suggested_dims = [d for d in all_dimensions if any(
+        word in d.name.lower() or 
+        word in (d.display_name or "").lower() or 
+        word in (d.description or "").lower() 
+        for word in q.split()
+    )]
     if not suggested_dims: suggested_dims = all_dimensions[:5]
     
-    metrics_str = ", ".join([m.name for m in suggested_metrics[:10]])
-    dims_str = ", ".join([d.name for d in suggested_dims[:10]])
+    metrics_str = ", ".join([m.display_name or m.name for m in suggested_metrics[:10]])
+    dims_str = ", ".join([d.display_name or d.name for d in suggested_dims[:10]])
     
     steps = [
         {
@@ -122,8 +132,8 @@ async def analyze_intent(request: QueryRequest, db: Session = Depends(get_db)):
     
     return IntentResponse(
         intent="具体指标和维度的精准查询",
-        suggested_metrics=[m.name for m in suggested_metrics],
-        suggested_dimensions=[d.name for d in suggested_dims],
+        suggested_metrics=[m.display_name or m.name for m in suggested_metrics],
+        suggested_dimensions=[d.display_name or d.name for d in suggested_dims],
         steps=steps
     )
 

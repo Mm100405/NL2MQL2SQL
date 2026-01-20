@@ -32,10 +32,21 @@
                   </div>
                   <div class="result-actions">
                     <a-space>
-                      <a-button type="text" size="small"><template #icon><icon-share-internal /></template>引用</a-button>
-                      <a-button type="text" size="small" @click="showDrillDown(msg.queryResult)"><template #icon><icon-apps /></template>维度细分</a-button>
-                      <a-button type="text" size="small" @click="showAdjustment(msg.queryResult)"><template #icon><icon-settings /></template>调整查询</a-button>
-                      <a-button type="text" size="small"><template #icon><icon-download /></template></a-button>
+                      <a-button type="text" size="small" @click="handleQuote(msg.queryResult.mql)">
+                        <template #icon><icon-share-internal /></template>
+                        引用
+                      </a-button>
+                      <a-button type="text" size="small" @click="showGlobalAddDimension(msg.queryResult)">
+                        <template #icon><icon-plus-circle /></template>
+                        维度细分
+                      </a-button>
+                      <a-button type="text" size="small" @click="showAdjustment(msg.queryResult)">
+                        <template #icon><icon-settings /></template>
+                        调整查询
+                      </a-button>
+                      <a-button type="text" size="small">
+                        <template #icon><icon-download /></template>
+                      </a-button>
                       <a-button 
                         :type="msg.queryResult.viewType === 'chart' ? 'primary' : 'outline'" 
                         size="small"
@@ -43,6 +54,7 @@
                         :style="msg.queryResult.viewType === 'chart' ? {} : { color: '#4e5969' }"
                       >
                         <template #icon><icon-bar-chart /></template>
+                        图表
                       </a-button>
                       <a-button 
                         :type="msg.queryResult.viewType !== 'chart' ? 'primary' : 'outline'" 
@@ -51,6 +63,7 @@
                         :style="msg.queryResult.viewType !== 'chart' ? {} : { color: '#4e5969' }"
                       >
                         <template #icon><icon-table /></template>
+                        表格
                       </a-button>
                     </a-space>
                   </div>
@@ -63,7 +76,7 @@
                   <span>指标: 
                     <a-space size="mini">
                       <a-popover v-for="col in getMetricsFromCols(msg.queryResult)" :key="col" position="bottom">
-                        <span class="meta-tag-link">{{ col }}</span>
+                        <span class="meta-tag-link">{{ findMetric(col)?.display_name || col }}</span>
                         <template #content>
                           <div class="metadata-popup">
                             <div v-if="findMetric(col)">
@@ -80,12 +93,16 @@
                   <span>维度: 
                     <a-space size="mini">
                       <a-popover v-for="col in getDimensionsFromCols(msg.queryResult)" :key="col" position="bottom">
-                        <span class="meta-tag-link">{{ col }}</span>
+                        <span class="meta-tag-link">
+                          {{ col && col.includes('__') ? (findDimension(col.split('__')[0] || '')?.display_name || col.split('__')[0]) + '(' + (col.split('__')[1] || '') + ')' : (findDimension(col || '')?.display_name || col) }}
+                        </span>
                         <template #content>
                           <div class="metadata-popup">
-                            <div v-if="col && findDimension(col)">
-                              <div class="p-title">{{ findDimension(col)?.display_name || col }}</div>
-                              <div class="p-desc">{{ findDimension(col)?.description || '暂无描述' }}</div>
+                            <div v-if="col && (findDimension(col) || (col.includes('__') && findDimension(col.split('__')[0] || '')))">
+                              <div class="p-title">
+                                {{ col.includes('__') ? (findDimension(col.split('__')[0] || '')?.display_name || col.split('__')[0]) + '(' + (col.split('__')[1] || '') + ')' : (findDimension(col)?.display_name || col) }}
+                              </div>
+                              <div class="p-desc">{{ findDimension(col.split('__')[0] || '')?.description || '暂无描述' }}</div>
                             </div>
                             <div v-else>未知维度</div>
                           </div>
@@ -93,26 +110,46 @@
                       </a-popover>
                     </a-space>
                   </span>
+                  <span v-if="msg.queryResult.mql.filters?.length">过滤条件: 
+                    <a-tag v-for="f in msg.queryResult.mql.filters" :key="f" size="small" style="margin-right: 4px;" color="orange">
+                      {{ formatFilterDisplay(f) }}
+                    </a-tag>
+                  </span>
                 </div>
 
                 <div class="result-content-wrapper">
-                <a-table
-                  v-if="msg.queryResult.viewType !== 'chart'"
-                  :columns="formatColumns(msg.queryResult.result.columns)"
-                  :data="formatData(msg.queryResult.result)"
-                  :pagination="false"
-                  :bordered="false"
-                  size="small"
-                  :scroll="{ x: '100%', y: 400 }"
-                />
-                
-                <ChartContainer
-                  v-else
-                  :columns="msg.queryResult.result.columns"
-                  :data="msg.queryResult.result.data"
-                  :chart-type="(msg.queryResult.result.chart_recommendation as any) || 'bar'"
-                />
-              </div>
+                  <a-table
+                    :columns="formatColumns(msg.queryResult.result.columns)"
+                    :data="formatData(msg.queryResult.result, msg.queryResult.query_id)"
+                    :pagination="false"
+                    :bordered="false"
+                    size="small"
+                    :scroll="{ x: '100%', y: 400 }"
+                    row-key="key"
+                    :row-class-name="(record: any) => record.key === selectedRowKey ? 'arco-table-tr-checked' : ''"
+                    @row-click="(record: any) => handleRowSelection(record, msg.queryResult!)"
+                    @row-contextmenu="(record: any, ev: MouseEvent) => handleRowContextMenu(record, msg.queryResult!, ev)"
+                  >
+                    <template #actions="{ record }">
+                      <a-dropdown @select="(val: any) => handleActionSelect(val, record, msg.queryResult!)">
+                        <a-button type="text" size="small"><icon-more /></a-button>
+                        <template #content>
+                          <a-doption value="drill">
+                            <template #icon><icon-layers /></template>
+                            下钻分析
+                          </a-doption>
+                        </template>
+                      </a-dropdown>
+                    </template>
+                  </a-table>
+                  
+                  <ChartContainer
+                    v-if="msg.queryResult.viewType === 'chart'"
+                    :columns="msg.queryResult.result.columns"
+                    :data="msg.queryResult.result.data"
+                    :chart-type="(msg.queryResult.result.chart_recommendation as any) || 'bar'"
+                  />
+                </div>
               
               <div class="result-footer">
                 <span class="timestamp">{{ msg.queryResult.query_id }}</span>
@@ -125,6 +162,24 @@
 
       <!-- 底部输入框 -->
       <div class="input-container">
+        <!-- 引用上下文显示区域 -->
+        <div v-if="quotedMql" class="quoted-mql-box">
+          <div class="quoted-header">
+            <span class="quoted-label"><icon-share-internal /> 正在引用上下文进行分析</span>
+            <a-button type="text" size="mini" @click="quotedMql = null">
+              <template #icon><icon-close /></template>
+              取消引用
+            </a-button>
+          </div>
+          <div class="quoted-content">
+            <a-tag v-for="m in quotedMql.metrics" :key="m" color="arcoblue" size="small">{{ m }}</a-tag>
+            <a-tag v-for="d in quotedMql.dimensions" :key="d" color="green" size="small">{{ d }}</a-tag>
+            <span v-if="quotedMql.timeConstraint && quotedMql.timeConstraint !== 'true'" class="quoted-time">
+              {{ formatTimeRange(quotedMql) }}
+            </span>
+          </div>
+        </div>
+
         <div class="input-wrapper">
           <a-textarea
             v-model="queryInput"
@@ -184,13 +239,67 @@
         </a-form-item>
       </a-form>
     </a-modal>
+
+    <!-- 添加分析维度弹窗 (全局) -->
+    <a-modal v-model:visible="addDimensionVisible" title="添加分析维度 (全局)" @ok="handleAddDimension" width="480px">
+      <div class="drill-down-context">
+        <div class="context-title">
+          <icon-layers style="margin-right: 4px; color: var(--color-success-light-4)" />
+          当前已有维度：
+        </div>
+        <div class="current-dims-display global-mode">
+          <a-tag v-for="dim in activeQueryResult?.mql?.dimensions" :key="dim" color="green" size="small" style="margin-right: 6px; margin-bottom: 6px;">
+            {{ formatDimensionName(dim) }}
+          </a-tag>
+        </div>
+        <div class="context-tip">在当前查询的基础上增加新的分析维度。</div>
+      </div>
+      <a-divider />
+      <a-form :model="addDimensionForm" layout="vertical">
+        <a-form-item label="选择要增加的维度" required>
+          <a-select v-model="addDimensionForm.dimensions" multiple allow-clear placeholder="支持选择多个维度" :max-tag-count="3">
+            <a-option v-for="d in addDimensionAvailableDimensions" :key="d.id" :value="d.value">
+              {{ d.label }}
+            </a-option>
+          </a-select>
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <!-- 下钻分析弹窗 (锁定行数据) -->
+    <a-modal v-model:visible="drillDownVisible" title="下钻分析 (锁定行数据)" @ok="handleDrillDown" width="480px">
+      <div v-if="selectedRecord" class="drill-down-context">
+        <div class="context-title">
+          <icon-filter style="margin-right: 4px; color: var(--color-primary-light-4)" />
+          下钻范围：
+        </div>
+        <div class="current-dims-display drill-mode">
+          <a-tag v-for="dim in activeQueryResult?.mql?.dimensions" :key="dim" color="arcoblue" size="small" style="margin-right: 6px; margin-bottom: 6px;">
+            <span class="tag-label">{{ formatDimensionName(dim) }}:</span>
+            <span class="tag-value">{{ selectedRecord[dim] }}</span>
+          </a-tag>
+        </div>
+        <div class="context-tip">系统将自动锁定上述条件，并展示更细粒度的数据。</div>
+      </div>
+      <a-divider />
+      <a-form :model="drillDownForm" layout="vertical">
+        <a-form-item label="选择下钻目标维度" required>
+          <a-select v-model="drillDownForm.dimensions" multiple allow-clear placeholder="支持选择多个维度" :max-tag-count="3">
+            <a-option v-for="d in drillDownAvailableDimensions" :key="d.id" :value="d.value">
+              {{ d.label }}
+            </a-option>
+          </a-select>
+        </a-form-item>
+      </a-form>
+    </a-modal>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, nextTick, onMounted, watch } from 'vue'
+import { ref, reactive, computed, nextTick, onMounted, watch, toRaw, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Message } from '@arco-design/web-vue'
+import { Message, Dropdown, Doption } from '@arco-design/web-vue'
+import { IconLayers, IconSettings, IconMore } from '@arco-design/web-vue/es/icon'
 import { useSettingsStore } from '@/stores/settings'
 import ModelNotConfigured from '@/components/query/ModelNotConfigured.vue'
 import QuerySteps from '@/components/query/QuerySteps.vue'
@@ -220,6 +329,306 @@ interface MessageItem {
 const messages = ref<MessageItem[]>([])
 const allMetrics = ref<Metric[]>([])
 const allDimensions = ref<Dimension[]>([])
+const timeFormats = ref<any[]>([])
+const quotedMql = ref<any>(null)
+const selectedRecord = ref<any>(null)
+const activeQueryResult = ref<FullQueryResponse | null>(null)
+const selectedRowKey = ref<string | null>(null) // 当前选中的行 key (全局唯一)
+
+const drillDownVisible = ref(false)
+const addDimensionVisible = ref(false)
+const drillDownForm = reactive({
+  dimensions: [] as string[]
+})
+const addDimensionForm = reactive({
+  dimensions: [] as string[]
+})
+
+const adjustmentVisible = ref(false)
+const adjustmentForm = ref<{
+  metrics: string[],
+  dimensions: string[],
+  filters: { field: string, op: string, value: string }[]
+}>({
+  metrics: [],
+  dimensions: [],
+  filters: []
+})
+
+const addDimensionAvailableDimensions = computed(() => {
+  if (!activeQueryResult.value) return []
+  
+  const presentDims = new Set<string>()
+  
+  activeQueryResult.value.mql?.dimensions?.forEach((d: string) => {
+    if (d) {
+      presentDims.add(d)
+      if (d.includes('__')) {
+        const base = d.split('__')[0]
+        if (base) presentDims.add(base)
+      }
+    }
+  })
+  
+  const results: { id: string, label: string, value: string }[] = []
+  
+  allDimensions.value.forEach(d => {
+    const isTime = d.dimension_type === 'time' || ['date', 'datetime', 'timestamp'].includes(d.data_type?.toLowerCase() || '')
+    
+    if (isTime && timeFormats.value.length > 0) {
+      const options = d.format_config?.options || []
+      timeFormats.value.forEach(fmt => {
+        if (options.length === 0 || options.includes(fmt.name)) {
+          const virtualName = `${d.display_name || d.name}__${fmt.label}`
+          if (!presentDims.has(virtualName)) {
+            results.push({
+              id: `${d.id}_${fmt.suffix}`,
+              label: `${d.display_name || d.name}(${fmt.label})`,
+              value: virtualName
+            })
+          }
+        }
+      })
+    } else {
+      const dimName = d.display_name || d.name
+      if (!presentDims.has(dimName) && !presentDims.has(d.name)) {
+        results.push({
+          id: d.id,
+          label: d.display_name || d.name,
+          value: dimName
+        })
+      }
+    }
+  })
+  
+  return results
+})
+
+const drillDownAvailableDimensions = computed(() => {
+  if (!activeQueryResult.value) return []
+  
+  const results: { id: string, label: string, value: string }[] = []
+  
+  allDimensions.value.forEach(d => {
+    const isTime = d.dimension_type === 'time' || ['date', 'datetime', 'timestamp'].includes(d.data_type?.toLowerCase() || '')
+    
+    if (isTime && timeFormats.value.length > 0) {
+      const options = d.format_config?.options || []
+      timeFormats.value.forEach(fmt => {
+        if (options.length === 0 || options.includes(fmt.name)) {
+          const virtualName = `${d.display_name || d.name}__${fmt.label}`
+          results.push({
+            id: `${d.id}_${fmt.suffix}`,
+            label: `${d.display_name || d.name}(${fmt.label})`,
+            value: virtualName
+          })
+        }
+      })
+    } else {
+      const dimName = d.display_name || d.name
+      results.push({
+        id: d.id,
+        label: d.display_name || d.name,
+        value: dimName
+      })
+    }
+  })
+  
+  return results
+})
+
+function formatDimensionName(dim: string) {
+  if (!dim) return ''
+  if (dim.includes('__')) {
+    const parts = dim.split('__')
+    const base = parts[0]
+    const suffix = parts[1]
+    const d = findDimension(base || '')
+    return `${d?.display_name || base}(${suffix})`
+  }
+  const d = findDimension(dim)
+  return d?.display_name || dim
+}
+
+function formatFilterDisplay(filterStr: string) {
+  if (!filterStr) return ''
+  // Try to replace [field] with Display Name
+  const match = filterStr.match(/\[(.*?)\]\s*(.*)/)
+  if (match) {
+    const field = match[1]
+    const rest = match[2]
+    return `${formatDimensionName(field || '')} ${rest}`
+  }
+  return filterStr
+}
+
+function getSelectedRowValues() {
+  if (!selectedRecord.value || !activeQueryResult.value) return ''
+  const dims = activeQueryResult.value.mql?.dimensions || []
+  return dims.map((d: string) => selectedRecord.value[d]).join(', ')
+}
+
+async function handleAddDimension() {
+  if (addDimensionForm.dimensions.length === 0) {
+    Message.warning('请选择至少一个分析维度')
+    return
+  }
+  
+  if (!activeQueryResult.value || !activeQueryResult.value.mql) {
+    Message.error('当前查询上下文已失效，请尝试重新提问')
+    return
+  }
+  
+  const mql = JSON.parse(JSON.stringify(activeQueryResult.value.mql))
+  const drillDims = [...addDimensionForm.dimensions]
+  
+  if (!mql.dimensions) mql.dimensions = []
+  drillDims.forEach(d => {
+    if (!mql.dimensions.includes(d)) {
+      mql.dimensions.push(d)
+    }
+  })
+  
+  addDimensionVisible.value = false
+  loading.value = true
+  
+  try {
+    Message.info('正在扩展分析维度...')
+    const sqlRes = await mql2sql(mql)
+    const queryRes = await executeSQL({ 
+      sql: sqlRes.sql, 
+      datasource_id: sqlRes.datasources[0] || '' 
+    })
+    
+    const agentMsg: MessageItem = { 
+      type: 'agent', 
+      queryResult: {
+        natural_language: `扩展查询: ${drillDims.join(', ')}`,
+        mql: mql,
+        sql: sqlRes.sql,
+        viewType: 'table',
+        steps: [
+          { 
+            title: '维度扩展', 
+            content: `已在当前查询基础上追加了维度 [${drillDims.join(', ')}]。`, 
+            status: 'success' 
+          }
+        ],
+        result: queryRes,
+        query_id: 'add_dim_' + Date.now()
+      }
+    }
+    messages.value.push(agentMsg)
+    Message.success('分析已更新')
+  } catch (error: any) {
+    console.error('Add dimension execution failed:', error)
+    Message.error(error.message || '扩展维度失败')
+  } finally {
+    loading.value = false
+    scrollToBottom()
+  }
+}
+
+async function handleDrillDown() {
+  if (drillDownForm.dimensions.length === 0) {
+    Message.warning('请选择至少一个下钻目标维度')
+    return
+  }
+  
+  if (!activeQueryResult.value || !activeQueryResult.value.mql || !selectedRecord.value) {
+    Message.error('下钻上下文丢失，请重新选择数据行')
+    return
+  }
+  
+  const mql = JSON.parse(JSON.stringify(activeQueryResult.value.mql))
+  const record = toRaw(selectedRecord.value)
+  const drillDims = [...drillDownForm.dimensions]
+  
+  if (!mql.filters) mql.filters = []
+
+  // --- 下钻分析核心逻辑：维度替换 + 过滤锁定 ---
+  // 获取当前查询的所有维度
+  const currentDims = [...(mql.dimensions || [])]
+  
+  currentDims.forEach((dim: string) => {
+    // 获取该维度在行数据中的值
+    const val = record[dim]
+    
+    if (val !== undefined && val !== null && val !== '') {
+      // 构造过滤条件。如果是衍生维度（如：日期__按月），后端 process_mql_expression 能够识别 [展示名__后缀]
+      const filterStr = `[${dim}] = '${val}'`
+      
+      // 避免重复添加相同的过滤条件
+      if (!mql.filters.includes(filterStr)) {
+        mql.filters.push(filterStr)
+      }
+    }
+  })
+  
+  // 执行维度替换：将当前维度替换为用户选择的下钻目标维度
+  mql.dimensions = drillDims
+  
+  // 如果下钻目标中包含当前正在过滤的维度，且粒度更细，后端会自动处理
+  // 这里我们只需要保证 MQL 结构正确
+  
+  drillDownVisible.value = false
+  loading.value = true
+  
+  try {
+    Message.info('正在执行下钻分析...')
+    const sqlRes = await mql2sql(mql)
+    const queryRes = await executeSQL({ 
+      sql: sqlRes.sql, 
+      datasource_id: sqlRes.datasources[0] || '' 
+    })
+    
+    // 构建新的回复消息
+    const analysisTitle = `下钻分析: ${drillDims.map(d => formatDimensionName(d)).join(', ')}`
+    const agentMsg: MessageItem = { 
+      type: 'agent', 
+      queryResult: {
+        natural_language: analysisTitle,
+        mql: mql,
+        sql: sqlRes.sql,
+        viewType: 'table',
+        steps: [
+          { 
+            title: '下钻分析执行', 
+            content: `已对选定数据行执行锁定，并深入分析维度：${drillDims.map(d => formatDimensionName(d)).join(', ')}。`, 
+            status: 'success' 
+          }
+        ],
+        result: queryRes,
+        query_id: 'drill_' + Date.now()
+      }
+    }
+    messages.value.push(agentMsg)
+    Message.success('分析已完成')
+  } catch (error: any) {
+    console.error('Drill down execution failed:', error)
+    Message.error(error.message || '执行下钻分析失败')
+  } finally {
+    loading.value = false
+    scrollToBottom()
+    // 不要在 finally 中立即清除 selectedRecord，防止用户连续操作时丢失上下文
+  }
+}
+
+// 引用功能：将 MQL 作为上下文
+function handleQuote(mql: any) {
+  quotedMql.value = JSON.parse(JSON.stringify(mql))
+  queryInput.value = '' // 清空输入框，引导用户输入增量指令
+  Message.success('已加载引用上下文，请输入您的调整或分析要求')
+  
+  nextTick(() => {
+    const input = document.querySelector('.query-input textarea') as HTMLTextAreaElement
+    if (input) input.focus()
+  })
+}
+
+function getMetricsFromMql(mql: any) {
+  return mql?.metrics || []
+}
 
 // 监听路由参数变化（加载历史或新建）
 watch(() => route.query.id, (newId) => {
@@ -305,13 +714,17 @@ onMounted(async () => {
     loadHistorySession(route.query.id as string)
   }
   
-  // 加载元数据用于调整查询
+  // 加载元数据用于调整查询和下钻
   try {
     const [m, d] = await Promise.all([getMetrics(), getDimensions()])
     allMetrics.value = m
     allDimensions.value = d
+    
+    // 获取时间格式配置
+    const settings = await fetch('/api/v1/settings/system/time_formats').then(res => res.json())
+    timeFormats.value = settings.value || []
   } catch (e) {
-    console.error('Failed to load metadata:', e)
+    console.error('Failed to load metadata or settings:', e)
   }
 })
 
@@ -323,19 +736,48 @@ const loadingSteps: AnalysisStep[] = [
 
 function formatColumns(cols: string[]) {
   if (!cols || cols.length === 0) return []
-  return cols.map(col => ({
-    title: col,
-    dataIndex: col,
-    align: 'right' as const,
-    headerCellStyle: { background: '#f2f3f5' }
-  }))
+  const result = cols.map(col => {
+    let title = col
+    if (col && col.includes('__')) {
+      const parts = col.split('__')
+      const baseName = parts[0] || ''
+      const suffix = parts[1] || ''
+      const dim = baseName ? findDimension(baseName) : null
+      title = dim ? `${dim.display_name || dim.name}(${suffix})` : col
+    } else if (col) {
+      const dim = findDimension(col)
+      if (dim) title = dim.display_name || dim.name
+      const metric = findMetric(col)
+      if (metric) title = metric.display_name || metric.name
+    }
+    
+    return {
+      title: title,
+      dataIndex: col,
+      align: 'right' as const,
+      headerCellStyle: { background: '#f2f3f5' }
+    }
+  })
+
+  // 添加操作列 (Arco 原生行数据传递的推荐方式)
+  result.push({
+    title: '操作',
+    slotName: 'actions',
+    width: 80,
+    fixed: 'right',
+    align: 'center'
+  } as any)
+
+  return result
 }
 
-function formatData(result: any) {
+function formatData(result: any, queryId?: string) {
   if (!result || !result.columns) return []
   const { columns, data } = result
   return data.map((row: any, index: number) => {
-    const obj: Record<string, any> = { key: index }
+    // 使用全局唯一的 key，防止跨卡片选中冲突
+    const uniqueKey = (queryId || 'q') + '_' + index
+    const obj: Record<string, any> = { key: uniqueKey }
     columns.forEach((col: string, i: number) => {
       obj[col] = typeof row[i] === 'number' && col.includes('同比') ? (row[i] * 100).toFixed(2) + '%' : row[i]
     })
@@ -393,11 +835,13 @@ async function handleQuery() {
       natural_language: userQuestion,
       context: {
         suggested_metrics: intentRes.suggested_metrics,
-        suggested_dimensions: intentRes.suggested_dimensions
+        suggested_dimensions: intentRes.suggested_dimensions,
+        quoted_mql: quotedMql.value // 传入引用的上下文
       }
     })
     
     res.mql = mqlRes.mql
+    quotedMql.value = null // 使用后清空
     // 立即更新 MQL 展示
     res.steps.pop()
     res.steps = [...res.steps, ...mqlRes.steps.slice(2)]
@@ -477,6 +921,56 @@ function getDimensionsFromCols(res: FullQueryResponse) {
   return res.result.columns.filter(col => mqlDims.includes(col))
 }
 
+function handleRowContextMenu(record: any, result: FullQueryResponse, ev: MouseEvent) {
+  ev.preventDefault()
+  handleRowSelection(record, result)
+  
+  // 使用 Dropdown.display 实现原生的右键菜单，且能直接传递行数据
+  Dropdown.display({
+    ev,
+    content: () => h('div', { class: 'arco-dropdown-list' }, [
+      h(Doption, { 
+        onClick: () => showDrillDownDialog()
+      }, { 
+        default: () => '下钻分析',
+        icon: () => h(IconLayers)
+      })
+    ])
+  })
+}
+
+function handleActionSelect(val: any, record: any, result: FullQueryResponse) {
+  handleRowSelection(record, result)
+  if (val === 'drill') {
+    showDrillDownDialog()
+  }
+}
+
+function handleRowSelection(record: any, result?: FullQueryResponse) {
+  if (!record || !result) return
+  const rawData = toRaw(record)
+  selectedRowKey.value = record.key
+  selectedRecord.value = rawData
+  activeQueryResult.value = result
+}
+
+function showDrillDownDialog() {
+  if (!selectedRecord.value) {
+    Message.warning('请先点击选中数据行')
+    return
+  }
+  drillDownForm.dimensions = []
+  drillDownVisible.value = true
+}
+
+function showGlobalAddDimension(result: FullQueryResponse) {
+  selectedRecord.value = null 
+  selectedRowKey.value = null
+  activeQueryResult.value = result
+  addDimensionForm.dimensions = []
+  addDimensionVisible.value = true
+}
+
 function formatTimeRange(mql: any) {
   if (!mql) return '全部'
   
@@ -488,25 +982,45 @@ function formatTimeRange(mql: any) {
   if (tc && tc !== 'true' && tc !== '1=1') {
     // Extract field name from [field]
     const fieldMatch = tc.match(/\[(.*?)\]/)
-    if (fieldMatch) {
-      const dim = findDimension(fieldMatch[1])
-      timeField = dim ? (dim.display_name || dim.name) : fieldMatch[1]
+    if (fieldMatch && fieldMatch[1]) {
+      const rawField = fieldMatch[1]
+      let fieldDisplayName = rawField
+      
+      if (rawField.includes('__')) {
+        const parts = rawField.split('__')
+        const baseName = parts[0] || ''
+        const suffix = parts[1] || ''
+        const dim = baseName ? findDimension(baseName) : null
+        fieldDisplayName = dim ? `${dim.display_name || dim.name}(${suffix})` : rawField
+      } else {
+        const dim = findDimension(rawField)
+        fieldDisplayName = dim ? (dim.display_name || dim.name) : rawField
+      }
+      timeField = fieldDisplayName
     }
 
-    // Relative Time Patterns (DateAdd)
-    const dateAddMatch = tc.match(/DateAdd\s*\(\s*'(YEAR|MONTH|DAY)'\s*,\s*-(\d+)\s*,\s*CurrentDate\(\)\s*\)/i)
-    if (dateAddMatch) {
-      const unitMap: Record<string, string> = { 'YEAR': '年', 'MONTH': '个月', 'DAY': '天' }
-      const unit = unitMap[dateAddMatch[1].toUpperCase()]
-      timeStr = `近${dateAddMatch[2]}${unit}`
+    // Relative Time Patterns (LAST_N_YEARS, TODAY, etc.)
+    if (tc.includes('LAST_N_YEARS')) {
+      const match = tc.match(/LAST_N_YEARS\((\d+)\)/)
+      if (match) timeStr = `最近${match[1]}年`
+    } else if (tc.includes('LAST_N_MONTHS')) {
+      const match = tc.match(/LAST_N_MONTHS\((\d+)\)/)
+      if (match) timeStr = `最近${match[1]}个月`
+    } else if (tc.includes('LAST_N_DAYS')) {
+      const match = tc.match(/LAST_N_DAYS\((\d+)\)/)
+      if (match) timeStr = `最近${match[1]}天`
+    } else if (tc.includes('TODAY')) {
+      const match = tc.match(/TODAY\(-(\d+)\)/)
+      if (match) timeStr = `自${match[1]}天前至今`
+      else timeStr = '今天'
     }
 
     // DateTrunc MONTH pattern
     if (!timeStr) {
       let match = tc.match(/DateTrunc\s*\(.*?\s*,\s*'MONTH'\s*\)\s*=\s*'(.*?)'/i)
       if (match) {
-        const date = new Date(match[1])
-        timeStr = `${date.getFullYear()}年${date.getMonth() + 1}月`
+        const dateStr = match[1]
+        timeStr = `${dateStr.substring(0, 4)}年${dateStr.substring(5, 7)}月`
       }
     }
     
@@ -514,8 +1028,7 @@ function formatTimeRange(mql: any) {
     if (!timeStr) {
       let match = tc.match(/DateTrunc\s*\(.*?\s*,\s*'YEAR'\s*\)\s*=\s*'(.*?)'/i)
       if (match) {
-        const date = new Date(match[1])
-        timeStr = `${date.getFullYear()}年`
+        timeStr = `${match[1].substring(0, 4)}年`
       }
     }
     
@@ -535,59 +1048,57 @@ function formatTimeRange(mql: any) {
     }
     
     if (!timeStr) {
-      timeStr = tc.replace(/\[|\]/g, '').replace(/DateTrunc\(.*?\)/gi, '时间')
+      // Fallback clean up
+      timeStr = tc.replace(/\[|\]/g, '')
+                 .replace(/DateTrunc\(.*?,/gi, '时间(')
+                 .replace(/AddMonths\(.*?,/gi, '时间偏移(')
     }
   }
 
-  // 2. Check filters for additional time constraints if tc is empty or generic
-  let filterTimeStr = ''
+  // 2. Check filters for additional time constraints
+  let filterParts: string[] = []
   if (mql.filters && mql.filters.length > 0) {
-    const timeFilters = mql.filters.filter((f: string) => 
-      f !== 'true' && f !== '1=1' &&
-      /time|date|日期|时间/i.test(f) && /(>=|<=|>|<|BETWEEN|=)/i.test(f)
-    )
-    
-    if (timeFilters.length > 0) {
-      filterTimeStr = timeFilters.map((f: string) => {
-        // Try to get field display name for filter too
-        const fMatch = f.match(/^([a-zA-Z0-9_]+)/)
-        let fName = ''
-        if (fMatch && fMatch[1]) {
-          const dim = findDimension(fMatch[1])
-          fName = dim ? (dim.display_name || dim.name) : fMatch[1]
-        }
-        
-        const val = f.replace(/['"]/g, '')
-                    .replace(/^[a-zA-Z0-9_]+\s*/, '') // Remove physical col name from start
-                    .trim()
-        return fName ? `${fName} ${val}` : val
-      }).join('; ')
-    }
+    mql.filters.forEach((f: string) => {
+      if (f === 'true' || f === '1=1') return
+      
+      // Try to parse filter and make it readable
+      let readableFilter = f.replace(/['"]/g, '')
+      const fMatch = f.match(/^([a-zA-Z0-9_]+)\s*(>=|<=|>|<|=)\s*(.*)/)
+      if (fMatch && fMatch[1] && fMatch[2] && fMatch[3]) {
+        const col = fMatch[1]
+        const dim = findDimension(col)
+        const colName = dim ? (dim.display_name || dim.name) : col
+        readableFilter = `${colName} ${fMatch[2]} ${fMatch[3].replace(/['"]/g, '')}`
+      }
+      filterParts.push(readableFilter)
+    })
   }
 
-  const finalTimeStr = [timeField ? `${timeField}: ${timeStr}` : timeStr, filterTimeStr].filter(Boolean).join('; ')
-  return finalTimeStr || '全部'
+  const finalParts = []
+  if (timeField && timeStr) {
+    finalParts.push(`${timeField}: ${timeStr}`)
+  } else if (timeStr) {
+    finalParts.push(timeStr)
+  }
+  
+  if (filterParts.length > 0) {
+    finalParts.push(filterParts.join('; '))
+  }
+
+  return finalParts.join('; ') || '全部'
 }
 
-// 维度细分
+// 添加分析维度 (从卡片头部点击，全局追加)
+// function showGlobalAddDimension(result: FullQueryResponse) {
+//   activeQueryResult.value = result
+//   selectedRecord.value = null // 清除行选择
+//   showDrillDownDialog()
+// }
+
+// 维度细分 (兼容旧方法名或备用)
 function showDrillDown(result: FullQueryResponse) {
-  // 维度细分本质上是调整查询的一种快捷方式，这里可以跳转到调整弹窗并聚焦在维度上
-  // 或者实现一个更简洁的弹窗。为了保持连贯，先复用调整弹窗
-  showAdjustment(result)
+  showGlobalAddDimension(result)
 }
-
-// 调整查询
-const adjustmentVisible = ref(false)
-const activeQueryResult = ref<FullQueryResponse | null>(null)
-const adjustmentForm = ref<{
-  metrics: string[],
-  dimensions: string[],
-  filters: { field: string, op: string, value: string }[]
-}>({
-  metrics: [],
-  dimensions: [],
-  filters: []
-})
 
 function showAdjustment(result: FullQueryResponse) {
   activeQueryResult.value = result
@@ -758,6 +1269,51 @@ async function handleAdjust() {
   flex-direction: column;
 }
 
+.drill-down-context {
+  margin-bottom: 16px;
+}
+
+.context-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-2);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+}
+
+.current-dims-display {
+  padding: 12px;
+  border-radius: 6px;
+  min-height: 40px;
+}
+
+.current-dims-display.drill-mode {
+  background: var(--color-primary-light-1);
+  border: 1px solid var(--color-primary-light-2);
+}
+
+.current-dims-display.global-mode {
+  background: var(--color-success-light-1);
+  border: 1px solid var(--color-success-light-2);
+}
+
+.tag-label {
+  opacity: 0.8;
+  margin-right: 4px;
+}
+
+.tag-value {
+  font-weight: 600;
+}
+
+.context-tip {
+  font-size: 12px;
+  color: var(--color-text-3);
+  margin-top: 8px;
+  font-style: italic;
+}
+
 .user-bubble {
   align-self: flex-end;
   background: #e8f3ff;
@@ -819,17 +1375,58 @@ async function handleAdjust() {
 }
 
 .input-container {
-  padding: 24px 15% 40px;
+  padding: 16px 15% 40px;
   background: #fff;
   flex-shrink: 0;
+  border-top: 1px solid #f2f3f5;
+}
+
+.quoted-mql-box {
+  background: #f7f8fa;
+  border: 1px solid #e5e6eb;
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  padding: 8px 16px;
+  margin-bottom: 0;
+}
+
+.quoted-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.quoted-label {
+  font-size: 12px;
+  color: var(--color-text-3);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.quoted-content {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.quoted-time {
+  font-size: 11px;
+  color: var(--color-text-4);
+  background: #fff;
+  padding: 0 6px;
+  border-radius: 4px;
+  border: 1px solid #e5e6eb;
 }
 
 .input-wrapper {
   border: 1px solid #e5e6eb;
-  border-radius: 12px;
+  border-radius: 0 0 12px 12px;
   padding: 8px;
   background: #fff;
-  box-shadow: 0 -2px 10px rgba(0,0,0,0.02);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.02);
 }
 
 .query-input {
@@ -861,6 +1458,17 @@ async function handleAdjust() {
 
 :deep(.arco-table-th) {
   font-weight: 600;
+}
+
+/* 选中行的高亮样式 - 依赖 Arco 原生类名进行扩展 */
+:deep(.arco-table-tr.arco-table-tr-checked),
+:deep(.arco-table-tr.arco-table-tr-checked:hover) {
+  background-color: var(--color-primary-light-1) !important;
+}
+
+:deep(.arco-table-tr.arco-table-tr-checked td),
+:deep(.arco-table-tr.arco-table-tr-checked:hover td) {
+  background-color: var(--color-primary-light-1) !important;
 }
 
 :deep(.result-card .arco-card-header) {
