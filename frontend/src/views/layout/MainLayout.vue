@@ -12,7 +12,7 @@
     >
       <!-- Logo -->
       <div class="logo">
-        <span v-if="!appStore.sidebarCollapsed" class="logo-text">Aloudata Agent</span>
+        <span v-if="!appStore.sidebarCollapsed" class="logo-text">NL2MQL2SQL Agent</span>
         <icon-menu-unfold v-if="appStore.sidebarCollapsed" @click="appStore.toggleSidebar" />
         <icon-menu-fold v-else class="fold-icon" @click="appStore.toggleSidebar" />
       </div>

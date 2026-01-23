@@ -11,11 +11,15 @@ export default defineConfig({
     }
   },
   server: {
+    host: '0.0.0.0', 
     port: 5173,
+    cors: true,
     proxy: {
       '/api': {
-        target: 'http://localhost:8010',
-        changeOrigin: true
+        target: 'http://192.168.42.208:8010',
+        changeOrigin: true,
+        secure: false,
+        rewrite: (path) => path.replace(/^\/api/, ''),
       }
     }
   }
