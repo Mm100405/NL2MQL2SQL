@@ -2,7 +2,6 @@
 from typing import Dict, List, Any, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import create_engine, text
-import sqlite3
 import urllib.parse
 
 from app.models.datasource import DataSource
@@ -57,10 +56,7 @@ def build_connection_string(datasource: DataSource) -> str:
     config = datasource.connection_config
     db_type = datasource.type
     
-    if db_type == "sqlite":
-        return f"sqlite:///{config.get('database', ':memory:')}"
-    
-    elif db_type == "postgresql":
+    if db_type == "postgresql":
         host = config.get("host", "localhost")
         port = config.get("port", 5432)
         database = config.get("database", "")

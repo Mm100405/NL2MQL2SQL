@@ -51,11 +51,10 @@
           <a-select v-model="form.type" placeholder="请选择数据库类型">
             <a-option value="postgresql">PostgreSQL</a-option>
             <a-option value="mysql">MySQL</a-option>
-            <a-option value="sqlite">SQLite</a-option>
             <a-option value="clickhouse">ClickHouse</a-option>
           </a-select>
         </a-form-item>
-        <template v-if="form.type !== 'sqlite'">
+        <template v-if="true">
           <a-form-item field="connection_config.host" label="主机地址">
             <a-input v-model="form.connection_config.host" placeholder="localhost" />
           </a-form-item>
@@ -72,7 +71,7 @@
         <a-form-item field="connection_config.database" label="数据库名">
           <a-input
             v-model="form.connection_config.database"
-            :placeholder="form.type === 'sqlite' ? '数据库文件路径' : '数据库名称'"
+            placeholder="数据库名称"
           />
         </a-form-item>
       </a-form>

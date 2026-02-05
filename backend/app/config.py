@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     DEBUG: bool = True
     
     # Database
-    DATABASE_URL: str = "sqlite:///./nl2mql2sql.db"
+    DATABASE_URL: str = "mysql+pymysql://root:123456@localhost:3306/nlqdb"
     
     # CORS
     CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://127.0.0.1:5173", "http://192.168.42.208:5173", "http://0.0.0.0:5173", "*"]

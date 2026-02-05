@@ -6,10 +6,10 @@ python-multipart==0.0.9
 # Database
 sqlalchemy==2.0.35
 alembic==1.13.2
-aiosqlite==0.20.0
 psycopg2-binary==2.9.9
 pymysql==1.1.1
 clickhouse-driver==0.2.9
+
 
 # Validation and Serialization
 pydantic==2.9.2

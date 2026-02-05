@@ -4,10 +4,11 @@ from sqlalchemy.orm import sessionmaker
 
 from app.config import settings
 
-# Create engine
+# Create engine for MySQL
 engine = create_engine(
     settings.DATABASE_URL,
-    connect_args={"check_same_thread": False}  # Only for SQLite
+    pool_pre_ping=True,  # 自动检测连接是否有效
+    pool_recycle=3600    # 连接池回收时间（秒）
 )
 
 # Create session factory

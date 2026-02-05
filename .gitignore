@@ -40,17 +40,17 @@ ENV/
 Thumbs.db
 
 # Backend
-/backend/nl2mql2sql.db
 /backend/__pycache__/
 /backend/app/__pycache__/
 /backend/app/models/__pycache__/
 /backend/app/api/__pycache__/
 /backend/app/services/__pycache__/
 /backend/app/utils/__pycache__/
-/backend/app/core/__pycache__/
+/backend/app/config/__pycache__/
 /backend/.pytest_cache/
 /backend/logs/
 /backend/log/
+/backend/*.db
 
 # Frontend
 /frontend/dist/
@@ -84,9 +84,6 @@ coverage.xml
 *.temp
 *.bak
 
-# SQLite
-*.db
-*.db-journal
 
 # pycache
 __pycache__/

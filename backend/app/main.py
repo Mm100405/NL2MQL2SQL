@@ -5,9 +5,6 @@ from app.config import settings
 from app.database import engine, Base
 from app.api.v1 import query, semantic, settings as settings_api, air, can, big
 
-# Create database tables
-Base.metadata.create_all(bind=engine)
-
 app = FastAPI(
     title="NL2MQL2SQL API",
     description="智能问数系统 - 自然语言转MQL转SQL",
@@ -15,6 +12,23 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc"
 )
+
+
+@app.on_event("startup")
+def startup_event():
+    # 迁移数据库表结构
+    from alembic.config import Config
+    from alembic import command
+    import os
+    
+    # 设置alembic配置
+    alembic_cfg = Config(os.path.join(os.path.dirname(__file__), "..", "alembic.ini"))
+    alembic_cfg.set_main_option("script_location", os.path.join(os.path.dirname(__file__), "..", "alembic"))
+    alembic_cfg.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+    
+    # 运行迁移至最新版本
+    command.upgrade(alembic_cfg, "head")
+
 
 # CORS middleware
 app.add_middleware(

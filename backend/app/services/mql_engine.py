@@ -12,16 +12,6 @@ from app.models.settings import SystemSetting
 
 # Time function mappings for different SQL dialects
 TIME_FUNCTIONS = {
-    "sqlite": {
-        "TODAY()": "date('now')",
-        "TODAY(-{n})": "date('now', '-{n} days')",
-        "YESTERDAY()": "date('now', '-1 day')",
-        "LAST_N_DAYS({n})": "date('now', '-{n} days')",
-        "LAST_N_MONTHS({n})": "date('now', '-{n} months')",
-        "THIS_WEEK()": "date('now', 'weekday 0', '-7 days')",
-        "THIS_MONTH()": "date('now', 'start of month')",
-        "THIS_YEAR()": "date('now', 'start of year')"
-    },
     "postgresql": {
         "TODAY()": "CURRENT_DATE",
         "TODAY(-{n})": "CURRENT_DATE - INTERVAL '{n} days'",
@@ -85,8 +75,8 @@ async def mql_to_sql(mql: Dict[str, Any], db: Session) -> Dict[str, Any]:
             "按周": "YYYY-WW"
         }
     
-    # Determine dialect (default to sqlite for demo)
-    dialect = "sqlite"
+    # Determine dialect (default to mysql)
+    dialect = "mysql"
     datasource_ids = []
     
     if datasources:
@@ -145,16 +135,7 @@ def get_metric_expression(metric_obj: Metric, metrics: Dict[str, Metric]) -> str
 
 def get_date_format_expr(column: str, fmt: str, dialect: str) -> str:
     """Get SQL expression for date formatting based on dialect"""
-    if dialect == "sqlite":
-        # SQLite uses strftime
-        mapping = {
-            "YYYY-MM-DD": f"date({column})",
-            "YYYY-MM": f"strftime('%Y-%m', {column})",
-            "YYYY": f"strftime('%Y', {column})",
-            "YYYY-WW": f"strftime('%Y-%W', {column})"
-        }
-        return mapping.get(fmt, column)
-    elif dialect == "mysql":
+    if dialect == "mysql":
         # MySQL uses DATE_FORMAT
         mapping = {
             "YYYY-MM-DD": f"DATE_FORMAT({column}, '%Y-%m-%d')",
@@ -251,7 +232,7 @@ def translate_mql_to_sql(
     metrics: Dict[str, Metric],
     dimensions: Dict[str, Dimension],
     datasets: Dict[str, Dataset],
-    dialect: str = "sqlite",
+    dialect: str = "mysql",
     time_formats: Dict[str, str] = None,
     label_to_format: Dict[str, str] = None
 ) -> str:
@@ -390,7 +371,7 @@ def translate_mql_to_sql(
 def replace_time_functions(sql: str, dialect: str) -> str:
     """Replace MQL time functions with SQL dialect-specific functions"""
     
-    funcs = TIME_FUNCTIONS.get(dialect, TIME_FUNCTIONS["sqlite"])
+    funcs = TIME_FUNCTIONS.get(dialect, TIME_FUNCTIONS["mysql"])
     
     # 1. DateTrunc(col, 'MONTH/YEAR/DAY')
     if dialect == "mysql":
@@ -405,12 +386,6 @@ def replace_time_functions(sql: str, dialect: str) -> str:
         sql = re.sub(r"DateTrunc\((.*?), '(.*?)'\)", r"date_trunc('\2', \1)", sql, flags=re.IGNORECASE)
         sql = re.sub(r"AddMonths\((.*?), (.*?)\)", r"\1 + INTERVAL '\2 months'", sql, flags=re.IGNORECASE)
         sql = sql.replace("CurrentDate()", "CURRENT_DATE")
-    elif dialect == "sqlite":
-        sql = re.sub(r"DateTrunc\((.*?), 'MONTH'\)", r"strftime('%Y-%m-01', \1)", sql, flags=re.IGNORECASE)
-        sql = re.sub(r"DateTrunc\((.*?), 'YEAR'\)", r"strftime('%Y-01-01', \1)", sql, flags=re.IGNORECASE)
-        sql = re.sub(r"DateTrunc\((.*?), 'DAY'\)", r"date(\1)", sql, flags=re.IGNORECASE)
-        sql = re.sub(r"AddMonths\((.*?), (.*?)\)", r"date(\1, '\2 months')", sql, flags=re.IGNORECASE)
-        sql = sql.replace("CurrentDate()", "date('now')")
 
     # 2. TODAY(-N) pattern
     pattern = r'TODAY\(\s*-\s*(\d+)\s*\)'

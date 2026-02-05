@@ -1,5 +1,4 @@
 from sqlalchemy import Column, String, Text, JSON, DateTime, Enum
-from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
 from datetime import datetime
 import uuid
 import enum
@@ -10,7 +9,6 @@ from app.database import Base
 class DataSourceType(str, enum.Enum):
     postgresql = "postgresql"
     mysql = "mysql"
-    sqlite = "sqlite"
     clickhouse = "clickhouse"
 
 

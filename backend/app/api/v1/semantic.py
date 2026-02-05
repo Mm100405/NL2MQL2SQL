@@ -160,10 +160,6 @@ async def test_datasource_connection(id: str, db: Session = Depends(get_db)):
                 password=source.connection_config.get("password", "")
             )
             conn.close()
-        elif source.type == "sqlite":
-            import sqlite3
-            conn = sqlite3.connect(source.connection_config["database"])
-            conn.close()
         elif source.type == "clickhouse":
             import clickhouse_driver
             client = clickhouse_driver.Client(
@@ -309,25 +305,6 @@ async def sync_datasets_from_source(request: dict, db: Session = Depends(get_db)
                     for col in cursor.fetchall()
                 ]
                 tables.append({"name": table_name, "schema": datasource.connection_config["database"], "columns": columns})
-            conn.close()
-            
-        elif datasource.type == "sqlite":
-            import sqlite3
-            conn = sqlite3.connect(datasource.connection_config["database"])
-            cursor = conn.cursor()
-            cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-            for (table_name,) in cursor.fetchall():
-                cursor.execute(f"PRAGMA table_info(`{table_name}`)")
-                columns = [
-                    {
-                        "name": col[1],
-                        "type": col[2],
-                        "nullable": col[3] == 0,
-                        "comment": ""
-                    }
-                    for col in cursor.fetchall()
-                ]
-                tables.append({"name": table_name, "schema": "main", "columns": columns})
             conn.close()
             
         elif datasource.type == "clickhouse":
