@@ -33,6 +33,13 @@ export function testDataSourceConnection(id: string): Promise<{ success: boolean
   return request.post(`/semantic/datasources/${id}/test`)
 }
 
+export function testConnectionConfig(data: {
+  type: string
+  connection_config: any
+}): Promise<{ success: boolean; message: string }> {
+  return request.post('/semantic/datasources/test', data)
+}
+
 // ============ 数据集管理 ============
 export function getDatasets(params?: { datasource_id?: string }): Promise<Dataset[]> {
   return request.get('/semantic/datasets', { params })
@@ -56,6 +63,10 @@ export function deleteDataset(id: string): Promise<void> {
 
 export function syncDatasetFromSource(datasourceId: string): Promise<Dataset[]> {
   return request.post('/semantic/datasets/sync', { datasource_id: datasourceId })
+}
+
+export function syncPhysicalTables(datasourceId: string): Promise<{ message: string; count: number }> {
+  return request.post(`/semantic/datasources/${datasourceId}/sync`)
 }
 
 // ============ 指标管理 ============
@@ -136,4 +147,12 @@ export function getDatasetLineage(id: string): Promise<any> {
 
 export function getFullLineageGraph(): Promise<any> {
   return request.get('/semantic/lineage/graph')
+}
+
+export function getMetricAllowedDimensions(id: string): Promise<any[]> {
+  return request.get(`/semantic/metrics/${id}/allowed-dimensions`)
+}
+
+export function getMetricsAllowedDimensions(metricIds: string[]): Promise<any[]> {
+  return request.post('/semantic/metrics/allowed-dimensions', metricIds)
 }

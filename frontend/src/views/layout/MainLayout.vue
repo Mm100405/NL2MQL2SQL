@@ -38,10 +38,10 @@
             <div class="group-title">历史查询</div>
             <div 
               v-for="item in chatHistory" 
-              :key="item.id" 
+              :key="item.conversation_id || item.id" 
               class="history-item"
-              :class="{ active: route.query.id === item.id }"
-              @click="handleHistoryClick(item.id)"
+              :class="{ active: route.query.id === item.conversation_id || route.query.id === item.id }"
+              @click="handleHistoryClick(item.conversation_id || item.id)"
             >
               {{ item.natural_language.slice(0, 20) }}{{ item.natural_language.length > 20 ? '...' : '' }}
             </div>
@@ -50,8 +50,8 @@
         </div>
 
         <div class="user-info">
-          <a-avatar :size="24">demo</a-avatar>
-          <span>demo</span>
+          <a-avatar :size="24">云轩</a-avatar>
+          <span>向云轩</span>
         </div>
       </template>
 
@@ -85,7 +85,8 @@
           <template #icon><icon-layers /></template>
           <template #title>语义层管理</template>
           <a-menu-item key="DataSources">数据源管理</a-menu-item>
-          <a-menu-item key="Datasets">数据集管理</a-menu-item>
+          <a-menu-item key="Datasets">物理表管理</a-menu-item>
+          <a-menu-item key="Views">视图管理</a-menu-item>
           <a-menu-item key="Metrics">指标管理</a-menu-item>
           <a-menu-item key="Dimensions">维度管理</a-menu-item>
           <a-menu-item key="Lineage">血缘管理</a-menu-item>
@@ -202,12 +203,26 @@ async function fetchHistory() {
   }
 }
 
-function handleHistoryClick(id: string) {
-  router.push({ name: 'Query', query: { id } })
+async function handleHistoryClick(id: string) {
+  showAgentSidebar.value = true;  // 确保显示Agent侧边栏
+  
+  // 直接使用传入的ID（已经是conversation_id）
+  router.push({ name: 'Query', query: { id } });
+  
+  // 延迟刷新历史记录列表，确保路由变化完成
+  setTimeout(async () => {
+    await fetchHistory();
+  }, 100);
 }
 
-function handleNewChat() {
+async function handleNewChat() {
+  showAgentSidebar.value = true;  // 确保显示Agent侧边栏
   router.push({ name: 'Query', query: { t: Date.now() } })
+  
+  // 延迟刷新历史记录列表，确保路由变化完成
+  setTimeout(async () => {
+    await fetchHistory();
+  }, 100);
 }
 
 function toggleSidebarMode() {
@@ -269,6 +284,9 @@ const breadcrumbs = computed(() => {
 function handleMenuClick(key: string) {
   if (key === 'Query') {
     showAgentSidebar.value = true
+  } else {
+    // 如果切换到非Query页面，重置为显示普通导航菜单
+    showAgentSidebar.value = false
   }
   router.push({ name: key })
 }
@@ -296,6 +314,21 @@ onMounted(() => {
 watch(() => route.name, () => {
   updateOpenKeys()
 })
+
+// 监听路由参数变化，当进入查询历史详情时刷新历史列表
+watch(() => route.query, async (newQuery, oldQuery) => {
+  // 如果是Query页面并且有id参数变化，则刷新历史记录
+  if (route.name === 'Query' && newQuery.id && newQuery.id !== oldQuery.id) {
+    await fetchHistory();
+  }
+}, { immediate: false });
+
+// 监听路由路径变化，当进入Query页面时刷新历史记录
+watch(() => route.path, async (newPath, oldPath) => {
+  if (newPath.includes('/query') && !oldPath?.includes('/query')) {
+    await fetchHistory();
+  }
+});
 </script>
 
 <style scoped>

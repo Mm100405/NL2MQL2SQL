@@ -16,7 +16,14 @@
         </a-space>
       </template>
 
-      <a-table :columns="columns" :data="filteredMetrics" :loading="loading">
+      <a-table
+        :columns="columns"
+        :data="filteredMetrics"
+        :loading="loading"
+        :scroll="{ x: 1200 }"
+        :bordered="false"
+        :stripe="true"
+      >
         <template #metric_type="{ record }">
           <a-tag :color="getTypeColor(record.metric_type)">
             {{ getTypeLabel(record.metric_type) }}
@@ -33,16 +40,18 @@
           <span v-else style="color: var(--color-text-4)">未配置</span>
         </template>
         <template #actions="{ record }">
-          <a-space>
+          <a-space :size="4">
             <a-button type="text" size="small" @click="handleViewLineage(record)">
               血缘
             </a-button>
             <a-button type="text" size="small" @click="handleEdit(record)">
               <template #icon><icon-edit /></template>
+              编辑
             </a-button>
             <a-popconfirm content="确定删除此指标？" @ok="handleDelete(record.id)">
               <a-button type="text" size="small" status="danger">
                 <template #icon><icon-delete /></template>
+                删除
               </a-button>
             </a-popconfirm>
           </a-space>
@@ -337,13 +346,13 @@ const rules = {
 }
 
 const columns = [
-  { title: '指标名称', dataIndex: 'name' },
-  { title: '显示名称', dataIndex: 'display_name' },
-  { title: '类型', slotName: 'metric_type' },
-  { title: '聚合', slotName: 'aggregation' },
-  { title: '分析维度', slotName: 'analysis_dimensions' },
-  { title: '单位', dataIndex: 'unit' },
-  { title: '操作', slotName: 'actions', width: 180 }
+  { title: '指标名称', dataIndex: 'name', width: 200 },
+  { title: '显示名称', dataIndex: 'display_name', width: 180 },
+  { title: '类型', slotName: 'metric_type', width: 100, align: 'center' },
+  { title: '聚合', slotName: 'aggregation', width: 100, align: 'center' },
+  { title: '分析维度', slotName: 'analysis_dimensions', ellipsis: true, width: 150 },
+  { title: '单位', dataIndex: 'unit', width: 80 },
+  { title: '操作', slotName: 'actions', width: 220, fixed: 'right' }
 ]
 
 const filteredMetrics = computed(() => {
@@ -504,5 +513,53 @@ onMounted(() => {
 <style scoped>
 .metric-list {
   height: 100%;
+}
+
+.metric-list :deep(.arco-table) {
+  overflow: visible;
+  table-layout: fixed;
+}
+
+.metric-list :deep(.arco-table-container) {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* 固定操作列样式 - 兼容多种 Arco Design 版本 */
+.metric-list :deep(.arco-table-th-fixed-right),
+.metric-list :deep(.arco-table-td-fixed-right),
+.metric-list :deep(.arco-table-th-fixed-last),
+.metric-list :deep(.arco-table-td-fixed-last) {
+  position: sticky !important;
+  right: 0 !important;
+  background: #fff !important;
+  z-index: 10 !important;
+  box-shadow: -6px 0 12px -4px rgba(0, 0, 0, 0.08) !important;
+}
+
+.metric-list :deep(.arco-table-tr:hover .arco-table-td-fixed-right),
+.metric-list :deep(.arco-table-tr:hover .arco-table-td-fixed-last) {
+  background: #f2f3f5 !important;
+}
+
+/* 添加分隔线 */
+.metric-list :deep(.arco-table-th-fixed-right)::before,
+.metric-list :deep(.arco-table-td-fixed-right)::before,
+.metric-list :deep(.arco-table-th-fixed-last)::before,
+.metric-list :deep(.arco-table-td-fixed-last)::before {
+  content: '' !important;
+  position: absolute !important;
+  left: 0 !important;
+  top: 0 !important;
+  bottom: 0 !important;
+  width: 1px !important;
+  background: #e5e6eb !important;
+}
+
+/* 确保表格单元格内容不溢出 */
+.metric-list :deep(.arco-table-cell) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>

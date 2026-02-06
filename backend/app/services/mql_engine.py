@@ -8,6 +8,7 @@ from app.models.dimension import Dimension
 from app.models.dataset import Dataset
 from app.models.datasource import DataSource
 from app.models.settings import SystemSetting
+from app.models.view import View
 
 
 # Time function mappings for different SQL dialects
@@ -46,10 +47,14 @@ async def mql_to_sql(mql: Dict[str, Any], db: Session) -> Dict[str, Any]:
     if not is_valid:
         raise ValueError(f"MQL Validation Failed: {msg}")
     
+    # 2. Dimension constraint validation
+    await validate_dimensions_constraints(mql, db)
+    
     # Get metadata for translation
     metrics = {m.name: m for m in db.query(Metric).all()}
     dimensions = {d.name: d for d in db.query(Dimension).all()}
     datasets = {d.id: d for d in db.query(Dataset).all()}
+    views = {v.id: v for v in db.query(View).all()}
     datasources = db.query(DataSource).all()
     
     # Get time format settings
@@ -84,7 +89,7 @@ async def mql_to_sql(mql: Dict[str, Any], db: Session) -> Dict[str, Any]:
         datasource_ids = [ds.id for ds in datasources]
     
     # Parse MQL and build SQL
-    sql = translate_mql_to_sql(mql, metrics, dimensions, datasets, dialect, time_formats, label_to_format)
+    sql = translate_mql_to_sql(mql, metrics, dimensions, datasets, views, dialect, time_formats, label_to_format)
     sql = replace_time_functions(sql, dialect)
     
     return {
@@ -227,11 +232,160 @@ def process_mql_expression(expr: str, metrics: Dict[str, Metric], dimensions: Di
     return processed
 
 
+async def validate_dimensions_constraints(mql: Dict[str, Any], db: Session):
+    """验证维度约束：查询维度必须在指标允许范围内
+    
+    逻辑：
+    1. 获取MQL中所有指标
+    2. 获取每个指标的 analysis_dimensions  
+    3. 计算允许维度的交集
+    4. 验证请求维度必须在这个交集中
+    """
+    if not mql.get("metrics") or not mql.get("dimensions"):
+        return
+    
+    # 提取MQL中定义的所有指标
+    metric_names = set(mql.get("metrics", []))
+    if not metric_names:
+        return
+    
+    metric_ids = []
+    metric_lookup = {m.name: m for m in db.query(Metric).all()}
+    
+    # 从metricDefinitions中获取实际的指标引用
+    metric_defs = mql.get("metricDefinitions", {})
+    for alias in metric_names:
+        defn = metric_defs.get(alias)
+        if defn and defn.get("refMetric"):
+            # 查找对应的Metric对象
+            for metric in metric_lookup.values():
+                if metric.name == defn["refMetric"] or metric.measure_column == defn["refMetric"]:
+                    metric_ids.append(metric.id)
+                    break
+    
+    if not metric_ids:
+        return
+    
+    # 获取每个指标的允许维度集合
+    from sqlalchemy import text
+    metric_dim_sets = []
+    
+    for metric_id in metric_ids:
+        metric = db.query(Metric).filter(Metric.id == metric_id).first()
+        if metric:
+            allowed_ids = set(metric.analysis_dimensions or [])
+            metric_dim_sets.append(allowed_ids)
+    
+    if not metric_dim_sets:
+        return
+    
+    # 计算交集
+    if len(metric_dim_sets) == 1:
+        common_dim_ids = metric_dim_sets[0]
+    else:
+        common_dim_ids = set.intersection(*metric_dim_sets)
+    
+    # 如果没有交集约束，跳过验证
+    if not common_dim_ids:
+        return
+    
+    # 获取允许维度的名称集合
+    allowed_dims = db.query(Dimension).filter(Dimension.id.in_(common_dim_ids)).all()
+    allowed_names = set()
+    
+    for dim in allowed_dims:
+        allowed_names.add(dim.name)
+        allowed_names.add(dim.display_name)
+        allowed_names.add(dim.physical_column)
+    
+    # 验证请求维度
+    requested_dims = mql.get("dimensions", [])
+    invalid_dims = []
+    
+    for dim_name in requested_dims:
+        base_name = dim_name.split("__")[0] if "__" in dim_name else dim_name
+        if base_name not in allowed_names:
+            invalid_dims.append(dim_name)
+    
+    if invalid_dims:
+        raise ValueError(f"维度约束违反：维度 {invalid_dims} 不在指标允许的范围内")
+
+
+def build_from_clause(
+    mql: Dict[str, Any],
+    metrics: Dict[str, Metric],
+    dimensions: Dict[str, Dimension],
+    datasets: Dict[str, Dataset],
+    views: Dict[str, Any],
+    dialect: str
+) -> str:
+    """
+    根据MQL中的指标和维度确定使用哪个View或Dataset作为FROM子句
+    优先级：
+    1. 如果指标关联了View，使用View
+    2. 否则如果指标关联了Dataset，使用Dataset
+    3. 如果维度关联了View，使用View
+    4. 否则使用维度关联的Dataset
+    5. 默认使用第一个Dataset
+    """
+    used_view_id = None
+    used_dataset_id = None
+    
+    # 检查指标关联的View/Dataset
+    metric_defs = mql.get("metricDefinitions", {})
+    for metric_alias in mql.get("metrics", []):
+        defn = metric_defs.get(metric_alias)
+        if not defn:
+            continue
+        ref_metric = defn.get("refMetric")
+        
+        # 查找指标对象
+        for m in metrics.values():
+            if m.name == ref_metric or m.measure_column == ref_metric:
+                if m.view_id and m.view_id in views:
+                    used_view_id = m.view_id
+                    break
+                elif m.dataset_id and m.dataset_id in datasets:
+                    used_dataset_id = m.dataset_id
+        if used_view_id:
+            break
+    
+    # 如果没有找到，检查维度关联的View/Dataset
+    if not used_view_id and not used_dataset_id:
+        for dim_name in mql.get("dimensions", []):
+            actual_name = dim_name.split("__")[0] if "__" in dim_name else dim_name
+            
+            for d in dimensions.values():
+                if d.name == actual_name or d.display_name == actual_name:
+                    if d.view_id and d.view_id in views:
+                        used_view_id = d.view_id
+                        break
+                    elif d.dataset_id and d.dataset_id in datasets:
+                        used_dataset_id = d.dataset_id
+            if used_view_id:
+                break
+    
+    # 构建FROM子句
+    if used_view_id and used_view_id in views:
+        view = views[used_view_id]
+        return view.generate_from_clause(datasets, dialect)
+    elif used_dataset_id and used_dataset_id in datasets:
+        dataset = datasets[used_dataset_id]
+        return dataset.physical_name
+    elif datasets:
+        # 默认使用第一个Dataset
+        first_dataset = list(datasets.values())[0]
+        return first_dataset.physical_name
+    else:
+        return "(SELECT 1) AS dummy"
+
+
 def translate_mql_to_sql(
     mql: Dict[str, Any],
     metrics: Dict[str, Metric],
     dimensions: Dict[str, Dimension],
     datasets: Dict[str, Dataset],
+    views: Dict[str, Any] = None,
     dialect: str = "mysql",
     time_formats: Dict[str, str] = None,
     label_to_format: Dict[str, str] = None
@@ -241,6 +395,8 @@ def translate_mql_to_sql(
         time_formats = {}
     if label_to_format is None:
         label_to_format = {}
+    if views is None:
+        views = {}
     
     # 1. SELECT clause
     select_items = []
@@ -334,12 +490,9 @@ def translate_mql_to_sql(
 
     sql = "SELECT " + ", ".join(select_items)
     
-    # 2. FROM clause
-    first_dataset = list(datasets.values())[0] if datasets else None
-    if first_dataset:
-        sql += f" FROM {first_dataset.physical_name}"
-    else:
-        sql += " FROM (SELECT 1) AS dummy"
+    # 2. FROM clause - 优先使用View，否则使用Dataset
+    from_clause = build_from_clause(mql, metrics, dimensions, datasets, views, dialect)
+    sql += f" FROM {from_clause}"
         
     # 3. WHERE clause
     where_parts = []

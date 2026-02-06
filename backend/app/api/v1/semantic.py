@@ -9,6 +9,7 @@ from app.models.dataset import Dataset
 from app.models.metric import Metric
 from app.models.dimension import Dimension
 from app.models.relation import DataRelation
+from app.models.view import View
 
 router = APIRouter()
 
@@ -112,11 +113,19 @@ def update_datasource(id: str, data: DataSourceUpdate, db: Session = Depends(get
     source = db.query(DataSource).filter(DataSource.id == id).first()
     if not source:
         raise HTTPException(status_code=404, detail="DataSource not found")
-    
+
     update_data = data.model_dump(exclude_unset=True)
+
+    # 特殊处理 connection_config：如果 password 为 "******" 或空，则保留原密码
+    if "connection_config" in update_data:
+        connection_config = update_data["connection_config"]
+        if connection_config.get("password") in [None, "", "******"]:
+            # 保留原密码
+            connection_config["password"] = source.connection_config.get("password")
+
     for key, value in update_data.items():
         setattr(source, key, value)
-    
+
     db.commit()
     db.refresh(source)
     return source.to_dict()
@@ -137,7 +146,7 @@ async def test_datasource_connection(id: str, db: Session = Depends(get_db)):
     source = db.query(DataSource).filter(DataSource.id == id).first()
     if not source:
         raise HTTPException(status_code=404, detail="DataSource not found")
-    
+
     # Test connection based on database type
     try:
         if source.type == "postgresql":
@@ -172,7 +181,7 @@ async def test_datasource_connection(id: str, db: Session = Depends(get_db)):
             client.disconnect()
         else:
             raise HTTPException(status_code=400, detail=f"Unsupported database type: {source.type}")
-        
+
         source.status = "active"
         db.commit()
         return {"success": True, "message": "Connection successful"}
@@ -180,6 +189,202 @@ async def test_datasource_connection(id: str, db: Session = Depends(get_db)):
         source.status = "error"
         db.commit()
         return {"success": False, "message": f"Connection failed: {str(e)}"}
+
+
+class ConnectionConfigTest(BaseModel):
+    type: str
+    connection_config: dict
+
+
+@router.post("/datasources/test")
+async def test_connection_config(data: ConnectionConfigTest):
+    """测试连接配置，不需要先创建数据源"""
+    try:
+        if data.type == "postgresql":
+            import psycopg2
+            conn = psycopg2.connect(
+                host=data.connection_config.get("host", "localhost"),
+                port=data.connection_config.get("port", 5432),
+                database=data.connection_config.get("database"),
+                user=data.connection_config.get("username", ""),
+                password=data.connection_config.get("password", "")
+            )
+            conn.close()
+        elif data.type == "mysql":
+            import pymysql
+            conn = pymysql.connect(
+                host=data.connection_config.get("host", "localhost"),
+                port=data.connection_config.get("port", 3306),
+                database=data.connection_config.get("database"),
+                user=data.connection_config.get("username", ""),
+                password=data.connection_config.get("password", "")
+            )
+            conn.close()
+        elif data.type == "clickhouse":
+            import clickhouse_driver
+            client = clickhouse_driver.Client(
+                host=data.connection_config.get("host", "localhost"),
+                port=data.connection_config.get("port", 9000),
+                database=data.connection_config.get("database"),
+                user=data.connection_config.get("username", "default"),
+                password=data.connection_config.get("password", "")
+            )
+            client.disconnect()
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported database type: {data.type}")
+
+        return {"success": True, "message": "Connection successful"}
+    except Exception as e:
+        return {"success": False, "message": f"Connection failed: {str(e)}"}
+
+
+@router.post("/datasources/{datasource_id}/sync")
+async def sync_physical_tables(datasource_id: str, db: Session = Depends(get_db)):
+    """从数据源同步所有物理表到数据库"""
+    # 获取数据源
+    datasource = db.query(DataSource).filter(DataSource.id == datasource_id).first()
+    if not datasource:
+        raise HTTPException(status_code=404, detail="DataSource not found")
+
+    tables = []
+    try:
+        # 连接数据库获取表列表
+        if datasource.type == "postgresql":
+            import psycopg2
+            conn = psycopg2.connect(
+                host=datasource.connection_config.get("host", "localhost"),
+                port=datasource.connection_config.get("port", 5432),
+                database=datasource.connection_config["database"],
+                user=datasource.connection_config.get("username", ""),
+                password=datasource.connection_config.get("password", "")
+            )
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT table_name, table_schema
+                FROM information_schema.tables
+                WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+            """)
+            for table_name, schema_name in cursor.fetchall():
+                cursor.execute("""
+                    SELECT column_name, data_type, is_nullable
+                    FROM information_schema.columns
+                    WHERE table_name = %s AND table_schema = %s
+                    ORDER BY ordinal_position
+                """, (table_name, schema_name))
+                columns = [
+                    {
+                        "name": col[0],
+                        "type": col[1],
+                        "nullable": col[2] == "YES",
+                        "comment": ""
+                    }
+                    for col in cursor.fetchall()
+                ]
+                tables.append({
+                    "name": table_name,
+                    "physical_name": table_name,
+                    "schema_name": schema_name,
+                    "columns": columns
+                })
+            conn.close()
+
+        elif datasource.type == "mysql":
+            import pymysql
+            conn = pymysql.connect(
+                host=datasource.connection_config.get("host", "localhost"),
+                port=datasource.connection_config.get("port", 3306),
+                database=datasource.connection_config["database"],
+                user=datasource.connection_config.get("username", ""),
+                password=datasource.connection_config.get("password", "")
+            )
+            cursor = conn.cursor()
+            cursor.execute("SHOW TABLES")
+            for (table_name,) in cursor.fetchall():
+                cursor.execute(f"SHOW FULL COLUMNS FROM `{table_name}`")
+                columns = [
+                    {
+                        "name": col[0],
+                        "type": col[1],
+                        "nullable": col[3] == "YES",
+                        "comment": col[8] or ""
+                    }
+                    for col in cursor.fetchall()
+                ]
+                tables.append({
+                    "name": table_name,
+                    "physical_name": table_name,
+                    "schema_name": datasource.connection_config["database"],
+                    "columns": columns
+                })
+            conn.close()
+
+        elif datasource.type == "clickhouse":
+            import clickhouse_driver
+            client = clickhouse_driver.Client(
+                host=datasource.connection_config.get("host", "localhost"),
+                port=datasource.connection_config.get("port", 9000),
+                database=datasource.connection_config["database"],
+                user=datasource.connection_config.get("username", "default"),
+                password=datasource.connection_config.get("password", "")
+            )
+            result = client.execute("SHOW TABLES")
+            for (table_name,) in result:
+                desc = client.execute(f"DESCRIBE TABLE {table_name}")
+                columns = [
+                    {
+                        "name": col[0],
+                        "type": col[1],
+                        "nullable": "Nullable" in col[1],
+                        "comment": col[4] if len(col) > 4 else ""
+                    }
+                    for col in desc
+                ]
+                tables.append({
+                    "name": table_name,
+                    "physical_name": table_name,
+                    "schema_name": datasource.connection_config["database"],
+                    "columns": columns
+                })
+            client.disconnect()
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported database type: {datasource.type}")
+
+        # 保存或更新表到数据库
+        sync_count = 0
+        for table_data in tables:
+            # 检查是否已存在
+            existing = db.query(Dataset).filter(
+                Dataset.datasource_id == datasource_id,
+                Dataset.physical_name == table_data["physical_name"]
+            ).first()
+
+            if existing:
+                # 更新现有表
+                existing.name = table_data["name"]
+                existing.schema_name = table_data["schema_name"]
+                existing.columns = table_data["columns"]
+                sync_count += 1
+            else:
+                # 创建新表
+                new_dataset = Dataset(
+                    datasource_id=datasource_id,
+                    name=table_data["name"],
+                    physical_name=table_data["physical_name"],
+                    schema_name=table_data["schema_name"],
+                    columns=table_data["columns"],
+                    description=""
+                )
+                db.add(new_dataset)
+                sync_count += 1
+
+        db.commit()
+        return {"message": f"Successfully synced {sync_count} tables", "count": sync_count}
+
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Failed to sync tables: {str(e)}")
+
+
 
 
 # ============ Dataset Routes ============
@@ -264,8 +469,7 @@ async def sync_datasets_from_source(request: dict, db: Session = Depends(get_db)
             """)
             for table_name, schema_name in cursor.fetchall():
                 cursor.execute("""
-                    SELECT column_name, data_type, is_nullable, 
-                           col_description((table_schema||'.'||table_name)::regclass::oid, ordinal_position)
+                    SELECT column_name, data_type, is_nullable
                     FROM information_schema.columns
                     WHERE table_name = %s AND table_schema = %s
                     ORDER BY ordinal_position
@@ -275,7 +479,7 @@ async def sync_datasets_from_source(request: dict, db: Session = Depends(get_db)
                         "name": col[0],
                         "type": col[1],
                         "nullable": col[2] == "YES",
-                        "comment": col[3] or ""
+                        "comment": ""
                     }
                     for col in cursor.fetchall()
                 ]
@@ -698,12 +902,93 @@ def get_dataset_lineage(id: str, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/metrics/{id}/allowed-dimensions")
+def get_metric_allowed_dimensions(id: str, db: Session = Depends(get_db)):
+    """获取指标允许的维度列表（基于analysis_dimensions约束）"""
+    metric = db.query(Metric).filter(Metric.id == id).first()
+    if not metric:
+        raise HTTPException(status_code=404, detail="指标不存在")
+    
+    # 获取指标配置的允许维度ID列表
+    allowed_dim_ids = metric.analysis_dimensions or []
+    
+    # 查询这些维度的详细信息
+    if allowed_dim_ids:
+        dimensions = db.query(Dimension).filter(Dimension.id.in_(allowed_dim_ids)).all()
+    else:
+        # 如果未配置约束，返回所有维度
+        dimensions = db.query(Dimension).all()
+    
+    return [
+        {
+            "id": dim.id,
+            "name": dim.name,
+            "display_name": dim.display_name,
+            "physical_column": dim.physical_column,
+            "dimension_type": dim.dimension_type,
+            "data_type": dim.data_type,
+            "format_config": dim.format_config
+        }
+        for dim in dimensions
+    ]
+
+
+@router.post("/metrics/allowed-dimensions")
+def get_metrics_allowed_dimensions(metric_ids: List[str], db: Session = Depends(get_db)):
+    """获取多个指标的交集维度（用于问数流程的维度约束）
+    
+    返回所有选中指标都允许的维度交集
+    """
+    if not metric_ids:
+        return []
+    
+    # 查询所有相关指标
+    metrics = db.query(Metric).filter(Metric.id.in_(metric_ids)).all()
+    if not metrics:
+        return []
+    
+    # 获取每个指标的允许维度集合
+    metric_dim_sets = []
+    for metric in metrics:
+        allowed_ids = set(metric.analysis_dimensions or [])
+        metric_dim_sets.append(allowed_ids)
+    
+    # 计算交集
+    if len(metric_dim_sets) == 1:
+        # 只有一个指标，返回其所有允许维度
+        common_dim_ids = metric_dim_sets[0]
+    else:
+        # 多个指标，取交集
+        common_dim_ids = set.intersection(*metric_dim_sets)
+    
+    # 查询交集维度的详细信息
+    if common_dim_ids:
+        dimensions = db.query(Dimension).filter(Dimension.id.in_(common_dim_ids)).all()
+    else:
+        # 无交集，返回空列表
+        dimensions = []
+    
+    return [
+        {
+            "id": dim.id,
+            "name": dim.name,
+            "display_name": dim.display_name,
+            "physical_column": dim.physical_column,
+            "dimension_type": dim.dimension_type,
+            "data_type": dim.data_type,
+            "format_config": dim.format_config
+        }
+        for dim in dimensions
+    ]
+
+
 @router.get("/lineage/graph")
 def get_full_lineage_graph(db: Session = Depends(get_db)):
+    """获取完整的血缘关系图：数据源 → 物理表 → 视图 → 维度/指标"""
     nodes = []
     edges = []
     
-    # Add all datasources as nodes
+    # Add all datasources as nodes (category 0)
     datasources = db.query(DataSource).all()
     for ds in datasources:
         nodes.append({
@@ -713,14 +998,16 @@ def get_full_lineage_graph(db: Session = Depends(get_db)):
             "category": 0
         })
     
-    # Add all datasets as nodes and edges from datasources
+    # Add all datasets (physical tables) as nodes (category 1)
     datasets = db.query(Dataset).all()
+    dataset_map = {d.id: d for d in datasets}
     for dataset in datasets:
         nodes.append({
             "id": dataset.id,
             "name": dataset.name,
             "type": "dataset",
-            "category": 1
+            "category": 1,
+            "physical_name": dataset.physical_name
         })
         if dataset.datasource_id:
             edges.append({
@@ -729,17 +1016,36 @@ def get_full_lineage_graph(db: Session = Depends(get_db)):
                 "type": "contains"
             })
     
-    # Add dataset relations
-    relations = db.query(DataRelation).all()
-    for rel in relations:
-        edges.append({
-            "source": rel.left_dataset_id,
-            "target": rel.right_dataset_id,
-            "type": "join",
-            "join_type": rel.join_type
+    # Add all views as nodes (category 2) and edges from datasets
+    views = db.query(View).all()
+    for view in views:
+        nodes.append({
+            "id": view.id,
+            "name": view.name,
+            "type": "view",
+            "view_type": view.view_type,
+            "category": 2
         })
+        
+        # Link view to its source tables
+        if view.view_type == "single_table" and view.base_table_id:
+            edges.append({
+                "source": view.base_table_id,
+                "target": view.id,
+                "type": "source"
+            })
+        elif view.view_type == "joined" and view.join_config:
+            # Add edges from all tables in join config
+            tables = view.join_config.get("tables", [])
+            for t in tables:
+                if t.get("datasetId") in dataset_map:
+                    edges.append({
+                        "source": t["datasetId"],
+                        "target": view.id,
+                        "type": "source"
+                    })
     
-    # Add all metrics as nodes and edges from datasets
+    # Add all metrics as nodes (category 3)
     metrics = db.query(Metric).all()
     for metric in metrics:
         nodes.append({
@@ -747,9 +1053,16 @@ def get_full_lineage_graph(db: Session = Depends(get_db)):
             "name": metric.name,
             "type": "metric",
             "metric_type": metric.metric_type,
-            "category": 2
+            "category": 3
         })
-        if metric.dataset_id:
+        # Priority: view_id > dataset_id
+        if metric.view_id:
+            edges.append({
+                "source": metric.view_id,
+                "target": metric.id,
+                "type": "derives"
+            })
+        elif metric.dataset_id:
             edges.append({
                 "source": metric.dataset_id,
                 "target": metric.id,
@@ -770,7 +1083,7 @@ def get_full_lineage_graph(db: Session = Depends(get_db)):
                         "type": "uses"
                     })
     
-    # Add all dimensions as nodes and edges from datasets
+    # Add all dimensions as nodes (category 4)
     dimensions = db.query(Dimension).all()
     for dim in dimensions:
         nodes.append({
@@ -778,9 +1091,16 @@ def get_full_lineage_graph(db: Session = Depends(get_db)):
             "name": dim.name,
             "type": "dimension",
             "dimension_type": dim.dimension_type,
-            "category": 3
+            "category": 4
         })
-        if dim.dataset_id:
+        # Priority: view_id > dataset_id
+        if dim.view_id:
+            edges.append({
+                "source": dim.view_id,
+                "target": dim.id,
+                "type": "defines"
+            })
+        elif dim.dataset_id:
             edges.append({
                 "source": dim.dataset_id,
                 "target": dim.id,

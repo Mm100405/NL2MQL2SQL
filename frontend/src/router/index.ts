@@ -37,7 +37,19 @@ const routes: RouteRecordRaw[] = [
             path: 'datasets',
             name: 'Datasets',
             component: () => import('@/views/semantic/DatasetList.vue'),
-            meta: { title: '数据集管理' }
+            meta: { title: '物理表管理' }
+          },
+          {
+            path: 'views',
+            name: 'Views',
+            component: () => import('@/views/semantic/ViewList.vue'),
+            meta: { title: '视图管理' }
+          },
+          {
+            path: 'views/:id',
+            name: 'ViewDesigner',
+            component: () => import('@/views/semantic/ViewDesigner.vue'),
+            meta: { title: '视图设计器', hidden: true }
           },
           {
             path: 'metrics',

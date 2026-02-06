@@ -4,7 +4,6 @@ import type {
   NL2MQLResponse,
   MQL2SQLResponse,
   QueryExecuteResponse,
-  FullQueryResponse,
   QueryHistory,
   PaginatedResponse
 } from './types'
@@ -16,11 +15,6 @@ export function analyzeIntent(data: QueryRequest): Promise<any> {
 
 // 生成MQL
 export function generateMQL(data: QueryRequest): Promise<NL2MQLResponse> {
-  return request.post('/query/generate-mql', data)
-}
-
-// NL转MQL (保留兼容性)
-export function nl2mql(data: QueryRequest): Promise<NL2MQLResponse> {
   return request.post('/query/generate-mql', data)
 }
 
@@ -38,27 +32,19 @@ export function executeSQL(params: {
   return request.post('/query/execute', params)
 }
 
-// 端到端查询（NL直接到结果）
-export function executeFullQuery(data: QueryRequest): Promise<FullQueryResponse> {
-  return request.post('/query/nl2result', data)
+// 开始新的对话
+export function startConversation(): Promise<{ conversation_id: string }> {
+  return request.post('/query/conversation/start')
 }
 
-// 下钻分析
-export function drillDown(params: {
-  query_id: string
-  drill_dimension: string
-  filter?: Record<string, any>
-}): Promise<FullQueryResponse> {
-  return request.post('/query/drill-down', params)
+// 保存对话历史
+export function saveConversationHistory(conversation_id: string, messages: any[]): Promise<any> {
+  return request.post(`/query/conversation/${conversation_id}/save`, { messages })
 }
 
-// 归因分析
-export function attribution(params: {
-  metric: string
-  dimensions: string[]
-  date_range?: { start: string; end: string }
-}): Promise<any> {
-  return request.post('/query/attribution', params)
+// 获取对话历史
+export function getConversationHistory(conversation_id: string): Promise<any> {
+  return request.get(`/query/conversation/${conversation_id}`)
 }
 
 // 获取查询历史

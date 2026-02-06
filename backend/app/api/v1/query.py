@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional
 from pydantic import BaseModel
 import time
+import uuid
 
 from app.database import get_db
 from app.models.query_history import QueryHistory
@@ -56,6 +57,7 @@ class ExecuteResponse(BaseModel):
     total_count: int
     execution_time: int
     chart_recommendation: Optional[str] = None
+    query_id: Optional[str] = None
 
 
 class FullQueryResponse(BaseModel):
@@ -174,20 +176,23 @@ async def mql_to_sql_endpoint(request: MQL2SQLRequest, db: Session = Depends(get
 
 @router.post("/execute", response_model=ExecuteResponse)
 async def execute_sql(request: ExecuteRequest, db: Session = Depends(get_db)):
-    """执行SQL查询"""
+    """执行SQL查询（纯执行，不保存历史记录）"""
     start_time = time.time()
     
-    result = await execute_query(
-        sql=request.sql,
-        datasource_id=request.datasource_id,
-        limit=request.limit,
-        db=db
-    )
-    
-    execution_time = int((time.time() - start_time) * 1000)
-    result["execution_time"] = execution_time
-    
-    return ExecuteResponse(**result)
+    try:
+        result = await execute_query(
+            sql=request.sql,
+            datasource_id=request.datasource_id,
+            limit=request.limit,
+            db=db
+        )
+        
+        execution_time = int((time.time() - start_time) * 1000)
+        result["execution_time"] = execution_time
+        
+        return ExecuteResponse(**result)
+    except Exception as e:
+        raise e
 
 
 @router.post("/nl2result", response_model=FullQueryResponse)
@@ -288,15 +293,24 @@ def get_query_history(
     page_size: int = 20,
     db: Session = Depends(get_db)
 ):
-    """获取查询历史"""
-    offset = (page - 1) * page_size
+    """获取查询历史（按对话ID分组，每个对话只显示一条最新记录）"""
+    from sqlalchemy import func
     
-    total = db.query(QueryHistory).count()
-    items = db.query(QueryHistory)\
-        .order_by(QueryHistory.created_at.desc())\
-        .offset(offset)\
-        .limit(page_size)\
-        .all()
+    # 子查询：获取每个conversation_id的最新记录ID
+    subquery = db.query(
+        QueryHistory.conversation_id,
+        func.max(QueryHistory.created_at).label('max_created_at')
+    ).group_by(QueryHistory.conversation_id).subquery()
+    
+    # 主查询：关联获取完整记录
+    query = db.query(QueryHistory).join(
+        subquery,
+        (QueryHistory.conversation_id == subquery.c.conversation_id) &
+        (QueryHistory.created_at == subquery.c.max_created_at)
+    ).order_by(QueryHistory.created_at.desc())
+    
+    total = query.count()
+    items = query.offset((page - 1) * page_size).limit(page_size).all()
     
     return {
         "items": [h.to_dict() for h in items],
@@ -325,3 +339,61 @@ def delete_query_history(id: str, db: Session = Depends(get_db)):
     db.delete(history)
     db.commit()
     return {"message": "Deleted successfully"}
+
+
+@router.post("/conversation/start")
+def start_conversation(db: Session = Depends(get_db)):
+    """开始新的对话，返回对话ID"""
+    conversation_id = str(uuid.uuid4())
+    return {"conversation_id": conversation_id}
+
+
+class SaveConversationRequest(BaseModel):
+    messages: list
+
+
+@router.post("/conversation/{conversation_id}/save")
+def save_conversation_history(
+    conversation_id: str,
+    request: SaveConversationRequest,
+    db: Session = Depends(get_db)
+):
+    """保存完整的对话历史记录"""
+    messages = request.messages
+    # 查找是否已存在该对话的历史记录
+    existing_history = db.query(QueryHistory).filter(
+        QueryHistory.conversation_id == conversation_id
+    ).first()
+    
+    if existing_history:
+        # 更新现有记录
+        existing_history.messages = messages
+        existing_history.natural_language = messages[0]["content"] if messages else "对话记录"
+        db.commit()
+        db.refresh(existing_history)
+        return {"id": existing_history.id, "updated": True}
+    else:
+        # 创建新记录
+        history = QueryHistory(
+            conversation_id=conversation_id,
+            natural_language=messages[0]["content"] if messages else "对话记录",
+            messages=messages,
+            status="success"
+        )
+        db.add(history)
+        db.commit()
+        db.refresh(history)
+        return {"id": history.id, "created": True}
+
+
+@router.get("/conversation/{conversation_id}")
+def get_conversation_history(conversation_id: str, db: Session = Depends(get_db)):
+    """获取完整对话历史记录"""
+    history = db.query(QueryHistory).filter(
+        QueryHistory.conversation_id == conversation_id
+    ).first()
+    
+    if not history:
+        raise HTTPException(status_code=404, detail="Conversation history not found")
+    
+    return history.to_dict()

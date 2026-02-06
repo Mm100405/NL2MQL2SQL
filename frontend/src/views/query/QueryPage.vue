@@ -305,8 +305,8 @@ import ModelNotConfigured from '@/components/query/ModelNotConfigured.vue'
 import QuerySteps from '@/components/query/QuerySteps.vue'
 import ChartContainer from '@/components/common/ChartContainer.vue'
 import type { FullQueryResponse, AnalysisStep } from '@/api/types'
-import { analyzeIntent, generateMQL, mql2sql, executeSQL, getQueryHistoryDetail } from '@/api/query'
-import { getMetrics, getDimensions } from '@/api/semantic'
+import { analyzeIntent, generateMQL, mql2sql, executeSQL, getQueryHistoryDetail, startConversation, getConversationHistory, saveConversationHistory } from '@/api/query'
+import { getMetrics, getDimensions, getMetricsAllowedDimensions } from '@/api/semantic'
 import type { Metric, Dimension } from '@/api/types'
 
 const settingsStore = useSettingsStore()
@@ -317,6 +317,7 @@ const queryInput = ref('')
 const loading = ref(false)
 const chatContainer = ref<HTMLElement | null>(null)
 const currentQueryTitle = ref('问数对话')
+const conversationId = ref<string | null>(null)  // 当前对话ID
 
 interface MessageItem {
   type: 'user' | 'agent'
@@ -329,6 +330,7 @@ interface MessageItem {
 const messages = ref<MessageItem[]>([])
 const allMetrics = ref<Metric[]>([])
 const allDimensions = ref<Dimension[]>([])
+const allowedDimensions = ref<Dimension[]>([])  // 当前查询允许的维度
 const timeFormats = ref<any[]>([])
 const quotedMql = ref<any>(null)
 const selectedRecord = ref<any>(null)
@@ -372,7 +374,10 @@ const addDimensionAvailableDimensions = computed(() => {
   
   const results: { id: string, label: string, value: string }[] = []
   
-  allDimensions.value.forEach(d => {
+  // 使用约束维度列表
+  const dimensionList = allowedDimensions.value.length > 0 ? allowedDimensions.value : allDimensions.value
+  
+  dimensionList.forEach(d => {
     const isTime = d.dimension_type === 'time' || ['date', 'datetime', 'timestamp'].includes(d.data_type?.toLowerCase() || '')
     
     if (isTime && timeFormats.value.length > 0) {
@@ -409,7 +414,10 @@ const drillDownAvailableDimensions = computed(() => {
   
   const results: { id: string, label: string, value: string }[] = []
   
-  allDimensions.value.forEach(d => {
+  // 使用约束维度列表
+  const dimensionList = allowedDimensions.value.length > 0 ? allowedDimensions.value : allDimensions.value
+  
+  dimensionList.forEach(d => {
     const isTime = d.dimension_type === 'time' || ['date', 'datetime', 'timestamp'].includes(d.data_type?.toLowerCase() || '')
     
     if (isTime && timeFormats.value.length > 0) {
@@ -497,7 +505,7 @@ async function handleAddDimension() {
     const sqlRes = await mql2sql(mql)
     const queryRes = await executeSQL({ 
       sql: sqlRes.sql, 
-      datasource_id: sqlRes.datasources[0] || '' 
+      datasource_id: sqlRes.datasources[0] || ''
     })
     
     const agentMsg: MessageItem = { 
@@ -520,6 +528,19 @@ async function handleAddDimension() {
     }
     messages.value.push(agentMsg)
     Message.success('分析已更新')
+    
+    // 保存完整的对话历史
+    if (conversationId.value) {
+      try {
+        await saveConversationHistory(conversationId.value, messages.value.map(msg => ({
+          type: msg.type,
+          content: msg.content,
+          queryResult: msg.queryResult
+        })))
+      } catch (e) {
+        console.error('保存对话历史失败:', e)
+      }
+    }
   } catch (error: any) {
     console.error('Add dimension execution failed:', error)
     Message.error(error.message || '扩展维度失败')
@@ -579,7 +600,7 @@ async function handleDrillDown() {
     const sqlRes = await mql2sql(mql)
     const queryRes = await executeSQL({ 
       sql: sqlRes.sql, 
-      datasource_id: sqlRes.datasources[0] || '' 
+      datasource_id: sqlRes.datasources[0] || ''
     })
     
     // 构建新的回复消息
@@ -604,6 +625,19 @@ async function handleDrillDown() {
     }
     messages.value.push(agentMsg)
     Message.success('分析已完成')
+    
+    // 保存完整的对话历史
+    if (conversationId.value) {
+      try {
+        await saveConversationHistory(conversationId.value, messages.value.map(msg => ({
+          type: msg.type,
+          content: msg.content,
+          queryResult: msg.queryResult
+        })))
+      } catch (e) {
+        console.error('保存对话历史失败:', e)
+      }
+    }
   } catch (error: any) {
     console.error('Drill down execution failed:', error)
     Message.error(error.message || '执行下钻分析失败')
@@ -611,6 +645,202 @@ async function handleDrillDown() {
     loading.value = false
     scrollToBottom()
     // 不要在 finally 中立即清除 selectedRecord，防止用户连续操作时丢失上下文
+  }
+}
+
+// 开始新的对话
+async function startNewConversation() {
+  try {
+    const response = await startConversation()
+    conversationId.value = response.conversation_id
+    messages.value = []  // 清空消息列表
+    currentQueryTitle.value = '新对话'
+  } catch (error) {
+    console.error('Failed to start new conversation:', error)
+    Message.error('无法开始新对话')
+  }
+}
+
+// 加载对话历史记录
+async function loadConversationHistory(convId: string) {
+  loading.value = true
+  try {
+    // 尝试按对话ID加载（新格式）
+    let detail;
+    try {
+      detail = await getConversationHistory(convId);
+    } catch (conversationError) {
+      // 如果按对话ID找不到，尝试按记录ID加载（传统格式）
+      detail = await getQueryHistoryDetail(convId);
+      
+      // 将传统格式转换为新格式
+      const agentMsg: MessageItem = { 
+        type: 'agent', 
+        queryResult: {
+          natural_language: detail.natural_language,
+          mql: detail.mql_query || {},
+          sql: detail.sql_query || '',
+          viewType: 'table',
+          steps: [{ title: '历史记录恢复', content: '已从历史记录中恢复此对话。', status: 'success' }],
+          result: { 
+            columns: [], 
+            data: [], 
+            total_count: detail.result_count || 0, 
+            execution_time: detail.execution_time || 0 
+          },
+          query_id: detail.id
+        } 
+      }
+      messages.value = [
+        { type: 'user', content: detail.natural_language },
+        agentMsg
+      ];
+      
+      // 设置当前对话ID
+      conversationId.value = detail.conversation_id || null;
+      return;
+    }
+    
+    currentQueryTitle.value = detail.natural_language?.slice(0, 15) || '历史对话'
+    
+    // 如果有完整的消息历史，直接使用
+    if (detail.messages && Array.isArray(detail.messages)) {
+      messages.value = detail.messages.map((msg: any) => ({
+        type: msg.type,
+        content: msg.content,
+        queryResult: msg.queryResult
+      }))
+      
+      // 检查是否有需要重新执行的查询
+      // 从后往前查找最后一个agent消息
+      const lastAgentMsg = [...messages.value].reverse().find((msg: any) => msg.type === 'agent' && msg.queryResult);
+      if (lastAgentMsg && lastAgentMsg.queryResult) {
+        const qr = lastAgentMsg.queryResult;
+        if (qr.sql && qr.mql) {  // 无论结果是否为空，都重新执行以获取最新数据
+          try {
+            Message.info('正在重新执行历史查询以获取最新数据...')
+            // 通过mql2sql API获取数据源信息
+            let datasource_id = '';
+            try {
+              const sqlRes = await mql2sql(qr.mql);
+              datasource_id = sqlRes.datasources?.[0] || '';
+            } catch (mqlError) {
+              console.error('mql2sql调用失败:', mqlError);
+              datasource_id = 'default';
+            }
+            
+            if (qr.sql && datasource_id) {
+              try {
+                const queryRes = await executeSQL({ 
+                  sql: qr.sql, 
+                  datasource_id: datasource_id
+                });
+                qr.result = queryRes;
+              } catch (executeError) {
+                console.error('executeSQL调用失败:', executeError);
+                throw executeError;
+              }
+              
+              // 确保steps数组存在
+              if (!qr.steps) qr.steps = [];
+              qr.steps.push({
+                title: '查询重新执行', 
+                content: `成功重新执行查询，获取到 ${qr.result.total_count} 条记录`, 
+                status: 'success'
+              })
+            }
+          } catch (e) {
+            console.error('Failed to reload historical data:', e)
+            Message.warning('无法重新执行历史查询，仅显示历史概要信息')
+            
+            // 确保steps数组存在
+            if (!qr.steps) qr.steps = [];
+            qr.steps.push({
+              title: '查询重新执行', 
+              content: '由于数据源或权限变更，无法重新执行查询', 
+              status: 'error'
+            })
+          }
+        }
+      }
+    } else {
+      // 兼容旧的历史记录格式
+      const agentMsg: MessageItem = { 
+        type: 'agent', 
+        queryResult: {
+          natural_language: detail.natural_language,
+          mql: detail.mql_query || {},
+          sql: detail.sql_query || '',
+          viewType: 'table',
+          steps: [
+            { title: '历史记录恢复', content: '已从历史记录中恢复此对话。', status: 'success' }
+          ],
+          result: { 
+            columns: [], 
+            data: [], 
+            total_count: detail.result_count || 0, 
+            execution_time: detail.execution_time || 0 
+          },
+          query_id: detail.id
+        } 
+      }
+      messages.value = [
+        { type: 'user', content: detail.natural_language },
+        agentMsg
+      ]
+      
+      // 如果历史记录状态为成功且有结果数量，尝试重新执行查询获取最新数据
+      if (detail.status === 'success' && detail.result_count > 0 && detail.sql_query && agentMsg.queryResult) {
+        try {
+          Message.info('正在重新执行历史查询以获取最新数据...')
+          // 尝试获取一个可用的数据源ID，或者后端mql2sql重新解析一次以获取数据源
+          const sqlRes = await mql2sql(detail.mql_query)
+          const datasource_id = sqlRes.datasources[0] || ''
+          
+          const queryRes = await executeSQL({ 
+            sql: detail.sql_query, 
+            datasource_id: datasource_id
+          })
+          agentMsg.queryResult.result = queryRes
+          
+          // 更新步骤信息以反映重新执行
+          agentMsg.queryResult.steps.push({
+            title: '查询重新执行', 
+            content: `成功重新执行查询，获取到 ${queryRes.total_count} 条记录`, 
+            status: 'success'
+          })
+        } catch (e) {
+          console.error('Failed to reload historical data:', e)
+          Message.warning('无法重新执行历史查询，仅显示历史概要信息')
+          
+          // 即使执行失败，也要更新步骤信息
+          agentMsg.queryResult.steps.push({
+            title: '查询重新执行', 
+            content: '由于数据源或权限变更，无法重新执行查询', 
+            status: 'error'
+          })
+        }
+      } else if (detail.status === 'failed' && agentMsg.queryResult) {
+        // 如果历史记录本身是失败的，显示失败信息
+        agentMsg.queryResult.steps.push({
+          title: '查询状态', 
+          content: `查询曾失败: ${detail.error_message || '未知错误'}`, 
+          status: 'error'
+        })
+      }
+    }
+    
+    // 设置当前对话ID
+    conversationId.value = detail.conversation_id
+    
+  } catch (error) {
+    console.error('Load conversation history error:', error)
+    Message.error('加载对话历史失败')
+    // 如果加载失败，开始新对话
+    await startNewConversation()
+  } finally {
+    loading.value = false
+    scrollToBottom()
   }
 }
 
@@ -631,18 +861,18 @@ function getMetricsFromMql(mql: any) {
 }
 
 // 监听路由参数变化（加载历史或新建）
-watch(() => route.query.id, (newId) => {
+watch(() => route.query.id, async (newId) => {
   if (newId) {
-    loadHistorySession(newId as string)
+    await loadConversationHistory(newId as string)
   } else {
-    clearSession()
+    await startNewConversation()
   }
 })
 
 // 监听新建对话的时间戳
-watch(() => route.query.t, () => {
+watch(() => route.query.t, async () => {
   if (!route.query.id) {
-    clearSession()
+    await startNewConversation()
   }
 })
 
@@ -682,23 +912,46 @@ async function loadHistorySession(id: string) {
       agentMsg
     ]
     
-    // 如果有 SQL，尝试重新获取数据
-    if (detail.sql_query && agentMsg.queryResult) {
+    // 如果历史记录状态为成功且有结果数量，尝试重新执行查询获取最新数据
+    if (detail.status === 'success' && detail.result_count > 0 && detail.sql_query && agentMsg.queryResult) {
       try {
-        Message.info('正在加载历史数据...')
+        Message.info('正在重新执行历史查询以获取最新数据...')
         // 尝试获取一个可用的数据源ID，或者后端mql2sql重新解析一次以获取数据源
         const sqlRes = await mql2sql(detail.mql_query)
         const datasource_id = sqlRes.datasources[0] || ''
         
         const queryRes = await executeSQL({ 
           sql: detail.sql_query, 
-          datasource_id: datasource_id 
+          datasource_id: datasource_id
         })
+        // 注意：在这种情况下，我们不希望重新保存历史记录，因为这是在加载历史记录
+        // 所以我们不需要更新 agentMsg.queryResult.query_id
         agentMsg.queryResult.result = queryRes
+        
+        // 更新步骤信息以反映重新执行
+        agentMsg.queryResult.steps.push({
+          title: '查询重新执行', 
+          content: `成功重新执行查询，获取到 ${queryRes.total_count} 条记录`, 
+          status: 'success'
+        })
       } catch (e) {
         console.error('Failed to reload historical data:', e)
-        Message.warning('历史数据加载失败，仅显示结构')
+        Message.warning('无法重新执行历史查询，仅显示历史概要信息')
+        
+        // 即使执行失败，也要更新步骤信息
+        agentMsg.queryResult.steps.push({
+          title: '查询重新执行', 
+          content: '由于数据源或权限变更，无法重新执行查询', 
+          status: 'error'
+        })
       }
+    } else if (detail.status === 'failed' && agentMsg.queryResult) {
+      // 如果历史记录本身是失败的，显示失败信息
+      agentMsg.queryResult.steps.push({
+        title: '查询状态', 
+        content: `查询曾失败: ${detail.error_message || '未知错误'}`, 
+        status: 'error'
+      })
     }
   } catch (error) {
     console.error('Load history error:', error)
@@ -710,8 +963,16 @@ async function loadHistorySession(id: string) {
 }
 
 onMounted(async () => {
+  // 初始化对话
   if (route.query.id) {
-    loadHistorySession(route.query.id as string)
+    // 加载历史对话
+    await loadConversationHistory(route.query.id as string)
+  } else if (route.query.t) {
+    // 新建对话
+    await startNewConversation()
+  } else {
+    // 默认开始新对话
+    await startNewConversation()
   }
   
   // 加载元数据用于调整查询和下钻
@@ -792,6 +1053,16 @@ function handleEnter(e: KeyboardEvent) {
 async function handleQuery() {
   if (!queryInput.value.trim() || loading.value) return
 
+  // 确保有对话ID，如果没有则先创建
+  if (!conversationId.value) {
+    try {
+      const response = await startConversation()
+      conversationId.value = response.conversation_id
+    } catch (error) {
+      console.error('Failed to create conversation ID:', error)
+    }
+  }
+
   const userQuestion = queryInput.value
   messages.value.push({ type: 'user', content: userQuestion })
   queryInput.value = ''
@@ -862,7 +1133,7 @@ async function handleQuery() {
     // 步骤 4: 执行并展示结果
     const queryRes = await executeSQL({ 
       sql: sqlRes.sql, 
-      datasource_id: sqlRes.datasources[0] || '' 
+      datasource_id: sqlRes.datasources[0] || ''
     })
     
     res.result = queryRes
@@ -873,6 +1144,19 @@ async function handleQuery() {
     
     agentMsg.loading = false
     Message.success('查询成功')
+    
+    // 保存完整的对话历史
+    if (conversationId.value) {
+      try {
+        await saveConversationHistory(conversationId.value, messages.value.map(msg => ({
+          type: msg.type,
+          content: msg.content,
+          queryResult: msg.queryResult
+        })))
+      } catch (e) {
+        console.error('保存对话历史失败:', e)
+      }
+    }
   } catch (error) {
     console.error('Query execution error:', error)
     agentMsg.loading = false
@@ -961,6 +1245,11 @@ function showDrillDownDialog() {
   }
   drillDownForm.dimensions = []
   drillDownVisible.value = true
+  
+  // 更新维度约束
+  if (activeQueryResult.value) {
+    updateAllowedDimensions(activeQueryResult.value)
+  }
 }
 
 function showGlobalAddDimension(result: FullQueryResponse) {
@@ -969,6 +1258,44 @@ function showGlobalAddDimension(result: FullQueryResponse) {
   activeQueryResult.value = result
   addDimensionForm.dimensions = []
   addDimensionVisible.value = true
+  
+  // 更新维度约束
+  updateAllowedDimensions(result)
+}
+
+async function updateAllowedDimensions(queryResult: FullQueryResponse) {
+  if (!queryResult.mql?.metrics?.length) {
+    allowedDimensions.value = []
+    return
+  }
+  
+  try {
+    // 从MQL中提取指标ID
+    const metricNames = queryResult.mql.metrics
+    const metricIds = []
+    
+    for (const name of metricNames) {
+      const metricDef = queryResult.mql.metricDefinitions?.[name]
+      if (metricDef?.refMetric) {
+        const metric = allMetrics.value.find(m => 
+          m.name === metricDef.refMetric || m.measure_column === metricDef.refMetric
+        )
+        if (metric) {
+          metricIds.push(metric.id)
+        }
+      }
+    }
+    
+    if (metricIds.length > 0) {
+      const allowedDims = await getMetricsAllowedDimensions(metricIds)
+      allowedDimensions.value = allowedDims
+    } else {
+      allowedDimensions.value = []
+    }
+  } catch (error) {
+    console.error('Failed to fetch allowed dimensions:', error)
+    allowedDimensions.value = []
+  }
 }
 
 function formatTimeRange(mql: any) {
@@ -1164,7 +1491,7 @@ async function handleAdjust() {
     const sqlRes = await mql2sql(newMql)
     const queryRes = await executeSQL({ 
       sql: sqlRes.sql, 
-      datasource_id: sqlRes.datasources[0] || '' 
+      datasource_id: sqlRes.datasources[0] || ''
     })
     
     // 更新当前活动消息的结果
@@ -1181,6 +1508,19 @@ async function handleAdjust() {
     })
     
     Message.success('查询已更新')
+    
+    // 保存更新后的对话历史（调整查询修改了现有消息）
+    if (conversationId.value) {
+      try {
+        await saveConversationHistory(conversationId.value, messages.value.map(msg => ({
+          type: msg.type,
+          content: msg.content,
+          queryResult: msg.queryResult
+        })))
+      } catch (e) {
+        console.error('保存对话历史失败:', e)
+      }
+    }
   } catch (error: any) {
     console.error('Adjustment error:', error)
     Message.error(error.message || '调整查询失败，请检查条件是否合法')

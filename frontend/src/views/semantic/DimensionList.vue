@@ -8,7 +8,14 @@
         </a-button>
       </template>
 
-      <a-table :columns="columns" :data="dimensions" :loading="loading">
+      <a-table
+        :columns="columns"
+        :data="dimensions"
+        :loading="loading"
+        :scroll="{ x: 1300 }"
+        :bordered="false"
+        :stripe="true"
+      >
         <template #dimension_type="{ record }">
           <a-tag :color="getTypeColor(record.dimension_type)">
             {{ getTypeLabel(record.dimension_type) }}
@@ -22,13 +29,16 @@
           <span v-else>-</span>
         </template>
         <template #actions="{ record }">
-          <a-space>
-            <a-button type="text" size="small" @click="handleEdit(record)">
+          <a-space :size="8" class="action-btns">
+            <a-button type="text" size="mini" @click="handleEdit(record)">
               <template #icon><icon-edit /></template>
+              编辑
             </a-button>
+            <a-divider direction="vertical" class="action-divider" />
             <a-popconfirm content="确定删除此维度？" @ok="handleDelete(record.id)">
-              <a-button type="text" size="small" status="danger">
+              <a-button type="text" size="mini" status="danger">
                 <template #icon><icon-delete /></template>
+                删除
               </a-button>
             </a-popconfirm>
           </a-space>
@@ -163,12 +173,13 @@ const rules = {
 }
 
 const columns = [
-  { title: '维度名称', dataIndex: 'name' },
-  { title: '显示名称', dataIndex: 'display_name' },
-  { title: '物理字段', dataIndex: 'physical_column' },
-  { title: '类型', slotName: 'dimension_type' },
-  { title: '同义词', slotName: 'synonyms' },
-  { title: '操作', slotName: 'actions', width: 120 }
+  { title: '维度名称', dataIndex: 'name', width: 200, ellipsis: true },
+  { title: '显示名称', dataIndex: 'display_name', width: 180, ellipsis: true },
+  { title: '物理字段', dataIndex: 'physical_column', width: 200, ellipsis: true },
+  { title: '类型', slotName: 'dimension_type', width: 100, align: 'center' },
+  { title: '同义词', slotName: 'synonyms', ellipsis: true, width: 200 },
+  { title: '描述', dataIndex: 'description', ellipsis: true, width: 250 },
+  { title: '操作', slotName: 'actions', width: 180, fixed: 'right', align: 'center' }
 ]
 
 function getTypeColor(type: string) {
@@ -292,5 +303,83 @@ onMounted(() => {
 <style scoped>
 .dimension-list {
   height: 100%;
+}
+
+/* 表格容器样式 */
+.dimension-list :deep(.arco-table) {
+  overflow: visible;
+}
+
+.dimension-list :deep(.arco-table-container) {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+/* 固定操作列样式 - 兼容多种 Arco Design 版本 */
+.dimension-list :deep(.arco-table-th-fixed-right),
+.dimension-list :deep(.arco-table-td-fixed-right),
+.dimension-list :deep(.arco-table-th-fixed-last),
+.dimension-list :deep(.arco-table-td-fixed-last) {
+  position: sticky !important;
+  right: 0 !important;
+  background: #fff !important;
+  z-index: 100 !important;
+  box-shadow: -4px 0 8px rgba(0, 0, 0, 0.08) !important;
+}
+
+/* 表头固定列 */
+.dimension-list :deep(.arco-table-th-fixed-right),
+.dimension-list :deep(.arco-table-th-fixed-last) {
+  background: #f7f8fa !important;
+}
+
+/* 行悬停时固定列背景 */
+.dimension-list :deep(.arco-table-tr:hover .arco-table-td-fixed-right),
+.dimension-list :deep(.arco-table-tr:hover .arco-table-td-fixed-last) {
+  background: #f2f3f5 !important;
+}
+
+/* 添加分隔线 */
+.dimension-list :deep(.arco-table-th-fixed-right)::before,
+.dimension-list :deep(.arco-table-td-fixed-right)::before,
+.dimension-list :deep(.arco-table-th-fixed-last)::before,
+.dimension-list :deep(.arco-table-td-fixed-last)::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #e5e6eb;
+}
+
+/* 操作按钮样式 */
+.dimension-list .action-btns {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  white-space: nowrap;
+}
+
+.dimension-list .action-divider {
+  margin: 0 4px;
+  height: 16px;
+}
+
+.dimension-list :deep(.arco-btn-size-mini) {
+  padding: 0 4px;
+  font-size: 12px;
+}
+
+/* 确保表格单元格内容不溢出 */
+.dimension-list :deep(.arco-table-cell) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 操作列单元格 */
+.dimension-list :deep(.arco-table-td:last-child) {
+  padding: 8px 12px;
 }
 </style>

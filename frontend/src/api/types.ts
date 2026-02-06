@@ -157,6 +157,7 @@ export interface AnalysisStep {
 // 查询历史
 export interface QueryHistory {
   id: string
+  conversation_id?: string  // 对话ID，用于对话历史记录
   natural_language: string
   mql_query: any
   sql_query: string
@@ -166,6 +167,7 @@ export interface QueryHistory {
   error_message?: string
   chart_config?: ChartConfig
   created_at: string
+  messages?: any[]  // 完整对话消息历史
 }
 
 // 图表配置

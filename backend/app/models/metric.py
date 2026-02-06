@@ -35,12 +35,20 @@ class DerivationType(str, enum.Enum):
 
 
 class Metric(Base):
+    """
+    指标模型 - 支持基础指标、派生指标、复合指标
+    可关联到视图(View)或数据集(Dataset)
+    """
     __tablename__ = "metrics"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(255), nullable=False, unique=True)
     display_name = Column(String(255), nullable=True)
     metric_type = Column(String(20), nullable=False, default=MetricType.basic.value)
+    
+    # 关联视图（新增，优先使用）
+    view_id = Column(String(36), ForeignKey("views.id"), nullable=True)
+    # 关联数据集（保留兼容）
     dataset_id = Column(String(36), ForeignKey("datasets.id"), nullable=True)
     aggregation = Column(String(20), nullable=True)  # SUM, COUNT, AVG, etc.
     calculation_method = Column(String(20), nullable=True, default=CalculationMethod.field.value)
@@ -66,6 +74,7 @@ class Metric(Base):
             "name": self.name,
             "display_name": self.display_name,
             "metric_type": self.metric_type,
+            "view_id": self.view_id,
             "dataset_id": self.dataset_id,
             "aggregation": self.aggregation,
             "calculation_method": self.calculation_method,
