@@ -1,5 +1,5 @@
 <template>
-  <div class="table-node" :class="{ selected: selected }">
+  <div class="table-node" ref="nodeElement" :class="{ selected: selected }">
     <!-- 隐藏的连接点用于渲染连线 - 动态左右两侧 -->
     <!-- 左侧连接点作为 target（接收连接）- 在字段区域内均匀分布 -->
     <Handle
@@ -102,10 +102,27 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, inject, onMounted, nextTick } from 'vue'
+import { ref, computed, inject, onMounted, nextTick, watch } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
 import type { NodeProps } from '@vue-flow/core'
 import { IconDelete } from '@arco-design/web-vue/es/icon'
+
+const nodeElement = ref<HTMLElement | null>(null)
+const nodeHeight = ref(0)
+
+// 计算节点高度的函数
+function calculateNodeHeight() {
+  if (nodeElement.value) {
+    const height = nodeElement.value.offsetHeight || nodeElement.value.clientHeight || 250
+    nodeHeight.value = height
+    console.log(`[TableNode ${props.data.alias}] 节点高度计算:`, {
+      offsetHeight: nodeElement.value.offsetHeight,
+      clientHeight: nodeElement.value.clientHeight,
+      scrollHeight: nodeElement.value.scrollHeight,
+      最终高度: height
+    })
+  }
+}
 
 interface Column {
   name: string
@@ -151,19 +168,26 @@ const hiddenCount = computed(() => {
   return allColumns.value.length - visibleColumns.value.length
 })
 
-// 左右连接点配置 - 在表头下方的字段列表区域内均匀分布
-// 使用 marginTop 调整垂直位置，配合 Position.Left/Right 使用
+// 监听visibleColumns变化，重新计算节点高度
+watch(visibleColumns, () => {
+  nextTick(() => {
+    calculateNodeHeight()
+  })
+}, { deep: true })
+
+// 左右连接点配置 - 在物理表左右两侧垂直居中
 const leftHandles = computed(() => {
   const count = props.data.leftHandles || 0
   if (count === 0) return []
   const positions = []
-  const startOffset = 60 // 表头高度约50px + 间距
-  const spacing = 40 // 每个连接点之间的间距
+
   for (let i = 0; i < count; i++) {
-    const offsetPx = startOffset + i * spacing
     positions.push({
       id: `${props.data.alias}-left-${i}`,
-      style: { marginTop: `${offsetPx}px` }
+      style: {
+        top: '50%',
+        transform: 'translate(0, -50%)'
+      }
     })
   }
   return positions
@@ -173,13 +197,14 @@ const rightHandles = computed(() => {
   const count = props.data.rightHandles || 0
   if (count === 0) return []
   const positions = []
-  const startOffset = 60
-  const spacing = 40
+
   for (let i = 0; i < count; i++) {
-    const offsetPx = startOffset + i * spacing
     positions.push({
       id: `${props.data.alias}-right-${i}`,
-      style: { marginTop: `${offsetPx}px` }
+      style: {
+        top: '50%',
+        transform: 'translate(0, -50%)'
+      }
     })
   }
   return positions
@@ -199,6 +224,11 @@ function handleSaveColumns() {
     selectedColumns: selectedColumnNames.value
   })
   showEditModal.value = false
+
+  // 字段更新后，重新计算节点高度和连接点位置
+  setTimeout(() => {
+    calculateNodeHeight()
+  }, 100)
 }
 
 function handleColumnClick(col: Column) {
@@ -223,6 +253,10 @@ onMounted(() => {
   nextTick(() => {
     checkScroll()
   })
+  // 使用setTimeout确保DOM完全渲染后再计算高度
+  setTimeout(() => {
+    calculateNodeHeight()
+  }, 100)
 })
 </script>
 
@@ -235,8 +269,10 @@ onMounted(() => {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
   transition: all 0.2s;
   user-select: none;
-  display: inline-block;
+  display: block;
   position: relative;
+  /* 确保边框不会影响小地图位置计算 */
+  box-sizing: border-box;
 }
 
 /* 隐藏的连接点 - 用于渲染连线但不显示 */
@@ -250,6 +286,7 @@ onMounted(() => {
   background: transparent !important;
   /* 确保不干扰 Vue Flow 的默认定位 */
   position: absolute !important;
+  /* 不要在这里设置transform，让style中的transform生效 */
 }
 
 .table-node:hover {

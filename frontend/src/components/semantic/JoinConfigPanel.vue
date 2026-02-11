@@ -61,10 +61,10 @@
             class="condition-item"
           >
             <a-select 
-              v-model="cond.left_column" 
+              :model-value="cond.left_column" 
               placeholder="左表字段"
               size="small"
-              @change="emitUpdate"
+              @change="(val: string) => handleLeftColumnChange(val, cond)"
             >
               <a-option 
                 v-for="col in leftColumns" 
@@ -90,10 +90,10 @@
             </a-select>
             
             <a-select 
-              v-model="cond.right_column" 
+              :model-value="cond.right_column" 
               placeholder="右表字段"
               size="small"
-              @change="emitUpdate"
+              @change="(val: string) => handleRightColumnChange(val, cond)"
             >
               <a-option 
                 v-for="col in rightColumns" 
@@ -147,10 +147,10 @@
             class="filter-item"
           >
             <a-select 
-              v-model="filter.column" 
+              :model-value="filter.column" 
               placeholder="字段"
               size="small"
-              @change="emitUpdate"
+              @change="(val: string) => handleFilterColumnChange(val, filter)"
             >
               <a-option 
                 v-for="col in allColumns" 
@@ -264,6 +264,56 @@ const formData = ref<JoinConfig>({
   conditions: [],
   filters: []
 })
+
+// 从 't0.sub_type_id' 中提取 'sub_type_id'
+function extractColumnName(columnWithAlias: string): string {
+  if (!columnWithAlias) return ''
+  const parts = columnWithAlias.split('.')
+  return parts.length > 1 ? (parts[1] || '') : columnWithAlias
+}
+
+// 辅助函数，处理 change 事件
+function handleLeftColumnChange(val: string, cond: any) {
+  // 创建新的 conditions 数组，确保响应式更新
+  const newConditions = [...formData.value.conditions]
+  const index = newConditions.indexOf(cond)
+  if (index >= 0) {
+    newConditions[index] = {
+      ...cond,
+      left_column: extractColumnName(val)
+    }
+    formData.value.conditions = newConditions
+  }
+  emitUpdate()
+}
+
+function handleRightColumnChange(val: string, cond: any) {
+  // 创建新的 conditions 数组，确保响应式更新
+  const newConditions = [...formData.value.conditions]
+  const index = newConditions.indexOf(cond)
+  if (index >= 0) {
+    newConditions[index] = {
+      ...cond,
+      right_column: extractColumnName(val)
+    }
+    formData.value.conditions = newConditions
+  }
+  emitUpdate()
+}
+
+function handleFilterColumnChange(val: string, filter: any) {
+  // 创建新的 filters 数组，确保响应式更新
+  const newFilters = [...(formData.value.filters || [])]
+  const index = newFilters.indexOf(filter)
+  if (index >= 0) {
+    newFilters[index] = {
+      ...filter,
+      column: extractColumnName(val)
+    }
+    formData.value.filters = newFilters
+  }
+  emitUpdate()
+}
 
 const showFilters = ref(false)
 

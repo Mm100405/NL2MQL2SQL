@@ -144,13 +144,38 @@ class View(Base):
                 
             right_table = table_map[right_alias]
             
-            # 构建ON条件
+            # 构建ON条件（包括连接条件和筛选条件）
             on_parts = []
+            
+            # 添加连接条件
             for cond in conditions:
                 left_col = cond.get("left_column")
                 right_col = cond.get("right_column")
                 operator = cond.get("operator", "=")
                 on_parts.append(f"{left_alias}.{left_col} {operator} {right_alias}.{right_col}")
+            
+            # 添加筛选条件（filters）
+            filters = join.get("filters", [])
+            for filter_cond in filters:
+                column = filter_cond.get("column", "")
+                operator = filter_cond.get("operator", "=")
+                value = filter_cond.get("value", "")
+                
+                # 解析列名，提取表别名和列名
+                if "." in column:
+                    filter_alias, filter_col = column.split(".", 1)
+                else:
+                    # 如果没有表别名，默认使用右表
+                    filter_alias = right_alias
+                    filter_col = column
+                
+                if operator.upper() in ["IS NULL", "IS NOT NULL"]:
+                    on_parts.append(f"{filter_alias}.{filter_col} {operator}")
+                else:
+                    # 对字符串值添加引号
+                    if isinstance(value, str):
+                        value = f"'{value}'"
+                    on_parts.append(f"{filter_alias}.{filter_col} {operator} {value}")
             
             on_clause = " AND ".join(on_parts) if on_parts else "1=1"
             sql_parts.append(f"{join_type} JOIN {right_table} AS {right_alias} ON {on_clause}")

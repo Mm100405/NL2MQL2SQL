@@ -276,8 +276,58 @@ async def nl_to_result(request: QueryRequest, db: Session = Depends(get_db)):
 @router.post("/drill-down")
 async def drill_down(request: DrillDownRequest, db: Session = Depends(get_db)):
     """下钻分析"""
-    # TODO: Implement drill-down logic
-    return {"message": "Drill-down feature coming soon"}
+    from app.models.query_history import QueryHistory
+
+    # 获取原查询历史
+    original_query = db.query(QueryHistory).filter(QueryHistory.id == request.query_id).first()
+    if not original_query:
+        raise HTTPException(status_code=404, detail="Query history not found")
+
+    # 解析原MQL
+    original_mql = original_query.mql_query
+    if not original_mql or not isinstance(original_mql, dict):
+        raise HTTPException(status_code=400, detail="Invalid MQL format")
+
+    # 添加下钻维度
+    if "dimensions" not in original_mql:
+        original_mql["dimensions"] = []
+    
+    # 检查是否已存在该维度
+    if request.drill_dimension not in original_mql["dimensions"]:
+        original_mql["dimensions"].insert(0, request.drill_dimension)  # 插入到最前面
+
+    # 应用过滤条件（如果有）
+    if request.filter:
+        if "filters" not in original_mql:
+            original_mql["filters"] = []
+        original_mql["filters"].extend(request.filter.get("conditions", []))
+
+    # 转换为SQL
+    try:
+        mql_result = await mql_to_sql(original_mql, db)
+        sql = mql_result["sql"]
+        datasource_id = mql_result["datasources"][0] if mql_result["datasources"] else None
+
+        if not datasource_id:
+            raise HTTPException(status_code=400, detail="No datasource found")
+
+        # 执行查询
+        result = execute_query(sql, datasource_id, db)
+
+        return {
+            "mql": original_mql,
+            "sql": sql,
+            "result": {
+                "columns": result.columns,
+                "data": result.data,
+                "total_count": result.total_count,
+                "execution_time": result.execution_time
+            },
+            "drill_dimension": request.drill_dimension,
+            "message": f"已按 {request.drill_dimension} 维度下钻"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Drill-down failed: {str(e)}")
 
 
 @router.post("/attribution")

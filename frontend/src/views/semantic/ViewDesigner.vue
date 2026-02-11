@@ -23,6 +23,8 @@
           <template #icon><icon-sync /></template>
           同步SQL
         </a-button>
+
+
         <a-button type="primary" @click="handleSave" :loading="saving">
           <template #icon><icon-save /></template>
           保存
@@ -33,12 +35,20 @@
     <!-- 主体区域 -->
     <div class="designer-body">
       <!-- 左侧：物理表列表 -->
-      <div class="table-panel">
+      <div class="table-panel" v-show="showTablePanel && viewType === 'joined'">
         <div class="panel-header">
           <span>物理表</span>
-          <a-select v-model="selectedDatasource" placeholder="选择数据源" size="small" style="width: 120px">
-            <a-option v-for="ds in datasources" :key="ds.id" :value="ds.id">{{ ds.name }}</a-option>
-          </a-select>
+          <a-space>
+            <a-select v-model="selectedDatasource" placeholder="选择数据源" size="small" style="width: 120px">
+              <a-option v-for="ds in datasources" :key="ds.id" :value="ds.id">{{ ds.name }}</a-option>
+            </a-select>
+            <a-button size="mini" type="text" @click.stop="showTablePanel = !showTablePanel" class="toggle-icon">
+              <template #icon>
+                <icon-menu-fold v-if="showTablePanel" />
+                <icon-menu-unfold v-else />
+              </template>
+            </a-button>
+          </a-space>
         </div>
         <div class="table-search">
           <a-input 
@@ -67,7 +77,24 @@
       </div>
 
       <!-- 中间：画布区域 -->
-      <div class="canvas-panel" v-show="viewType === 'joined'" @click="handleCanvasClick">
+      <div 
+        class="canvas-panel" 
+        :class="{
+          'no-left-panel': !showTablePanel,
+          'no-right-panel': !showPropertyPanel
+        }"
+        v-show="viewType === 'joined'" 
+        @click="handleCanvasClick"
+        :style="{ '--minimap-bottom': minimapBottom + 'px', '--minimap-right': minimapRight + 'px' }"
+      >
+        <!-- 左侧面板触发按钮 -->
+        <div v-show="!showTablePanel && viewType === 'joined'" class="panel-trigger left" @click.stop="showTablePanel = true">
+          <icon-menu-unfold />
+        </div>
+        <!-- 右侧面板触发按钮 -->
+        <div v-show="!showPropertyPanel && viewType === 'joined'" class="panel-trigger right" @click.stop="showPropertyPanel = true">
+          <icon-menu-unfold />
+        </div>
         <VueFlow
           v-model:nodes="nodes"
           v-model:edges="edges"
@@ -103,7 +130,7 @@
           </template>
           <Background pattern-color="#aaa" :gap="16" style="pointer-events: none !important;" />
           <Controls class="custom-controls" />
-          <MiniMap class="custom-minimap" />
+          <MiniMap class="custom-minimap" pannable zoomable node-size="10" node-stroke-width="0" node-border-radius="2" />
           
           <!-- 自定义整理布局按钮 -->
           <div class="layout-button">
@@ -126,7 +153,16 @@
       </div>
 
       <!-- 右侧：属性面板 -->
-      <div class="property-panel">
+      <div class="property-panel" v-show="showPropertyPanel && viewType === 'joined'">
+        <div class="panel-header">
+          <span>属性配置</span>
+          <a-button size="mini" type="text" @click.stop="showPropertyPanel = !showPropertyPanel" class="toggle-icon">
+            <template #icon>
+              <icon-menu-fold v-if="showPropertyPanel" />
+              <icon-menu-unfold v-else />
+            </template>
+          </a-button>
+        </div>
         <a-tabs v-model:active-key="activeTab">
           <a-tab-pane key="basic" title="基本信息">
             <a-form :model="formData" layout="vertical" size="small">
@@ -212,24 +248,69 @@
     </a-modal>
 
     <!-- 底部：SQL预览 -->
-    <div class="preview-panel">
-      <a-collapse :default-active-key="['sql']">
-        <a-collapse-item key="sql" header="SQL预览">
-          <pre class="sql-preview">{{ generatedSql }}</pre>
-        </a-collapse-item>
-        <a-collapse-item key="data" header="数据预览">
-          <a-button size="small" type="primary" @click="handlePreview" :loading="previewing" style="margin-bottom: 12px">
-            执行预览
-          </a-button>
-          <a-table v-if="previewData.length" :columns="previewColumns" :data="previewData" :pagination="false" size="small" />
-        </a-collapse-item>
-      </a-collapse>
+    <div class="preview-panel" ref="previewPanelRef">
+      <div class="preview-header" @click="showPreviewPanel = !showPreviewPanel">
+        <span>SQL预览 & 数据预览</span>
+        <a-button size="mini" type="text" class="toggle-icon">
+          <template #icon>
+            <icon-caret-down v-if="!showPreviewPanel" />
+            <icon-caret-up v-else />
+          </template>
+        </a-button>
+      </div>
+      <div class="preview-content" v-show="showPreviewPanel">
+        <a-collapse :default-active-key="['sql']">
+          <a-collapse-item key="sql" header="SQL预览">
+            <pre class="sql-preview">{{ generatedSql }}</pre>
+          </a-collapse-item>
+          <a-collapse-item key="data" header="数据预览">
+            <a-space style="margin-bottom: 12px">
+              <a-button size="small" type="primary" @click="handlePreview" :loading="previewing">
+                执行预览
+              </a-button>
+              <a-button v-if="previewData.length > 0" size="small" @click="clearPreviewData">
+                清空数据
+              </a-button>
+              <a-tag v-if="previewData.length > 0" color="blue">
+                共 {{ previewPagination.total }} 条记录
+              </a-tag>
+            </a-space>
+            <div v-if="previewData.length > 0" class="table-container">
+              <a-table
+                :columns="previewColumns"
+                :data="pagedPreviewData"
+                :pagination="previewPagination"
+                :scroll="{ y: previewTableHeight, x: 'max-content' }"
+                size="small"
+                row-key="_key"
+                :bordered="true"
+                :stripe="true"
+                :column-resizable="true"
+                @page-change="handleTablePageChange"
+                @page-size-change="handleTablePageSizeChange"
+                @column-resize="handleTableColumnResize"
+              >
+                <template #empty>
+                  <div style="padding: 20px; color: #999;">
+                    暂无数据
+                  </div>
+                </template>
+              </a-table>
+            </div>
+            <a-empty v-else>
+              <template #description>
+                点击"执行预览"查看数据
+              </template>
+            </a-empty>
+          </a-collapse-item>
+        </a-collapse>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, onMounted, markRaw, provide, nextTick } from 'vue'
+import { ref, computed, watch, onMounted, markRaw, provide, nextTick, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -239,7 +320,13 @@ import type { Node, Edge, Connection } from '@vue-flow/core'
 import { Message, Modal } from '@arco-design/web-vue'
 import {
   IconDelete as IconDelete,
-  IconApps
+  IconApps,
+  IconMenuFold,
+  IconMenuUnfold,
+  IconCaretDown,
+  IconCaretUp,
+  IconSearch,
+  IconStorage
 } from '@arco-design/web-vue/es/icon'
 import TableNode from '@/components/semantic/TableNode.vue'
 import ColumnSelectDialog from '@/components/semantic/ColumnSelectDialog.vue'
@@ -266,6 +353,43 @@ const { project, addEdge, onConnect: onConnectVueFlow, fitView } = useVueFlow()
 // 状态
 const saving = ref(false)
 const previewing = ref(false)
+const showTablePanel = ref(true)
+const showPropertyPanel = ref(true)
+const showPreviewPanel = ref(true)
+const previewPanelRef = ref<HTMLElement | null>(null)
+const minimapBottom = ref(120)
+const minimapRight = ref(20)
+
+watch(showPreviewPanel, () => {
+  nextTick(() => {
+    if (showPreviewPanel.value && previewPanelRef.value) {
+      const height = previewPanelRef.value.clientHeight
+      // 确保小地图至少距离底部120px，如果预览面板高度较小
+      minimapBottom.value = Math.max(height + 20, 120)
+    } else {
+      minimapBottom.value = 120
+    }
+  })
+}, { immediate: true })
+
+// 监听预览面板高度变化（例如数据加载时）
+watch(previewPanelRef, (el) => {
+  if (!el) return
+  const observer = new ResizeObserver(() => {
+    if (showPreviewPanel.value && el) {
+      const height = el.clientHeight
+      minimapBottom.value = Math.max(height + 20, 120)
+    }
+  })
+  observer.observe(el)
+  onUnmounted(() => observer.disconnect())
+})
+
+// 监听右侧面板状态，动态调整小地图位置
+watch(showPropertyPanel, (isShow) => {
+  // 右侧面板宽度280px，当显示时小地图需要向左移动
+  minimapRight.value = isShow ? 300 : 20
+}, { immediate: true })
 const datasources = ref<DataSource[]>([])
 const selectedDatasource = ref('')
 const tables = ref<Dataset[]>([])
@@ -293,6 +417,26 @@ const formData = ref({
 // 预览数据
 const previewColumns = ref<any[]>([])
 const previewData = ref<any[]>([])
+const previewPagination = ref({
+  total: 0,
+  current: 1,
+  pageSize: 50,
+  showSizeChanger: true,
+  showTotal: true
+})
+const previewTableHeight = ref(300)
+
+// 列宽配置
+const MAX_COLUMN_WIDTH = 400  // 最大列宽
+const MIN_COLUMN_WIDTH = 80   // 最小列宽
+const columnWidths = ref<Record<string, number>>({})  // 存储自定义列宽
+
+// 分页后的预览数据
+const pagedPreviewData = computed(() => {
+  const start = (previewPagination.value.current - 1) * previewPagination.value.pageSize
+  const end = start + previewPagination.value.pageSize
+  return previewData.value.slice(start, end)
+})
 
 // 视图字段
 const viewColumns = ref<Array<{ name: string; type: string; selected: boolean; source_table?: string }>>([])
@@ -364,19 +508,22 @@ const generatedSql = computed(() => {
     if (targetNode && sourceNode) {
       const joinType = edge.data?.joinType || 'INNER'
       const conditions = edge.data?.conditions || []
-      const onClause = conditions.map((c: any) => `${c.left_column} ${c.operator || '='} ${c.right_column}`).join(' AND ') || '1=1'
-      fromClause += `\n${joinType} JOIN ${targetNode.data.label} AS ${targetNode.data.alias} ON ${onClause}`
+      // 在ON子句中添加表别名
+      const onClause = conditions.map((c: any) => `${sourceNode.data.alias}.${c.left_column} ${c.operator || '='} ${targetNode.data.alias}.${c.right_column}`).join(' AND ') || '1=1'
       
-      // 收集筛选条件
-      if (edge.data?.filters && edge.data.filters.length > 0) {
-        for (const filter of edge.data.filters) {
-          if (['IS NULL', 'IS NOT NULL'].includes(filter.operator)) {
-            whereConditions.push(`${filter.column} ${filter.operator}`)
-          } else {
-            whereConditions.push(`${filter.column} ${filter.operator} '${filter.value}'`)
-          }
+      // 添加filters到ON子句（而不是WHERE）
+      const filters = edge.data?.filters || []
+      const filterClauses = filters.map((f: any) => {
+        if (['IS NULL', 'IS NOT NULL'].includes(f.operator)) {
+          return `${f.column} ${f.operator}`
+        } else {
+          return `${f.column} ${f.operator} '${f.value}'`
         }
-      }
+      })
+      
+      const allOnConditions = [onClause, ...filterClauses].filter(Boolean).join(' AND ')
+      
+      fromClause += `\n${joinType} JOIN ${targetNode.data.label} AS ${targetNode.data.alias} ON ${allOnConditions}`
     }
   }
   
@@ -502,12 +649,22 @@ async function loadView() {
           target: j.right_table,
           sourceHandle,
           targetHandle,
+          type: 'default',
+          label: `${j.join_type || 'INNER'} JOIN`,
           data: {
-            joinType: j.join_type,
-            conditions: j.conditions,
+            joinType: j.join_type || 'INNER',
+            conditions: j.conditions || [],
             filters: j.filters || []
           },
-          animated: true
+          animated: true,
+          style: {
+            stroke: '#165dff',
+            strokeWidth: 3
+          },
+          markerEnd: {
+            type: 'arrowclosed',
+            color: '#165dff'
+          }
         })
       }
     }
@@ -602,7 +759,7 @@ function getNodeColumns(nodeId: string) {
     .filter((col: any) => selectedCols.includes(col.name))
     .map((col: any) => ({
       label: `${node.data.alias}.${col.name}`,
-      value: `${node.data.alias}.${col.name}`
+      value: col.name  // 只返回列名，不返回带别名的格式
     }))
 }
 
@@ -634,8 +791,12 @@ function onNodesChange(params: any[]) {
 
 // 边变化处理
 function onEdgesChange(params: any[]) {
-  // Vue Flow 会自动处理边的删除等变化
-  console.log('Edges changed:', params)
+  // 处理边的删除事件，更新连接点计数
+  params.forEach(param => {
+    if (param.type === 'remove' && param.item) {
+      deleteSingleEdge(param.item.id)
+    }
+  })
 }
 
 // 边点击
@@ -737,8 +898,8 @@ function handleJoinTypeConfirm() {
     if (!existingEdge.data) existingEdge.data = { joinType: selectedJoinType.value, conditions: [], filters: [] }
     if (!existingEdge.data.conditions) existingEdge.data.conditions = []
     existingEdge.data.conditions.push({
-      left_column: `${sourceNode}.${sourceColumn}`,
-      right_column: `${targetNode}.${targetColumn}`,
+      left_column: sourceColumn,
+      right_column: targetColumn,
       operator: '='
     })
     console.log('更新现有连接:', existingEdge)
@@ -787,13 +948,13 @@ function handleJoinTypeConfirm() {
       data: {
         joinType: selectedJoinType.value,
         conditions: [{
-          left_column: `${sourceNode}.${sourceColumn}`,
-          right_column: `${targetNode}.${targetColumn}`,
+          left_column: sourceColumn,
+          right_column: targetColumn,
           operator: '='
         }],
         filters: []
       },
-      animated: false,
+      animated: true,
       style: {
         stroke: '#165dff',
         strokeWidth: 3
@@ -835,6 +996,58 @@ function handleDeleteNode(nodeId: string) {
     okText: '确定',
     cancelText: '取消',
     onOk: () => {
+      // 收集所有连接到该节点的边
+      const edgesToDelete = edges.value.filter(e => e.source === nodeId || e.target === nodeId)
+      
+      // 解析连接点ID，获取节点ID、侧和索引
+      const parseHandle = (handleId: string) => {
+        // handleId格式: ${nodeId}-${side}-${index}
+        const parts = handleId.split('-')
+        if (parts.length < 3) return null
+        const index = parseInt(parts[parts.length - 1])
+        const side = parts[parts.length - 2]
+        const nodeId = parts.slice(0, parts.length - 2).join('-')
+        return { nodeId, side, index }
+      }
+      
+      // 减少相邻节点的连接点计数
+      edgesToDelete.forEach(edge => {
+        const sourceHandleInfo = parseHandle(edge.sourceHandle || '')
+        const targetHandleInfo = parseHandle(edge.targetHandle || '')
+        
+        // 减少源节点计数（如果源节点不是被删除的节点）
+        if (sourceHandleInfo && sourceHandleInfo.nodeId !== nodeId) {
+          const { nodeId: adjNodeId, side } = sourceHandleInfo
+          const adjNode = nodes.value.find(n => n.id === adjNodeId)
+          if (adjNode) {
+            const handleKey = side === 'left' ? 'leftHandles' : 'rightHandles'
+            const currentCount = adjNode.data[handleKey] || 0
+            if (currentCount > 0) {
+              adjNode.data = {
+                ...adjNode.data,
+                [handleKey]: currentCount - 1
+              }
+            }
+          }
+        }
+        
+        // 减少目标节点计数（如果目标节点不是被删除的节点）
+        if (targetHandleInfo && targetHandleInfo.nodeId !== nodeId) {
+          const { nodeId: adjNodeId, side } = targetHandleInfo
+          const adjNode = nodes.value.find(n => n.id === adjNodeId)
+          if (adjNode) {
+            const handleKey = side === 'left' ? 'leftHandles' : 'rightHandles'
+            const currentCount = adjNode.data[handleKey] || 0
+            if (currentCount > 0) {
+              adjNode.data = {
+                ...adjNode.data,
+                [handleKey]: currentCount - 1
+              }
+            }
+          }
+        }
+      })
+      
       // 删除节点
       nodes.value = nodes.value.filter(n => n.id !== nodeId)
       // 删除相关的边
@@ -850,6 +1063,105 @@ function handleDeleteNode(nodeId: string) {
   })
 }
 
+// 删除单条边并更新连接点计数
+function deleteSingleEdge(edgeId: string) {
+  // 找到要删除的边
+  const edgeToDelete = edges.value.find(e => e.id === edgeId)
+  if (!edgeToDelete) {
+    Message.error('未找到要删除的连接')
+    return false
+  }
+
+  // 解析连接点ID，获取节点ID、侧和索引
+  const parseHandle = (handleId: string) => {
+    // handleId格式: ${nodeId}-${side}-${index}
+    const parts = handleId.split('-')
+    if (parts.length < 3) return null
+    const index = parseInt(parts[parts.length - 1])
+    const side = parts[parts.length - 2]
+    const nodeId = parts.slice(0, parts.length - 2).join('-')
+    return { nodeId, side, index }
+  }
+
+  const sourceHandleInfo = parseHandle(edgeToDelete.sourceHandle || '')
+  const targetHandleInfo = parseHandle(edgeToDelete.targetHandle || '')
+
+  // 减少源节点和目标节点的连接点计数
+  if (sourceHandleInfo) {
+    const { nodeId, side } = sourceHandleInfo
+    const node = nodes.value.find(n => n.id === nodeId)
+    if (node) {
+      const handleKey = side === 'left' ? 'leftHandles' : 'rightHandles'
+      const currentCount = node.data[handleKey] || 0
+      if (currentCount > 0) {
+        node.data = {
+          ...node.data,
+          [handleKey]: currentCount - 1
+        }
+      }
+    }
+  }
+
+  if (targetHandleInfo) {
+    const { nodeId, side } = targetHandleInfo
+    const node = nodes.value.find(n => n.id === nodeId)
+    if (node) {
+      const handleKey = side === 'left' ? 'leftHandles' : 'rightHandles'
+      const currentCount = node.data[handleKey] || 0
+      if (currentCount > 0) {
+        node.data = {
+          ...node.data,
+          [handleKey]: currentCount - 1
+        }
+      }
+    }
+  }
+
+  // 重新索引同一节点同一侧的其他边
+  const reindexHandles = (handleInfo: { nodeId: string; side: string; index: number } | null) => {
+    if (!handleInfo) return
+    
+    const { nodeId, side, index: deletedIndex } = handleInfo
+    // 找到所有使用该节点该侧的边
+    edges.value.forEach(edge => {
+      // 检查sourceHandle
+      if (edge.sourceHandle) {
+        const info = parseHandle(edge.sourceHandle)
+        if (info && info.nodeId === nodeId && info.side === side && info.index > deletedIndex) {
+          // 更新索引：减1
+          const newIndex = info.index - 1
+          edge.sourceHandle = `${nodeId}-${side}-${newIndex}`
+        }
+      }
+      // 检查targetHandle
+      if (edge.targetHandle) {
+        const info = parseHandle(edge.targetHandle)
+        if (info && info.nodeId === nodeId && info.side === side && info.index > deletedIndex) {
+          // 更新索引：减1
+          const newIndex = info.index - 1
+          edge.targetHandle = `${nodeId}-${side}-${newIndex}`
+        }
+      }
+    })
+  }
+
+  // 重新索引源节点和目标节点的连接点
+  if (sourceHandleInfo) {
+    reindexHandles(sourceHandleInfo)
+  }
+  if (targetHandleInfo) {
+    reindexHandles(targetHandleInfo)
+  }
+
+  // 删除边
+  edges.value = edges.value.filter(e => e.id !== edgeId)
+  if (selectedEdge.value?.id === edgeId) {
+    selectedEdge.value = null
+    activeTab.value = 'basic'
+  }
+  return true
+}
+
 // 删除边
 function handleDeleteEdge(edgeId: string) {
   Modal.confirm({
@@ -858,12 +1170,9 @@ function handleDeleteEdge(edgeId: string) {
     okText: '确定',
     cancelText: '取消',
     onOk: () => {
-      edges.value = edges.value.filter(e => e.id !== edgeId)
-      if (selectedEdge.value?.id === edgeId) {
-        selectedEdge.value = null
-        activeTab.value = 'basic'
+      if (deleteSingleEdge(edgeId)) {
+        Message.success('删除成功')
       }
-      Message.success('删除成功')
     }
   })
 }
@@ -1035,23 +1344,107 @@ async function handlePreview() {
   
   previewing.value = true
   try {
-    const result = await previewView(viewId.value, 100)
-    previewColumns.value = result.columns.map(c => ({
+    const result = await previewView(viewId.value, 1000)  // 获取更多数据用于分页
+    
+    // 重置分页
+    previewPagination.value.total = result.data.length
+    previewPagination.value.current = 1
+    
+    // 处理列配置
+    previewColumns.value = result.columns.map((c, index) => ({
       title: c,
-      dataIndex: c
+      dataIndex: c,
+      key: c,
+      width: columnWidths.value[c] || getColumnWidth(c, result.data),
+      ellipsis: true,
+      tooltip: true
     }))
-    previewData.value = result.data.map((row, idx) => {
-      const obj: Record<string, any> = { _key: idx }
+    
+    // 存储所有数据
+    const allData = result.data.map((row, idx) => {
+      const obj: Record<string, any> = { _key: `${idx}_${Date.now()}` }
       result.columns.forEach((col, i) => {
-        obj[col] = row[i]
+        obj[col] = formatCellValue(row[i])
       })
       return obj
     })
+    
+    // 存储所有数据，用于分页
+    previewData.value = allData
+    
+    if (allData.length === 0) {
+      Message.info('查询成功，但没有返回数据')
+    } else {
+      Message.success(`查询成功，返回 ${allData.length} 条记录`)
+    }
   } catch (e: any) {
     Message.error(e.message || '预览失败')
+    // 清空之前的数据
+    clearPreviewData()
   } finally {
     previewing.value = false
   }
+}
+
+// 格式化单元格值
+function formatCellValue(value: any): string {
+  if (value === null || value === undefined) {
+    return ''
+  }
+  if (typeof value === 'object') {
+    return JSON.stringify(value)
+  }
+  return String(value)
+}
+
+// 获取列宽
+function getColumnWidth(columnName: string, data: any[][]): number {
+  const maxLength = Math.max(
+    columnName.length,
+    ...data.slice(0, 50).map(row => {
+      const value = row[data[0].indexOf(columnName)]
+      return String(value || '').length
+    })
+  )
+  // 自适应列宽，但不超过最大宽度
+  const autoWidth = Math.max(maxLength * 8 + 20, MIN_COLUMN_WIDTH)
+  return Math.min(autoWidth, MAX_COLUMN_WIDTH)
+}
+
+// 处理列宽调整
+function handleColumnResize(columnName: string, width: number) {
+  // 确保列宽在合理范围内
+  const constrainedWidth = Math.max(MIN_COLUMN_WIDTH, Math.min(width, MAX_COLUMN_WIDTH))
+  columnWidths.value[columnName] = constrainedWidth
+  // 更新列配置
+  const column = previewColumns.value.find(col => col.dataIndex === columnName)
+  if (column) {
+    column.width = constrainedWidth
+  }
+}
+
+// 处理表格列宽调整事件
+function handleTableColumnResize(dataIndex: string, width: number) {
+  handleColumnResize(dataIndex, width)
+}
+
+// 清空预览数据
+function clearPreviewData() {
+  previewData.value = []
+  previewColumns.value = []
+  previewPagination.value.total = 0
+  previewPagination.value.current = 1
+}
+
+// 处理表格页码变化
+function handleTablePageChange(page: number) {
+  previewPagination.value.current = page
+}
+
+// 处理表格每页条数变化
+function handleTablePageSizeChange(pageSize: number) {
+  previewPagination.value.pageSize = pageSize
+  previewPagination.value.current = 1
 }
 
 // 返回列表
@@ -1299,6 +1692,15 @@ onMounted(async () => {
   font-weight: 500;
 }
 
+.panel-header .toggle-icon {
+  color: #86909c;
+  transition: color 0.2s;
+}
+
+.panel-header .toggle-icon:hover {
+  color: #165dff;
+}
+
 .table-search {
   padding: 8px 12px;
   border-bottom: 1px solid #e5e6eb;
@@ -1333,6 +1735,22 @@ onMounted(async () => {
   min-height: 400px;
   overflow: hidden;
   background: #f5f7fa;
+  transition: all 0.3s ease;
+}
+
+/* 当左侧面板隐藏时，画布占据左侧空间 */
+.canvas-panel.no-left-panel {
+  margin-left: 0;
+}
+
+/* 当右侧面板隐藏时，画布占据右侧空间 */
+.canvas-panel.no-right-panel {
+  margin-right: 0;
+}
+
+/* 当两侧面板都隐藏时，画布全宽 */
+.canvas-panel.no-left-panel.no-right-panel {
+  width: 100%;
 }
 
 .debug-info {
@@ -1475,14 +1893,19 @@ onMounted(async () => {
 
 /* MiniMap 样式 */
 .canvas-panel :deep(.vue-flow__minimap) {
-  bottom: 20px;
-  right: 20px;
+  bottom: var(--minimap-bottom, 120px);
+  right: var(--minimap-right, 20px);
   width: 200px;
   height: 150px;
   background: rgba(255, 255, 255, 0.95);
   border-radius: 8px;
   border: 1px solid #e5e6eb;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+  /* 固定定位，避免受画布变换影响 */
+  position: fixed !important;
+  top: auto !important;
+  left: auto !important;
+  z-index: 1000;
 }
 
 .canvas-panel :deep(.vue-flow__minimap-mask) {
@@ -1491,6 +1914,14 @@ onMounted(async () => {
 
 .canvas-panel :deep(.vue-flow__minimap-node) {
   fill: #165dff;
+}
+
+/* 修复小地图内部变换导致的偏移 */
+.canvas-panel :deep(.vue-flow__minimap svg) {
+  transform: none !important;
+}
+.canvas-panel :deep(.vue-flow__minimap g) {
+  transform: none !important;
 }
 
 /* 连接线样式 */
@@ -1643,6 +2074,33 @@ onMounted(async () => {
 .preview-panel {
   background: #fff;
   border-top: 1px solid #e5e6eb;
+  position: relative;
+  z-index: 100;
+}
+
+.preview-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  font-weight: 500;
+  cursor: pointer;
+  background: #f7f8fa;
+  border-bottom: 1px solid #e5e6eb;
+  transition: background 0.2s;
+}
+
+.preview-header:hover {
+  background: #e8f3ff;
+}
+
+.preview-header .toggle-icon {
+  color: #86909c;
+}
+
+.preview-content {
+  max-height: 400px;
+  overflow-y: auto;
 }
 
 .sql-preview {
@@ -1654,5 +2112,100 @@ onMounted(async () => {
   font-size: 12px;
   overflow-x: auto;
   white-space: pre-wrap;
+}
+
+/* 面板触发按钮 */
+.panel-trigger {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 60px;
+  background: #165dff;
+  color: white;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 100;
+  border-radius: 0 4px 4px 0;
+  transition: all 0.2s;
+  opacity: 0.8;
+}
+
+.panel-trigger:hover {
+  opacity: 1;
+  width: 28px;
+}
+
+.panel-trigger.left {
+  left: 0;
+  border-radius: 0 4px 4px 0;
+}
+
+.panel-trigger.right {
+  right: 0;
+  border-radius: 4px 0 0 4px;
+}
+
+.panel-trigger svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* 数据预览表格样式 */
+.table-container {
+  background: #fff;
+  border: 1px solid #e5e6eb;
+  border-radius: 6px;
+  overflow: auto;
+  max-width: 100%;
+}
+
+.preview-content :deep(.arco-table) {
+  border-radius: 6px;
+}
+
+/* 列宽调整样式 */
+.preview-content :deep(.arco-table-th) {
+  background: #f7f8fa !important;
+  font-weight: 600;
+  color: #1d2129;
+  position: relative;
+}
+
+/* 列宽拖拽手柄 */
+.preview-content :deep(.arco-table-resize-trigger) {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.2s;
+  z-index: 10;
+}
+
+.preview-content :deep(.arco-table-resize-trigger:hover) {
+  background: #165dff;
+}
+
+/* 单元格溢出省略 */
+.preview-content :deep(.arco-table-td) {
+  padding: 8px 12px;
+  max-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-content :deep(.arco-table-tr:hover .arco-table-td:not(.arco-table-col-fixed-left):not(.arco-table-col-fixed-right)) {
+  background: #f7f8fa;
+}
+
+/* 空状态样式 */
+.preview-content .arco-empty {
+  padding: 40px 0;
 }
 </style>
