@@ -115,12 +115,6 @@ function calculateNodeHeight() {
   if (nodeElement.value) {
     const height = nodeElement.value.offsetHeight || nodeElement.value.clientHeight || 250
     nodeHeight.value = height
-    console.log(`[TableNode ${props.data.alias}] 节点高度计算:`, {
-      offsetHeight: nodeElement.value.offsetHeight,
-      clientHeight: nodeElement.value.clientHeight,
-      scrollHeight: nodeElement.value.scrollHeight,
-      最终高度: height
-    })
   }
 }
 

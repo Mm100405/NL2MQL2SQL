@@ -110,6 +110,8 @@
           :pan-on-scroll="true"
           :zoom-on-scroll="true"
           :fit-view-on-init="false"
+          :auto-pan-on-node-drag="false"
+          :auto-pan-on-connect="false"
           zoom-on-pinch
           zoom-on-double-click
           @drop="onCanvasDrop"
@@ -348,7 +350,8 @@ const nodeTypes = {
 }
 
 // 获取 Vue Flow 实例 - 在顶层调用
-const { project, addEdge, onConnect: onConnectVueFlow, fitView } = useVueFlow()
+const vueFlowInstance = useVueFlow()
+const { project, fitView } = vueFlowInstance
 
 // 状态
 const saving = ref(false)
@@ -401,6 +404,17 @@ const edges = ref<Edge[]>([])
 const selectedEdge = ref<Edge | null>(null)
 const viewName = ref('')
 const activeTab = ref('basic')
+
+// 监听画布变换状态
+let transformTimer: ReturnType<typeof setTimeout> | null = null
+watch(() => vueFlowInstance.getViewport(), (viewport) => {
+  if (transformTimer) clearTimeout(transformTimer)
+}, { deep: true })
+
+// 监听节点位置变化
+watch(() => nodes.value.map(n => ({ id: n.id, position: n.position })), () => {
+  // 节点位置变化时的处理
+}, { deep: true })
 
 // 字段选择弹窗
 const showColumnSelect = ref(false)
@@ -704,11 +718,37 @@ function onCanvasDrop(event: DragEvent) {
     return
   }
 
-  // 获取画布坐标
-  const position = project({
-    x: event.clientX,
-    y: event.clientY
-  })
+  // 获取 Vue Flow 容器的位置
+  const vueFlowElement = document.querySelector('.vue-flow') as HTMLElement
+  if (!vueFlowElement) return
+
+  const vueFlowRect = vueFlowElement.getBoundingClientRect()
+
+  // 计算相对于 Vue Flow 容器的坐标
+  const relativeX = event.clientX - vueFlowRect.left
+  const relativeY = event.clientY - vueFlowRect.top
+
+  // 使用 project 函数将相对坐标转换为画布逻辑坐标
+  const projectedPosition = project({ x: relativeX, y: relativeY })
+  
+  // 节点尺寸（宽度固定240px，高度根据字段数量动态计算）
+  const nodeWidth = 240
+  const headerHeight = 36 // 表头高度
+  const columnItemHeight = 36 // 每个字段的高度
+  const maxColumnsHeight = 400 // table-columns-wrapper 的 max-height
+  const footerHeight = 0 // 底部高度（如果有未选择字段提示）
+  
+  // 计算实际显示的字段区域高度
+  const columnCount = table.columns?.length || 0
+  const totalColumnsHeight = columnCount * columnItemHeight
+  const actualColumnsHeight = Math.min(totalColumnsHeight, maxColumnsHeight)
+  const estimatedNodeHeight = headerHeight + actualColumnsHeight + footerHeight
+  
+  // 调整位置，使节点中心对齐鼠标位置
+  const position = {
+    x: projectedPosition.x - nodeWidth / 2,
+    y: projectedPosition.y - estimatedNodeHeight / 2
+  }
 
   // 显示字段选择弹窗
   pendingTableColumns.value = table.columns || []
@@ -723,28 +763,28 @@ function onCanvasDrop(event: DragEvent) {
 // 字段选择确认
 function handleColumnSelectConfirm(selectedColumns: string[]) {
   if (!pendingTableData.value) return
-  
+
   const { table, position } = pendingTableData.value
   const alias = `t${nodes.value.length}`
 
   // 添加节点
-  nodes.value.push({
+  const newNode = {
     id: alias,
     type: 'tableNode',
     position,
-            data: {
-              label: table.name,
-              alias,
-              datasetId: table.id,
-              columns: table.columns || [],
-              selectedColumns,
-              leftHandles: 0,
-              rightHandles: 0
-            }
-  })
+    data: {
+      label: table.name,
+      alias,
+      datasetId: table.id,
+      columns: table.columns || [],
+      selectedColumns,
+      leftHandles: 0,
+      rightHandles: 0
+    }
+  }
 
-  // 更新字段列表会自动通过watch触发
-  
+  nodes.value.push(newNode)
+
   // 清理临时数据
   pendingTableData.value = null
 }
@@ -779,14 +819,6 @@ function updateEdgeConfig(config: JoinConfig) {
 // 节点变化处理
 function onNodesChange(params: any[]) {
   // Vue Flow 会自动处理节点的拖动等变化
-  console.log('Nodes changed:', params)
-  
-  // 检查是否有节点被删除
-  const removeEvents = params.filter((p: any) => p.type === 'remove')
-  if (removeEvents.length > 0) {
-    console.log('Nodes removed:', removeEvents)
-    updateViewColumns()
-  }
 }
 
 // 边变化处理
@@ -801,26 +833,24 @@ function onEdgesChange(params: any[]) {
 
 // 边点击
 function onEdgeClick({ edge }: { edge: Edge }) {
-  console.log('Edge clicked:', edge)
   selectedEdge.value = edge
   activeTab.value = 'joins'
 }
 
 // 节点点击
 function handleNodeClick({ node }: { node: Node }) {
-  console.log('Node clicked:', node)
+  // 节点点击处理
 }
 
 // 画布空白处点击
 function handlePaneClick(event: MouseEvent) {
-  console.log('Pane clicked:', event)
   // 取消选中边
   selectedEdge.value = null
 }
 
-// 画布容器点击 (用于调试)
+// 画布容器点击
 function handleCanvasClick(event: MouseEvent) {
-  console.log('Canvas container clicked:', event.target)
+  // 画布容器点击处理
 }
 
 // 处理节点字段更新
@@ -840,7 +870,6 @@ function handleColumnClick(payload: { nodeId: string; columnName: string; column
       nodeId: payload.nodeId,
       columnName: payload.columnName
     }
-    console.log('选中源字段:', payload)
   } else {
     // 第二次点击：检查是否是同一节点
     if (connectingColumn.value.nodeId === payload.nodeId) {
@@ -856,8 +885,6 @@ function handleColumnClick(payload: { nodeId: string; columnName: string; column
       targetNode: payload.nodeId,
       targetColumn: payload.columnName
     }
-    
-    console.log('准备建立连接:', pendingConnection.value)
     
     // 显示JOIN类型选择对话框
     showJoinTypeDialog.value = true
@@ -1636,9 +1663,6 @@ onMounted(async () => {
     }
     await loadTables()
   }
-  console.log('VueFlow nodes:', nodes.value)
-  console.log('VueFlow edges:', edges.value)
-  console.log('VueFlow nodeTypes:', nodeTypes)
 })
 </script>
 
@@ -1798,6 +1822,10 @@ onMounted(async () => {
 .canvas-panel :deep(.vue-flow__transformationpane) {
   width: 100% !important;
   height: 100% !important;
+  /* 关键修复：防止 transformationpane 高度累加 */
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
 }
 
 .canvas-panel :deep(.vue-flow__viewport) {
@@ -1901,10 +1929,8 @@ onMounted(async () => {
   border-radius: 8px;
   border: 1px solid #e5e6eb;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  /* 固定定位，避免受画布变换影响 */
-  position: fixed !important;
-  top: auto !important;
-  left: auto !important;
+  /* 绝对定位，相对于 canvas-panel */
+  position: absolute !important;
   z-index: 1000;
 }
 
@@ -1914,14 +1940,6 @@ onMounted(async () => {
 
 .canvas-panel :deep(.vue-flow__minimap-node) {
   fill: #165dff;
-}
-
-/* 修复小地图内部变换导致的偏移 */
-.canvas-panel :deep(.vue-flow__minimap svg) {
-  transform: none !important;
-}
-.canvas-panel :deep(.vue-flow__minimap g) {
-  transform: none !important;
 }
 
 /* 连接线样式 */
@@ -1996,6 +2014,8 @@ onMounted(async () => {
 .canvas-panel :deep(.vue-flow__node) {
   width: fit-content !important;
   height: fit-content !important;
+  /* 关键修复：确保节点使用绝对定位，不影响容器高度 */
+  position: absolute !important;
 }
 
 .canvas-panel :deep(.vue-flow__node.selected) {
