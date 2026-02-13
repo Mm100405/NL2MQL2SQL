@@ -74,6 +74,8 @@ class ViewUpdate(BaseModel):
 
 class PreviewRequest(BaseModel):
     limit: int = 100
+    page: int = 1
+    page_size: int = 10
 
 
 # ============ Routes ============
@@ -190,7 +192,7 @@ def delete_view(id: str, db: Session = Depends(get_db)):
 
 @router.post("/{id}/preview")
 async def preview_view(id: str, request: PreviewRequest, db: Session = Depends(get_db)):
-    """预览视图数据"""
+    """预览视图数据（支持分页）"""
     view = db.query(View).filter(View.id == id).first()
     if not view:
         raise HTTPException(status_code=404, detail="View not found")
@@ -208,28 +210,53 @@ async def preview_view(id: str, request: PreviewRequest, db: Session = Depends(g
             source_table = col.get("source_table", "")
             source_column = col.get("source_column", col.get("name"))
             alias = col.get("alias", col.get("name"))
-            if source_table:
-                select_columns.append(f"{source_table}.{source_column} AS {alias}")
-            else:
+            # SQL视图类型：FROM子句是子查询，不能使用内层表别名
+            if view.view_type == ViewType.SQL or not source_table:
                 select_columns.append(f"{source_column} AS {alias}")
+            else:
+                select_columns.append(f"{source_table}.{source_column} AS {alias}")
         select_clause = ", ".join(select_columns)
     else:
         select_clause = "*"
     
-    sql = f"SELECT {select_clause} FROM {from_clause} LIMIT {request.limit}"
+    # 计算分页偏移量
+    page = request.page if request.page > 0 else 1
+    page_size = request.page_size if request.page_size > 0 else 10
+    offset = (page - 1) * page_size
+    
+    # 构建分页SQL
+    sql = f"SELECT {select_clause} FROM {from_clause} LIMIT {page_size} OFFSET {offset}"
     
     try:
+        # 执行分页查询
         result = await execute_query(
             sql=sql,
             datasource_id=view.datasource_id,
-            limit=request.limit,
+            limit=page_size,
             db=db
         )
+        
+        # 获取总数 - 构建COUNT查询
+        count_sql = f"SELECT COUNT(*) as total FROM {from_clause}"
+        count_result = await execute_query(
+            sql=count_sql,
+            datasource_id=view.datasource_id,
+            limit=1,
+            db=db
+        )
+        
+        # 提取总数
+        total_count = 0
+        if count_result.get("data") and len(count_result["data"]) > 0:
+            total_count = count_result["data"][0][0]
+        
         return {
             "sql": sql,
             "columns": result.get("columns", []),
             "data": result.get("data", []),
-            "total_count": result.get("total_count", 0)
+            "total": total_count,
+            "page": page,
+            "page_size": page_size
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Preview failed: {str(e)}")
@@ -308,10 +335,11 @@ def generate_view_sql(id: str, db: Session = Depends(get_db)):
             source_table = col.get("source_table", "")
             source_column = col.get("source_column", col.get("name"))
             alias = col.get("alias", col.get("name"))
-            if source_table:
-                select_columns.append(f"{source_table}.{source_column} AS {alias}")
-            else:
+            # SQL视图类型：FROM子句是子查询，不能使用内层表别名
+            if view.view_type == ViewType.SQL or not source_table:
                 select_columns.append(f"{source_column} AS {alias}")
+            else:
+                select_columns.append(f"{source_table}.{source_column} AS {alias}")
         select_clause = ", ".join(select_columns)
     else:
         select_clause = "*"

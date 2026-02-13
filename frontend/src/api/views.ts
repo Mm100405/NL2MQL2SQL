@@ -79,7 +79,15 @@ export interface ViewPreviewResult {
   sql: string
   columns: string[]
   data: any[][]
-  total_count: number
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface PreviewParams {
+  limit?: number
+  page?: number
+  page_size?: number
 }
 
 // ============ 字典类型定义 ============
@@ -140,8 +148,12 @@ export function deleteView(id: string): Promise<void> {
   return request.delete(`/views/${id}`)
 }
 
-export function previewView(id: string, limit: number = 100): Promise<ViewPreviewResult> {
-  return request.post(`/views/${id}/preview`, { limit })
+export function previewView(id: string, params?: PreviewParams): Promise<ViewPreviewResult> {
+  return request.post(`/views/${id}/preview`, {
+    limit: params?.limit || 100,
+    page: params?.page || 1,
+    page_size: params?.page_size || 10
+  })
 }
 
 export function getViewColumns(id: string): Promise<ViewColumn[]> {

@@ -148,7 +148,7 @@
         <a-card v-if="currentSetting === 'integration'" title="集成配置">
           <a-collapse :default-active-key="['api']">
             <a-collapse-item key="api" header="API配置">
-              <a-form layout="vertical">
+              <a-form :model="integrationSettings" layout="vertical">
                 <a-form-item label="API访问地址">
                   <a-input :model-value="integrationSettings.apiUrl" readonly>
                     <template #append>
@@ -182,7 +182,7 @@
               </div>
             </a-collapse-item>
             <a-collapse-item key="scheduler" header="调度系统集成">
-              <a-form layout="vertical">
+              <a-form :model="integrationSettings" layout="vertical">
                 <a-form-item label="调度系统">
                   <a-select v-model="integrationSettings.scheduler">
                     <a-option value="airflow">Apache Airflow</a-option>

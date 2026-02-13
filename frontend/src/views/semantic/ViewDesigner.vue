@@ -35,46 +35,64 @@
     <!-- 主体区域 -->
     <div class="designer-body">
       <!-- 左侧：物理表列表 -->
-      <div class="table-panel" v-show="showTablePanel && viewType === 'joined'">
-        <div class="panel-header">
-          <span>物理表</span>
-          <a-space>
-            <a-select v-model="selectedDatasource" placeholder="选择数据源" size="small" style="width: 120px">
-              <a-option v-for="ds in datasources" :key="ds.id" :value="ds.id">{{ ds.name }}</a-option>
-            </a-select>
-            <a-button size="mini" type="text" @click.stop="showTablePanel = !showTablePanel" class="toggle-icon">
-              <template #icon>
-                <icon-menu-fold v-if="showTablePanel" />
-                <icon-menu-unfold v-else />
-              </template>
-            </a-button>
-          </a-space>
-        </div>
-        <div class="table-search">
-          <a-input 
-            v-model="tableSearchKeyword" 
-            placeholder="搜索表名..." 
-            size="small"
-            allow-clear
-          >
-            <template #prefix>
-              <icon-search />
-            </template>
-          </a-input>
-        </div>
-        <div class="table-list">
-          <div
-            v-for="table in filteredTables"
-            :key="table.id"
-            class="table-item"
-            draggable="true"
-            @dragstart="onTableDragStart($event, table)"
-          >
-            <icon-storage />
-            <span>{{ table.name }}</span>
+      <transition name="slide-left">
+        <div 
+          class="table-panel" 
+          v-show="showTablePanel && viewType === 'joined'"
+          :style="tablePanelStyle"
+        >
+          <div class="panel-header">
+            <span>物理表</span>
+            <a-space>
+              <a-select v-model="selectedDatasource" placeholder="选择数据源" size="small" style="width: 120px">
+                <a-option 
+                  v-for="ds in datasources" 
+                  :key="ds.id" 
+                  :value="ds.id"
+                  :title="ds.name"
+                >
+                  {{ ds.name }}
+                </a-option>
+              </a-select>
+              <a-button size="mini" type="text" @click.stop="showTablePanel = !showTablePanel" class="toggle-icon">
+                <template #icon>
+                  <icon-menu-fold v-if="showTablePanel" />
+                  <icon-menu-unfold v-else />
+                </template>
+              </a-button>
+            </a-space>
           </div>
+          <div class="table-search">
+            <a-input 
+              v-model="tableSearchKeyword" 
+              placeholder="搜索表名..." 
+              size="small"
+              allow-clear
+            >
+              <template #prefix>
+                <icon-search />
+              </template>
+            </a-input>
+          </div>
+          <div class="table-list">
+            <div
+              v-for="table in filteredTables"
+              :key="table.id"
+              class="table-item"
+              draggable="true"
+              @dragstart="onTableDragStart($event, table)"
+            >
+              <icon-storage />
+              <span class="table-name" :title="table.name">{{ table.name }}</span>
+            </div>
+          </div>
+          <!-- 左侧拖拽调整手柄 -->
+          <div 
+            class="resize-handle resize-handle-right"
+            @mousedown.stop="(e: MouseEvent) => startResize('left', e)"
+          ></div>
         </div>
-      </div>
+      </transition>
 
       <!-- 中间：画布区域 -->
       <div 
@@ -85,7 +103,6 @@
         }"
         v-show="viewType === 'joined'" 
         @click="handleCanvasClick"
-        :style="{ '--minimap-bottom': minimapBottom + 'px', '--minimap-right': minimapRight + 'px' }"
       >
         <!-- 左侧面板触发按钮 -->
         <div v-show="!showTablePanel && viewType === 'joined'" class="panel-trigger left" @click.stop="showTablePanel = true">
@@ -155,69 +172,81 @@
       </div>
 
       <!-- 右侧：属性面板 -->
-      <div class="property-panel" v-show="showPropertyPanel && viewType === 'joined'">
-        <div class="panel-header">
-          <span>属性配置</span>
-          <a-button size="mini" type="text" @click.stop="showPropertyPanel = !showPropertyPanel" class="toggle-icon">
-            <template #icon>
-              <icon-menu-fold v-if="showPropertyPanel" />
-              <icon-menu-unfold v-else />
-            </template>
-          </a-button>
+      <transition name="slide-right">
+        <div 
+          class="property-panel" 
+          v-show="showPropertyPanel && viewType === 'joined'"
+          :style="propertyPanelStyle"
+        >
+          <div class="panel-header">
+            <span>属性配置</span>
+            <a-button size="mini" type="text" @click.stop="showPropertyPanel = !showPropertyPanel" class="toggle-icon">
+              <template #icon>
+                <icon-menu-fold v-if="showPropertyPanel" />
+                <icon-menu-unfold v-else />
+              </template>
+            </a-button>
+          </div>
+          <a-tabs v-model:active-key="activeTab">
+            <a-tab-pane key="basic" title="基本信息">
+              <a-form :model="formData" layout="vertical" size="small">
+                <a-form-item label="视图名称" required>
+                  <a-input v-model="formData.name" placeholder="请输入视图名称" />
+                </a-form-item>
+                <a-form-item label="显示名称">
+                  <a-input v-model="formData.display_name" placeholder="请输入显示名称" />
+                </a-form-item>
+                <a-form-item label="描述">
+                  <a-textarea v-model="formData.description" placeholder="请输入描述" :auto-size="{ minRows: 3 }" />
+                </a-form-item>
+              </a-form>
+            </a-tab-pane>
+            <a-tab-pane key="joins" title="关联配置">
+              <div v-if="selectedEdge" class="join-panel">
+                <div class="join-header">
+                  <a-space>
+                    <span>连接: {{ selectedEdge.source }} → {{ selectedEdge.target }}</span>
+                    <a-tag :color="selectedEdge.data?.joinType === 'INNER' ? 'blue' : 
+                             selectedEdge.data?.joinType === 'LEFT' ? 'arcoblue' : 
+                             selectedEdge.data?.joinType === 'RIGHT' ? 'green' : 
+                             selectedEdge.data?.joinType === 'FULL' ? 'orange' : 'gray'">
+                      {{ selectedEdge.data?.joinType }} JOIN
+                    </a-tag>
+                  </a-space>
+                  <a-button type="text" size="mini" status="danger" @click="handleDeleteEdge(selectedEdge.id)">
+                    <template #icon><icon-delete /></template>
+                    删除连接
+                  </a-button>
+                </div>
+                <JoinConfigPanel
+                  v-if="selectedEdgeConfig"
+                  :config="selectedEdgeConfig"
+                  :left-table-alias="selectedEdge.source"
+                  :right-table-alias="selectedEdge.target"
+                  :left-columns="getNodeColumns(selectedEdge.source)"
+                  :right-columns="getNodeColumns(selectedEdge.target)"
+                  @update="updateEdgeConfig"
+                />
+              </div>
+              <a-empty v-else description="点击连线查看配置" />
+            </a-tab-pane>
+            <a-tab-pane key="columns" title="字段列表">
+              <div class="column-list">
+                <div v-for="col in viewColumns" :key="col.name" class="column-row">
+                  <a-checkbox v-model="col.selected">{{ col.name }}</a-checkbox>
+                  <span class="col-type">{{ col.type }}</span>
+                </div>
+              </div>
+            </a-tab-pane>
+          </a-tabs>
+          <!-- 右侧拖拽调整手柄 -->
+          <div 
+            v-if="showPropertyPanel && viewType === 'joined'"
+            class="resize-handle resize-handle-left"
+            @mousedown.stop="(e: MouseEvent) => startResize('right', e)"
+          ></div>
         </div>
-        <a-tabs v-model:active-key="activeTab">
-          <a-tab-pane key="basic" title="基本信息">
-            <a-form :model="formData" layout="vertical" size="small">
-              <a-form-item label="视图名称" required>
-                <a-input v-model="formData.name" placeholder="请输入视图名称" />
-              </a-form-item>
-              <a-form-item label="显示名称">
-                <a-input v-model="formData.display_name" placeholder="请输入显示名称" />
-              </a-form-item>
-              <a-form-item label="描述">
-                <a-textarea v-model="formData.description" placeholder="请输入描述" :auto-size="{ minRows: 3 }" />
-              </a-form-item>
-            </a-form>
-          </a-tab-pane>
-          <a-tab-pane key="joins" title="关联配置">
-            <div v-if="selectedEdge" class="join-panel">
-              <div class="join-header">
-                <a-space>
-                  <span>连接: {{ selectedEdge.source }} → {{ selectedEdge.target }}</span>
-                  <a-tag :color="selectedEdge.data?.joinType === 'INNER' ? 'blue' : 
-                           selectedEdge.data?.joinType === 'LEFT' ? 'arcoblue' : 
-                           selectedEdge.data?.joinType === 'RIGHT' ? 'green' : 
-                           selectedEdge.data?.joinType === 'FULL' ? 'orange' : 'gray'">
-                    {{ selectedEdge.data?.joinType }} JOIN
-                  </a-tag>
-                </a-space>
-                <a-button type="text" size="mini" status="danger" @click="handleDeleteEdge(selectedEdge.id)">
-                  <template #icon><icon-delete /></template>
-                  删除连接
-                </a-button>
-              </div>
-              <JoinConfigPanel
-                v-if="selectedEdgeConfig"
-                :config="selectedEdgeConfig"
-                :left-table-alias="selectedEdge.source"
-                :right-table-alias="selectedEdge.target"
-                :left-columns="getNodeColumns(selectedEdge.source)"
-                :right-columns="getNodeColumns(selectedEdge.target)"
-                @update="updateEdgeConfig"
-              />
-            </div>
-            <a-empty v-else description="点击连线查看配置" />
-          </a-tab-pane>
-          <a-tab-pane key="columns" title="字段列表">
-            <div class="column-list">
-              <div v-for="col in viewColumns" :key="col.name" class="column-row">
-                <a-checkbox v-model="col.selected">{{ col.name }}</a-checkbox>
-                <span class="col-type">{{ col.type }}</span>
-              </div>
-            </div>
-          </a-tab-pane>
-        </a-tabs>
-      </div>
+      </transition>
     </div>
 
     <!-- 字段选择弹窗 -->
@@ -236,7 +265,7 @@
       @ok="handleJoinTypeConfirm"
       @cancel="handleJoinTypeCancel"
     >
-      <a-form layout="vertical">
+      <a-form :model="{}" layout="vertical">
         <a-form-item label="连接方式">
           <a-radio-group v-model="selectedJoinType" direction="vertical">
             <a-radio value="INNER">INNER JOIN - 内连接（返回两表匹配的记录）</a-radio>
@@ -280,9 +309,8 @@
             <div v-if="previewData.length > 0" class="table-container">
               <a-table
                 :columns="previewColumns"
-                :data="pagedPreviewData"
+                :data="previewData"
                 :pagination="previewPagination"
-                :scroll="{ y: previewTableHeight, x: 'max-content' }"
                 size="small"
                 row-key="_key"
                 :bordered="true"
@@ -360,39 +388,6 @@ const showTablePanel = ref(true)
 const showPropertyPanel = ref(true)
 const showPreviewPanel = ref(true)
 const previewPanelRef = ref<HTMLElement | null>(null)
-const minimapBottom = ref(120)
-const minimapRight = ref(20)
-
-watch(showPreviewPanel, () => {
-  nextTick(() => {
-    if (showPreviewPanel.value && previewPanelRef.value) {
-      const height = previewPanelRef.value.clientHeight
-      // 确保小地图至少距离底部120px，如果预览面板高度较小
-      minimapBottom.value = Math.max(height + 20, 120)
-    } else {
-      minimapBottom.value = 120
-    }
-  })
-}, { immediate: true })
-
-// 监听预览面板高度变化（例如数据加载时）
-watch(previewPanelRef, (el) => {
-  if (!el) return
-  const observer = new ResizeObserver(() => {
-    if (showPreviewPanel.value && el) {
-      const height = el.clientHeight
-      minimapBottom.value = Math.max(height + 20, 120)
-    }
-  })
-  observer.observe(el)
-  onUnmounted(() => observer.disconnect())
-})
-
-// 监听右侧面板状态，动态调整小地图位置
-watch(showPropertyPanel, (isShow) => {
-  // 右侧面板宽度280px，当显示时小地图需要向左移动
-  minimapRight.value = isShow ? 300 : 20
-}, { immediate: true })
 const datasources = ref<DataSource[]>([])
 const selectedDatasource = ref('')
 const tables = ref<Dataset[]>([])
@@ -404,6 +399,21 @@ const edges = ref<Edge[]>([])
 const selectedEdge = ref<Edge | null>(null)
 const viewName = ref('')
 const activeTab = ref('basic')
+
+// 面板宽度调整
+const tablePanelWidth = ref(250)
+const propertyPanelWidth = ref(400)
+const isResizing = ref(false)
+const resizeType = ref<'left' | 'right' | null>(null)
+
+// 面板样式计算
+const tablePanelStyle = computed(() => ({
+  width: `${tablePanelWidth.value}px`
+}))
+
+const propertyPanelStyle = computed(() => ({
+  width: `${propertyPanelWidth.value}px`
+}))
 
 // 监听画布变换状态
 let transformTimer: ReturnType<typeof setTimeout> | null = null
@@ -434,23 +444,16 @@ const previewData = ref<any[]>([])
 const previewPagination = ref({
   total: 0,
   current: 1,
-  pageSize: 50,
-  showSizeChanger: true,
-  showTotal: true
+  pageSize: 10,
+  showTotal: true,
+  showPageSize: true,
+  pageSizeOptions: [10, 20, 50, 100]
 })
-const previewTableHeight = ref(300)
 
 // 列宽配置
 const MAX_COLUMN_WIDTH = 400  // 最大列宽
 const MIN_COLUMN_WIDTH = 80   // 最小列宽
 const columnWidths = ref<Record<string, number>>({})  // 存储自定义列宽
-
-// 分页后的预览数据
-const pagedPreviewData = computed(() => {
-  const start = (previewPagination.value.current - 1) * previewPagination.value.pageSize
-  const end = start + previewPagination.value.pageSize
-  return previewData.value.slice(start, end)
-})
 
 // 视图字段
 const viewColumns = ref<Array<{ name: string; type: string; selected: boolean; source_table?: string }>>([])
@@ -892,32 +895,31 @@ function handleColumnClick(payload: { nodeId: string; columnName: string; column
 }
 
 // 确认JOIN类型并建立连接
+// 确认JOIN类型并建立连接
 function handleJoinTypeConfirm() {
   if (!pendingConnection.value) return
   
   const { sourceNode, sourceColumn, targetNode, targetColumn } = pendingConnection.value
-  
-  console.log('=== 开始创建连接 ===')
-  console.log('连接信息:', pendingConnection.value)
-  console.log('当前nodes:', nodes.value)
-  console.log('当前edges:', edges.value)
   
   // 验证节点是否存在
   const sourceNodeObj = nodes.value.find(n => n.id === sourceNode)
   const targetNodeObj = nodes.value.find(n => n.id === targetNode)
   
   if (!sourceNodeObj || !targetNodeObj) {
-    console.error('节点不存在!', { sourceNodeObj, targetNodeObj })
     Message.error('节点不存在，无法创建连接')
     return
   }
   
-
+  // 根据节点的X坐标判断左右关系，确保连线从左到右
+  const leftNode = sourceNodeObj.position.x < targetNodeObj.position.x ? sourceNodeObj : targetNodeObj
+  const rightNode = sourceNodeObj.position.x < targetNodeObj.position.x ? targetNodeObj : sourceNodeObj
+  const leftColumn = sourceNodeObj.position.x < targetNodeObj.position.x ? sourceColumn : targetColumn
+  const rightColumn = sourceNodeObj.position.x < targetNodeObj.position.x ? targetColumn : sourceColumn
   
   // 检查是否已存在连接
   let existingEdge = edges.value.find(
-    e => (e.source === sourceNode && e.target === targetNode) ||
-         (e.source === targetNode && e.target === sourceNode)
+    e => (e.source === leftNode.id && e.target === rightNode.id) ||
+         (e.source === rightNode.id && e.target === leftNode.id)
   )
   
   if (existingEdge) {
@@ -925,49 +927,47 @@ function handleJoinTypeConfirm() {
     if (!existingEdge.data) existingEdge.data = { joinType: selectedJoinType.value, conditions: [], filters: [] }
     if (!existingEdge.data.conditions) existingEdge.data.conditions = []
     existingEdge.data.conditions.push({
-      left_column: sourceColumn,
-      right_column: targetColumn,
+      left_column: leftColumn,
+      right_column: rightColumn,
       operator: '='
     })
-    console.log('更新现有连接:', existingEdge)
     Message.success('已添加连接条件')
   } else {
-    // 强制连接方向从左到右：源节点始终使用右侧(source)，目标节点始终使用左侧(target)
-    // 这符合 SQL JOIN 的语义（左表 JOIN 右表）
-    const sourceSide = 'right'; // 源节点使用右侧连接点（source 类型）
-    const targetSide = 'left';  // 目标节点使用左侧连接点（target 类型）
+    // 左节点使用右侧连接点（source），右节点使用左侧连接点（target）
+    const leftSide = 'right'
+    const rightSide = 'left'
     
-    // 更新节点数据中的连接点计数（使用响应式更新）
-    const sourceHandlesKey = sourceSide === 'left' ? 'leftHandles' : 'rightHandles';
-    const targetHandlesKey = targetSide === 'left' ? 'leftHandles' : 'rightHandles';
+    // 更新节点数据中的连接点计数
+    const leftHandlesKey = 'rightHandles'
+    const rightHandlesKey = 'leftHandles'
     
     // 获取当前计数
-    const sourceCurrentCount = sourceNodeObj.data[sourceHandlesKey] || 0;
-    const targetCurrentCount = targetNodeObj.data[targetHandlesKey] || 0;
+    const leftCurrentCount = leftNode.data[leftHandlesKey] || 0
+    const rightCurrentCount = rightNode.data[rightHandlesKey] || 0
     
     // 新增连接点索引
-    const sourceHandleIndex = sourceCurrentCount;
-    const targetHandleIndex = targetCurrentCount;
+    const leftHandleIndex = leftCurrentCount
+    const rightHandleIndex = rightCurrentCount
     
-    // 使用Vue的响应式更新方式：重新赋值整个data对象
-    sourceNodeObj.data = {
-      ...sourceNodeObj.data,
-      [sourceHandlesKey]: sourceCurrentCount + 1
-    };
-    targetNodeObj.data = {
-      ...targetNodeObj.data,
-      [targetHandlesKey]: targetCurrentCount + 1
-    };
+    // 使用Vue的响应式更新方式
+    leftNode.data = {
+      ...leftNode.data,
+      [leftHandlesKey]: leftCurrentCount + 1
+    }
+    rightNode.data = {
+      ...rightNode.data,
+      [rightHandlesKey]: rightCurrentCount + 1
+    }
     
     // 生成连接点ID
-    const sourceHandle = `${sourceNode}-${sourceSide}-${sourceHandleIndex}`;
-    const targetHandle = `${targetNode}-${targetSide}-${targetHandleIndex}`;
+    const sourceHandle = `${leftNode.id}-${leftSide}-${leftHandleIndex}`
+    const targetHandle = `${rightNode.id}-${rightSide}-${rightHandleIndex}`
 
-    // 创建新连接
+    // 创建新连接（从左节点到右节点）
     const newEdge: Edge = {
-      id: `e${sourceNode}-${targetNode}`,
-      source: sourceNode,
-      target: targetNode,
+      id: `e${leftNode.id}-${rightNode.id}`,
+      source: leftNode.id,
+      target: rightNode.id,
       sourceHandle: sourceHandle,
       targetHandle: targetHandle,
       type: 'default',
@@ -975,8 +975,8 @@ function handleJoinTypeConfirm() {
       data: {
         joinType: selectedJoinType.value,
         conditions: [{
-          left_column: sourceColumn,
-          right_column: targetColumn,
+          left_column: leftColumn,
+          right_column: rightColumn,
           operator: '='
         }],
         filters: []
@@ -1000,8 +1000,6 @@ function handleJoinTypeConfirm() {
   connectingColumn.value = null
   pendingConnection.value = null
   showJoinTypeDialog.value = false
-  
-  console.log('=== 连接创建完成 ===')
 }
 
 // 取消JOIN类型选择
@@ -1371,11 +1369,14 @@ async function handlePreview() {
   
   previewing.value = true
   try {
-    const result = await previewView(viewId.value, 1000)  // 获取更多数据用于分页
+    // 使用后端分页查询
+    const result = await previewView(viewId.value, {
+      page: previewPagination.value.current,
+      page_size: previewPagination.value.pageSize
+    })
     
-    // 重置分页
-    previewPagination.value.total = result.data.length
-    previewPagination.value.current = 1
+    // 更新分页信息
+    previewPagination.value.total = result.total
     
     // 处理列配置
     previewColumns.value = result.columns.map((c, index) => ({
@@ -1387,22 +1388,19 @@ async function handlePreview() {
       tooltip: true
     }))
     
-    // 存储所有数据
-    const allData = result.data.map((row, idx) => {
-      const obj: Record<string, any> = { _key: `${idx}_${Date.now()}` }
+    // 存储当前页数据
+    previewData.value = result.data.map((row, idx) => {
+      const obj: Record<string, any> = { _key: `${previewPagination.value.current}_${idx}_${Date.now()}` }
       result.columns.forEach((col, i) => {
         obj[col] = formatCellValue(row[i])
       })
       return obj
     })
     
-    // 存储所有数据，用于分页
-    previewData.value = allData
-    
-    if (allData.length === 0) {
+    if (result.data.length === 0) {
       Message.info('查询成功，但没有返回数据')
     } else {
-      Message.success(`查询成功，返回 ${allData.length} 条记录`)
+      Message.success(`查询成功，共 ${result.total} 条记录`)
     }
   } catch (e: any) {
     Message.error(e.message || '预览失败')
@@ -1466,17 +1464,76 @@ function clearPreviewData() {
 // 处理表格页码变化
 function handleTablePageChange(page: number) {
   previewPagination.value.current = page
+  handlePreview()  // 重新请求后端数据
 }
 
 // 处理表格每页条数变化
 function handleTablePageSizeChange(pageSize: number) {
   previewPagination.value.pageSize = pageSize
   previewPagination.value.current = 1
+  handlePreview()  // 重新请求后端数据
 }
 
 // 返回列表
 function goBack() {
   router.push('/semantic/views')
+}
+
+// 面板宽度调整相关函数
+let startX = 0
+let startWidth = 0
+
+function startResize(type: 'left' | 'right', event: MouseEvent) {
+  isResizing.value = true
+  resizeType.value = type
+  startX = event.clientX
+  
+  if (type === 'left') {
+    startWidth = tablePanelWidth.value
+  } else {
+    startWidth = propertyPanelWidth.value
+  }
+  
+  // 添加全局样式防止文本选中
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  
+  document.addEventListener('mousemove', handleResize)
+  document.addEventListener('mouseup', stopResize)
+}
+
+function handleResize(event: MouseEvent) {
+  if (!isResizing.value || !resizeType.value) return
+  
+  const deltaX = event.clientX - startX
+  
+  if (resizeType.value === 'left') {
+    // 左侧面板：根据鼠标移动距离调整宽度
+    const newWidth = startWidth + deltaX
+    if (newWidth >= 180 && newWidth <= 400) {
+      tablePanelWidth.value = newWidth
+    }
+  } else if (resizeType.value === 'right') {
+    // 右侧面板：根据鼠标移动距离调整宽度（反向）
+    const newWidth = startWidth - deltaX
+    if (newWidth >= 350 && newWidth <= 600) {
+      propertyPanelWidth.value = newWidth
+    }
+  }
+}
+
+function stopResize() {
+  isResizing.value = false
+  resizeType.value = null
+  startX = 0
+  startWidth = 0
+  
+  // 恢复全局样式
+  document.body.style.cursor = ''
+  document.body.style.userSelect = ''
+  
+  document.removeEventListener('mousemove', handleResize)
+  document.removeEventListener('mouseup', stopResize)
 }
 
 // 视图类型切换
@@ -1664,6 +1721,14 @@ onMounted(async () => {
     await loadTables()
   }
 })
+
+onUnmounted(() => {
+  // 清理事件监听器
+  if (isResizing.value) {
+    document.removeEventListener('mousemove', handleResize)
+    document.removeEventListener('mouseup', stopResize)
+  }
+})
 </script>
 
 <style scoped>
@@ -1700,11 +1765,13 @@ onMounted(async () => {
 }
 
 .table-panel {
-  width: 220px;
+  width: 250px;
   background: #fff;
   border-right: 1px solid #e5e6eb;
   display: flex;
   flex-direction: column;
+  position: relative;
+  flex-shrink: 0;
 }
 
 .panel-header {
@@ -1714,6 +1781,20 @@ onMounted(async () => {
   padding: 12px;
   border-bottom: 1px solid #e5e6eb;
   font-weight: 500;
+}
+
+.panel-header :deep(.arco-select-view-value) {
+  max-width: 100px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.panel-header :deep(.arco-select-option) {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .panel-header .toggle-icon {
@@ -1733,6 +1814,7 @@ onMounted(async () => {
 .table-list {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 8px;
 }
 
@@ -1751,6 +1833,13 @@ onMounted(async () => {
 .table-item:hover {
   background: #e8f3ff;
   color: #165dff;
+}
+
+.table-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .canvas-panel {
@@ -1921,15 +2010,15 @@ onMounted(async () => {
 
 /* MiniMap 样式 */
 .canvas-panel :deep(.vue-flow__minimap) {
-  bottom: var(--minimap-bottom, 120px);
-  right: var(--minimap-right, 20px);
+  bottom: 20px;
+  right: 20px;
   width: 200px;
   height: 150px;
   background: rgba(255, 255, 255, 0.95);
   border-radius: 8px;
   border: 1px solid #e5e6eb;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  /* 绝对定位，相对于 canvas-panel */
+  /* 固定在右下角 */
   position: absolute !important;
   z-index: 1000;
 }
@@ -2042,11 +2131,26 @@ onMounted(async () => {
 }
 
 .property-panel {
-  width: 280px;
   background: #fff;
   border-left: 1px solid #e5e6eb;
   padding: 12px;
   overflow-y: auto;
+  overflow-x: hidden;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.property-panel :deep(.arco-tabs) {
+  width: 100%;
+}
+
+.property-panel :deep(.arco-tabs-content) {
+  width: 100%;
+  padding: 0;
+}
+
+.property-panel :deep(.arco-tabs-pane) {
+  width: 100%;
 }
 
 .join-config {
@@ -2178,8 +2282,7 @@ onMounted(async () => {
   background: #fff;
   border: 1px solid #e5e6eb;
   border-radius: 6px;
-  overflow: auto;
-  max-width: 100%;
+  overflow: visible;
 }
 
 .preview-content :deep(.arco-table) {
@@ -2211,13 +2314,19 @@ onMounted(async () => {
   background: #165dff;
 }
 
-/* 单元格溢出省略 */
+/* 单元格样式 - 确保对齐 */
 .preview-content :deep(.arco-table-td) {
   padding: 8px 12px;
-  max-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 表格容器无滚动条 */
+.preview-content :deep(.arco-table-container) {
+  overflow: visible;
+}
+
+.preview-content :deep(.arco-table-body) {
+  overflow: visible;
 }
 
 .preview-content :deep(.arco-table-tr:hover .arco-table-td:not(.arco-table-col-fixed-left):not(.arco-table-col-fixed-right)) {
@@ -2228,4 +2337,114 @@ onMounted(async () => {
 .preview-content .arco-empty {
   padding: 40px 0;
 }
+
+/* 强制Handle垂直居中 - 覆盖Vue Flow的默认样式 */
+/* 考虑到表头的存在，调整到视觉中心（表头底部 + 字段区域一半） */
+/* 表头高度约38px，所以从50%向下偏移约17px到达视觉中心 */
+.canvas-panel :deep(.vue-flow__handle) {
+  top: calc(50% + 17px) !important;
+  transform: none !important;
+}
+
+/* 使用data属性选择器确保样式生效 */
+.canvas-panel :deep([data-handlepos="left"]) {
+  left: -6px !important;
+  top: calc(50% + 17px) !important;
+  transform: none !important;
+}
+
+.canvas-panel :deep([data-handlepos="right"]) {
+  right: -6px !important;
+  top: calc(50% + 17px) !important;
+  transform: none !important;
+}
+
+.canvas-panel :deep(.vue-flow__handle-left) {
+  left: -6px !important;
+}
+
+.canvas-panel :deep(.vue-flow__handle-right) {
+  right: -6px !important;
+}
+
+/* 拖拽调整手柄 - 明显可见 */
+.resize-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  cursor: col-resize;
+  background: transparent;
+  transition: all 0.2s;
+  z-index: 1000;
+}
+
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 2px;
+  height: 40px;
+  background: #d9d9d9;
+  border-radius: 1px;
+  transition: all 0.2s;
+}
+
+.resize-handle:hover::after,
+.resize-handle:active::after {
+  background: #165dff;
+  height: 60px;
+}
+
+.resize-handle:hover {
+  background: rgba(22, 93, 255, 0.08);
+}
+
+.resize-handle:active {
+  background: rgba(22, 93, 255, 0.15);
+}
+
+.resize-handle-right {
+  right: -3px;
+}
+
+.resize-handle-left {
+  left: -3px;
+}
+
+
+
+/* 拖拽时的遮罩层 */
+.designer-body.resizing {
+  user-select: none;
+}
+
+/* 左侧面板展开收起过渡动画 */
+.slide-left-enter-active,
+.slide-left-leave-active {
+  transition: all 0.3s ease;
+}
+
+.slide-left-enter-from,
+.slide-left-leave-to {
+  width: 0 !important;
+  opacity: 0;
+  transform: translateX(-100%);
+}
+
+/* 右侧面板展开收起过渡动画 */
+.slide-right-enter-active,
+.slide-right-leave-active {
+  transition: all 0.3s ease;
+}
+
+.slide-right-enter-from,
+.slide-right-leave-to {
+  width: 0 !important;
+  opacity: 0;
+  transform: translateX(100%);
+}
+
 </style>

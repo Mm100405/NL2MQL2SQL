@@ -1,25 +1,25 @@
 <template>
   <div class="table-node" ref="nodeElement" :class="{ selected: selected }">
     <!-- 隐藏的连接点用于渲染连线 - 动态左右两侧 -->
-    <!-- 左侧连接点作为 target（接收连接）- 在字段区域内均匀分布 -->
+    <!-- 左侧连接点作为 target（接收连接）- 垂直居中 -->
     <Handle
       v-for="handle in leftHandles"
       :key="handle.id"
       :id="handle.id"
       type="target"
       :position="Position.Left"
-      class="invisible-handle"
       :style="handle.style"
+      class="invisible-handle handle-center"
     />
-    <!-- 右侧连接点作为 source（发出连接）- 在字段区域内均匀分布 -->
+    <!-- 右侧连接点作为 source（发出连接）- 垂直居中 -->
     <Handle
       v-for="handle in rightHandles"
       :key="handle.id"
       :id="handle.id"
       type="source"
       :position="Position.Right"
-      class="invisible-handle"
       :style="handle.style"
+      class="invisible-handle handle-center"
     />
     
     <div class="table-header">
@@ -57,7 +57,7 @@
           }"
           @click="handleColumnClick(col)"
         >
-          <icon-key v-if="col.is_pk" class="pk-icon" />
+          <KeyIcon v-if="col.is_pk" class="pk-icon" />
           <span class="column-name">{{ col.name }}</span>
           <span class="column-type">{{ col.type }}</span>
         </div>
@@ -86,7 +86,7 @@
             class="column-checkbox"
           >
             <div class="column-info">
-              <icon-key v-if="col.is_pk" class="pk-icon" />
+              <KeyIcon v-if="col.is_pk" class="pk-icon" />
               <span class="col-name">{{ col.name }}</span>
               <span class="col-type">{{ col.type }}</span>
             </div>
@@ -105,7 +105,14 @@
 import { ref, computed, inject, onMounted, nextTick, watch } from 'vue'
 import { Handle, Position } from '@vue-flow/core'
 import type { NodeProps } from '@vue-flow/core'
-import { IconDelete } from '@arco-design/web-vue/es/icon'
+import { IconDelete, IconStorage, IconEdit, IconDown } from '@arco-design/web-vue/es/icon'
+
+// Key 图标组件 (主键图标)
+const KeyIcon = {
+  template: `<svg viewBox="0 0 1024 1024" version="1.1" xmlns="http://www.w3.org/2000/svg" width="1em" height="1em" fill="currentColor">
+    <path d="M823.8 349.8c-22.4-53.2-61.4-97.4-112.8-126.4-51.4-29-110.6-41.2-169.4-35-58.8 6.2-114.2 30.6-158.4 69.6-44.2 39-76.4 90.8-92 148.4-15.6 57.6-13.8 118.6 5.2 175.2L104 778.2V928h148l20-20v-84h84l20-20v-84h84l20-20v-84h84l28.2-28.2c56.6 19 117.6 20.8 175.2 5.2 57.6-15.6 109.4-47.8 148.4-92 39-44.2 63.4-99.6 69.6-158.4 6.2-58.8-6-118-35-169.4zM672 480c-26.5 0-48-21.5-48-48s21.5-48 48-48 48 21.5 48 48-21.5 48-48 48z"/>
+  </svg>`
+}
 
 const nodeElement = ref<HTMLElement | null>(null)
 const nodeHeight = ref(0)
@@ -170,17 +177,28 @@ watch(visibleColumns, () => {
 }, { deep: true })
 
 // 左右连接点配置 - 在物理表左右两侧垂直居中
+// 使用表头高度 + 字段区域高度的一半来计算视觉中心
 const leftHandles = computed(() => {
   const count = props.data.leftHandles || 0
   if (count === 0) return []
   const positions = []
-
+  
+  // 表头固定高度约38px，字段区域最大400px
+  const headerHeight = 38
+  const columnCount = visibleColumns.value.length
+  const columnItemHeight = 36
+  const maxColumnsHeight = 400
+  const actualColumnsHeight = Math.min(columnCount * columnItemHeight, maxColumnsHeight)
+  
+  // 视觉中心 = 表头高度 + 字段区域高度的一半
+  const visualCenter = headerHeight + actualColumnsHeight / 2
+  
   for (let i = 0; i < count; i++) {
     positions.push({
       id: `${props.data.alias}-left-${i}`,
       style: {
-        top: '50%',
-        transform: 'translate(0, -50%)'
+        top: `${visualCenter}px`,
+        left: '-6px'
       }
     })
   }
@@ -191,13 +209,23 @@ const rightHandles = computed(() => {
   const count = props.data.rightHandles || 0
   if (count === 0) return []
   const positions = []
-
+  
+  // 表头固定高度约38px，字段区域最大400px
+  const headerHeight = 38
+  const columnCount = visibleColumns.value.length
+  const columnItemHeight = 36
+  const maxColumnsHeight = 400
+  const actualColumnsHeight = Math.min(columnCount * columnItemHeight, maxColumnsHeight)
+  
+  // 视觉中心 = 表头高度 + 字段区域高度的一半
+  const visualCenter = headerHeight + actualColumnsHeight / 2
+  
   for (let i = 0; i < count; i++) {
     positions.push({
       id: `${props.data.alias}-right-${i}`,
       style: {
-        top: '50%',
-        transform: 'translate(0, -50%)'
+        top: `${visualCenter}px`,
+        right: '-6px'
       }
     })
   }
@@ -278,9 +306,13 @@ onMounted(() => {
   z-index: 100 !important;
   border: none !important;
   background: transparent !important;
-  /* 确保不干扰 Vue Flow 的默认定位 */
   position: absolute !important;
-  /* 不要在这里设置transform，让style中的transform生效 */
+}
+
+/* 连接点垂直居中 */
+.handle-center {
+  top: 50% !important;
+  transform: translateY(-50%) !important;
 }
 
 .table-node:hover {

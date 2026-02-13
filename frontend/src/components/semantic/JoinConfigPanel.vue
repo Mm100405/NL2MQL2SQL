@@ -7,7 +7,7 @@
           <a-option value="INNER">
             <div class="join-option">
               <span class="join-icon">⚡</span>
-              <div>
+              <div class="join-info">
                 <div class="join-type">INNER JOIN</div>
                 <div class="join-desc">只返回匹配的记录</div>
               </div>
@@ -16,7 +16,7 @@
           <a-option value="LEFT">
             <div class="join-option">
               <span class="join-icon">⬅️</span>
-              <div>
+              <div class="join-info">
                 <div class="join-type">LEFT JOIN</div>
                 <div class="join-desc">返回左表所有记录</div>
               </div>
@@ -25,7 +25,7 @@
           <a-option value="RIGHT">
             <div class="join-option">
               <span class="join-icon">➡️</span>
-              <div>
+              <div class="join-info">
                 <div class="join-type">RIGHT JOIN</div>
                 <div class="join-desc">返回右表所有记录</div>
               </div>
@@ -34,7 +34,7 @@
           <a-option value="FULL">
             <div class="join-option">
               <span class="join-icon">↔️</span>
-              <div>
+              <div class="join-info">
                 <div class="join-type">FULL OUTER JOIN</div>
                 <div class="join-desc">返回两表所有记录</div>
               </div>
@@ -43,7 +43,7 @@
           <a-option value="CROSS">
             <div class="join-option">
               <span class="join-icon">✖️</span>
-              <div>
+              <div class="join-info">
                 <div class="join-type">CROSS JOIN</div>
                 <div class="join-desc">笛卡尔积</div>
               </div>
@@ -54,82 +54,90 @@
 
       <!-- JOIN条件 -->
       <a-form-item label="连接条件">
-        <div class="conditions-list">
+        <div class="conditions-wrapper">
           <div 
             v-for="(cond, idx) in formData.conditions" 
             :key="idx"
-            class="condition-item"
+            class="condition-card"
           >
-            <a-select 
-              :model-value="cond.left_column" 
-              placeholder="左表字段"
-              size="small"
-              @change="(val: string) => handleLeftColumnChange(val, cond)"
-            >
-              <a-option 
-                v-for="col in leftColumns" 
-                :key="col.value" 
-                :value="col.value"
+            <div class="condition-content">
+              <a-select 
+                :model-value="cond.left_column" 
+                placeholder="左表字段"
+                size="small"
+                class="cond-field"
+                @change="(val: string) => handleLeftColumnChange(val, cond)"
               >
-                {{ col.label }}
-              </a-option>
-            </a-select>
-            
-            <a-select 
-              v-model="cond.operator" 
-              size="small"
-              style="width: 80px"
-              @change="emitUpdate"
-            >
-              <a-option value="=">=</a-option>
-              <a-option value="!=">!=</a-option>
-              <a-option value=">">></a-option>
-              <a-option value="<"><</a-option>
-              <a-option value=">=">>=</a-option>
-              <a-option value="<="><=</a-option>
-            </a-select>
-            
-            <a-select 
-              :model-value="cond.right_column" 
-              placeholder="右表字段"
-              size="small"
-              @change="(val: string) => handleRightColumnChange(val, cond)"
-            >
-              <a-option 
-                v-for="col in rightColumns" 
-                :key="col.value" 
-                :value="col.value"
+                <a-option 
+                  v-for="col in leftColumns" 
+                  :key="col.value" 
+                  :value="col.value"
+                  :title="col.label"
+                >
+                  {{ col.label }}
+                </a-option>
+              </a-select>
+              
+              <a-select 
+                v-model="cond.operator" 
+                size="small"
+                class="cond-operator"
+                @change="emitUpdate"
               >
-                {{ col.label }}
-              </a-option>
-            </a-select>
+                <a-option value="=">=</a-option>
+                <a-option value="!=">≠</a-option>
+                <a-option value=">">&gt;</a-option>
+                <a-option value="<">&lt;</a-option>
+                <a-option value=">=">≥</a-option>
+                <a-option value="<=">≤</a-option>
+              </a-select>
+              
+              <a-select 
+                :model-value="cond.right_column" 
+                placeholder="右表字段"
+                size="small"
+                class="cond-field"
+                @change="(val: string) => handleRightColumnChange(val, cond)"
+              >
+                <a-option 
+                  v-for="col in rightColumns" 
+                  :key="col.value" 
+                  :value="col.value"
+                  :title="col.label"
+                >
+                  {{ col.label }}
+                </a-option>
+              </a-select>
+            </div>
             
             <a-button 
               type="text" 
               size="mini" 
               status="danger"
+              class="cond-delete"
               @click="removeCondition(idx)"
             >
               <icon-delete />
             </a-button>
           </div>
+          
+          <a-button 
+            size="small" 
+            type="dashed" 
+            long
+            class="add-btn"
+            @click="addCondition"
+          >
+            <template #icon><icon-plus /></template>
+            添加条件
+          </a-button>
         </div>
-        
-        <a-button 
-          size="small" 
-          type="dashed" 
-          long
-          @click="addCondition"
-        >
-          <template #icon><icon-plus /></template>
-          添加条件
-        </a-button>
       </a-form-item>
 
       <!-- WHERE筛选条件 -->
       <a-form-item>
         <template #label>
-          <div style="display: flex; justify-content: space-between; width: 100%">
+          <div class="filter-label">
             <span>筛选条件 (WHERE)</span>
             <a-switch 
               v-model="showFilters" 
@@ -140,57 +148,63 @@
           </div>
         </template>
         
-        <div v-if="showFilters" class="filters-section">
+        <div v-if="showFilters" class="filters-wrapper">
           <div 
             v-for="(filter, idx) in formData.filters" 
             :key="idx"
-            class="filter-item"
+            class="filter-card"
           >
-            <a-select 
-              :model-value="filter.column" 
-              placeholder="字段"
-              size="small"
-              @change="(val: string) => handleFilterColumnChange(val, filter)"
-            >
-              <a-option 
-                v-for="col in allColumns" 
-                :key="col.value" 
-                :value="col.value"
+            <div class="filter-content">
+              <a-select 
+                :model-value="filter.column" 
+                placeholder="字段"
+                size="small"
+                class="filter-field"
+                @change="(val: string) => handleFilterColumnChange(val, filter)"
               >
-                {{ col.label }}
-              </a-option>
-            </a-select>
-            
-            <a-select 
-              v-model="filter.operator" 
-              size="small"
-              style="width: 100px"
-              @change="emitUpdate"
-            >
-              <a-option value="=">=</a-option>
-              <a-option value="!=">!=</a-option>
-              <a-option value=">">></a-option>
-              <a-option value="<"><</a-option>
-              <a-option value=">=">>=</a-option>
-              <a-option value="<="><=</a-option>
-              <a-option value="LIKE">LIKE</a-option>
-              <a-option value="IN">IN</a-option>
-              <a-option value="IS NULL">IS NULL</a-option>
-              <a-option value="IS NOT NULL">IS NOT NULL</a-option>
-            </a-select>
-            
-            <a-input 
-              v-if="!['IS NULL', 'IS NOT NULL'].includes(filter.operator)"
-              v-model="filter.value" 
-              placeholder="值"
-              size="small"
-              @change="emitUpdate"
-            />
+                <a-option 
+                  v-for="col in allColumns" 
+                  :key="col.value" 
+                  :value="col.value"
+                  :title="col.label"
+                >
+                  {{ col.label }}
+                </a-option>
+              </a-select>
+              
+              <a-select 
+                v-model="filter.operator" 
+                size="small"
+                class="filter-operator"
+                @change="emitUpdate"
+              >
+                <a-option value="=">=</a-option>
+                <a-option value="!=">≠</a-option>
+                <a-option value=">">&gt;</a-option>
+                <a-option value="<">&lt;</a-option>
+                <a-option value=">=">≥</a-option>
+                <a-option value="<=">≤</a-option>
+                <a-option value="LIKE">LIKE</a-option>
+                <a-option value="IN">IN</a-option>
+                <a-option value="IS NULL">IS NULL</a-option>
+                <a-option value="IS NOT NULL">IS NOT NULL</a-option>
+              </a-select>
+              
+              <a-input 
+                v-if="!['IS NULL', 'IS NOT NULL'].includes(filter.operator)"
+                v-model="filter.value" 
+                placeholder="值"
+                size="small"
+                class="filter-value"
+                @change="emitUpdate"
+              />
+            </div>
             
             <a-button 
               type="text" 
               size="mini" 
               status="danger"
+              class="filter-delete"
               @click="removeFilter(idx)"
             >
               <icon-delete />
@@ -201,6 +215,7 @@
             size="small" 
             type="dashed" 
             long
+            class="add-btn"
             @click="addFilter"
           >
             <template #icon><icon-plus /></template>
@@ -395,24 +410,43 @@ function emitUpdate() {
 
 <style scoped>
 .join-config-panel {
-  padding: 8px 0;
+  width: 100%;
+  min-width: 0;
 }
 
+.join-config-panel :deep(.arco-form-item) {
+  margin-bottom: 16px;
+}
+
+.join-config-panel :deep(.arco-form-item-label) {
+  font-weight: 500;
+  color: #1d2129;
+  margin-bottom: 8px;
+}
+
+/* 连接类型选择 */
 .join-option {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
   padding: 4px 0;
 }
 
 .join-icon {
-  font-size: 20px;
-  min-width: 24px;
+  font-size: 18px;
+  min-width: 22px;
+  text-align: center;
+}
+
+.join-info {
+  flex: 1;
+  min-width: 0;
 }
 
 .join-type {
   font-weight: 500;
   color: #1d2129;
+  font-size: 13px;
 }
 
 .join-desc {
@@ -421,47 +455,150 @@ function emitUpdate() {
   margin-top: 2px;
 }
 
-.conditions-list,
-.filters-section {
+/* 筛选条件标签 */
+.filter-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+/* 条件容器 - 宽度100% */
+.conditions-wrapper,
+.filters-wrapper {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  margin-bottom: 8px;
+  width: 100%;
 }
 
-.condition-item,
-.filter-item {
+/* 条件卡片 - 宽度填满容器，高度自适应 */
+.condition-card,
+.filter-card {
   display: flex;
-  align-items: center;
+  align-items: stretch;
   gap: 8px;
-  padding: 8px;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 10px;
   background: #f7f8fa;
   border-radius: 6px;
+  border: 1px solid transparent;
+  box-sizing: border-box;
+  transition: all 0.2s;
 }
 
-.condition-item > :deep(.arco-select),
-.filter-item > :deep(.arco-select) {
+.condition-card:hover,
+.filter-card:hover {
+  background: #f0f5ff;
+  border-color: #165dff;
+}
+
+/* 条件内容区域 - 占据所有可用空间，不换行 */
+.condition-content,
+.filter-content {
+  display: flex;
   flex: 1;
+  gap: 8px;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: nowrap;
+  overflow: hidden;
 }
 
-.condition-item > :deep(.arco-input-wrapper),
-.filter-item > :deep(.arco-input-wrapper) {
-  flex: 1;
+/* 字段选择器 - 自适应宽度，保证内容显示 */
+.cond-field,
+.filter-field {
+  flex: 1 1 auto;
+  min-width: 100px;
+  max-width: 40%;
 }
 
+/* 操作符选择器 - 固定宽度 */
+.cond-operator,
+.filter-operator {
+  flex: 0 0 auto;
+  width: 70px;
+  min-width: 70px;
+}
+
+/* 筛选值输入框 - 自适应宽度 */
+.filter-value {
+  flex: 1 1 auto;
+  min-width: 80px;
+}
+
+/* 删除按钮 - 固定大小，垂直居中 */
+.cond-delete,
+.filter-delete {
+  flex: 0 0 28px;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  align-self: center;
+}
+
+.cond-delete:hover,
+.filter-delete:hover {
+  background: rgba(255, 77, 79, 0.1) !important;
+}
+
+/* 添加按钮 */
+.add-btn {
+  margin-top: 4px;
+}
+
+/* SQL预览 */
 .sql-preview {
   background: #1e1e1e;
   color: #d4d4d4;
-  padding: 12px;
+  padding: 12px 16px;
   border-radius: 6px;
-  font-family: 'Consolas', 'Monaco', monospace;
+  font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
   font-size: 12px;
   line-height: 1.6;
   overflow-x: auto;
+  border: 1px solid #3a3a3a;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .sql-preview pre {
   margin: 0;
   white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* 下拉选项样式 */
+:deep(.arco-select-option) {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 表单输入框100%宽度 */
+:deep(.arco-select-view) {
+  width: 100%;
+}
+
+:deep(.arco-input-wrapper) {
+  width: 100%;
+}
+
+/* 确保选择框内容可见 */
+:deep(.arco-select-view-value) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 确保表单内容不溢出 */
+:deep(.arco-form-item-content) {
+  width: 100%;
+  min-width: 0;
 }
 </style>

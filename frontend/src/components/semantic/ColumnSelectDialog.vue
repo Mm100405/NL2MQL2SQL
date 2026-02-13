@@ -31,7 +31,7 @@
             <a-checkbox :value="col.name">
               <div class="column-content">
                 <div class="column-left">
-                  <icon-key v-if="col.is_pk" class="pk-icon" />
+                  <KeyIcon v-if="col.is_pk" />
                   <span class="column-name">{{ col.name }}</span>
                 </div>
                 <div class="column-right">
@@ -52,7 +52,26 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, h } from 'vue'
+
+// Key 图标组件 (主键图标)
+const KeyIcon = {
+  render() {
+    return h('svg', {
+      viewBox: '0 0 1024 1024',
+      version: '1.1',
+      xmlns: 'http://www.w3.org/2000/svg',
+      width: '1em',
+      height: '1em',
+      fill: 'currentColor',
+      class: 'pk-icon'
+    }, [
+      h('path', {
+        d: 'M823.8 349.8c-22.4-53.2-61.4-97.4-112.8-126.4-51.4-29-110.6-41.2-169.4-35-58.8 6.2-114.2 30.6-158.4 69.6-44.2 39-76.4 90.8-92 148.4-15.6 57.6-13.8 118.6 5.2 175.2L104 778.2V928h148l20-20v-84h84l20-20v-84h84l20-20v-84h84l28.2-28.2c56.6 19 117.6 20.8 175.2 5.2 57.6-15.6 109.4-47.8 148.4-92 39-44.2 63.4-99.6 69.6-158.4 6.2-58.8-6-118-35-169.4zM672 480c-26.5 0-48-21.5-48-48s21.5-48 48-48 48 21.5 48 48-21.5 48-48 48z'
+      })
+    ])
+  }
+}
 
 export interface Column {
   name: string

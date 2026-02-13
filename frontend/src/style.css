@@ -1,3 +1,9 @@
+/* Vue Flow 样式 - 必须在组件加载前导入 */
+@import '@vue-flow/core/dist/style.css';
+@import '@vue-flow/core/dist/theme-default.css';
+@import '@vue-flow/controls/dist/style.css';
+@import '@vue-flow/minimap/dist/style.css';
+
 * {
   margin: 0;
   padding: 0;
