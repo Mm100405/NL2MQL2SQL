@@ -17,6 +17,11 @@ export interface ParsedJoin {
     operator: string
     right_column: string
   }>
+  filters: Array<{
+    column: string
+    operator: string
+    value: string
+  }>
 }
 
 export interface ParsedSQL {
@@ -84,16 +89,63 @@ export function parseSQL(sql: string): ParsedSQL | null {
 
       // 解析ON条件
       const conditions: ParsedJoin['conditions'] = []
+      const filters: ParsedJoin['filters'] = []
       const condParts = onClause.split(/\s+AND\s+/i)
       
       for (const part of condParts) {
-        const condMatch = part.trim().match(/(\S+)\s*(=|!=|>|<|>=|<=)\s*(\S+)/)
-        if (condMatch) {
-          conditions.push({
-            left_column: condMatch[1],
-            operator: condMatch[2],
-            right_column: condMatch[3]
+        const trimmed = part.trim()
+        
+        // 处理 IS NULL / IS NOT NULL
+        const nullMatch = trimmed.match(/(\S+)\s+IS\s+(NOT\s+)?NULL/i)
+        if (nullMatch) {
+          filters.push({
+            column: nullMatch[1],
+            operator: nullMatch[2] ? 'IS NOT NULL' : 'IS NULL',
+            value: ''
           })
+          continue
+        }
+        
+        // 处理其他条件
+        const condMatch = trimmed.match(/(\S+)\s*(=|!=|>|<|>=|<=|LIKE|IN)\s*(.+)/i)
+        if (condMatch) {
+          const leftPart = condMatch[1]
+          const operator = condMatch[2]
+          const rightPart = condMatch[3].trim()
+          
+          // 判断右侧是否为常量值（字符串、数字等）
+          // 常量值：带引号的字符串、纯数字、IN 列表等
+          const isRightConstant = 
+            /^'.*'$/.test(rightPart) ||  // 字符串 'xxx'
+            /^".*"$/.test(rightPart) ||  // 字符串 "xxx"
+            /^-?\d+(\.\d+)?$/.test(rightPart) ||  // 数字
+            /^\d+$/.test(rightPart) ||  // 纯数字
+            operator.toUpperCase() === 'IN'  // IN 子句
+          
+          if (isRightConstant) {
+            // 列与常量比较 -> 过滤条件
+            let value = rightPart
+            // 去掉引号
+            if ((value.startsWith("'") && value.endsWith("'")) ||
+                (value.startsWith('"') && value.endsWith('"'))) {
+              value = value.slice(1, -1)
+            }
+            filters.push({
+              column: leftPart,  // 保留完整的 column 格式 (如 t0.type_level)
+              operator,
+              value
+            })
+          } else {
+            // 列与列比较 -> 连接条件
+            // 提取列名（去掉表别名）
+            const leftColName = leftPart.includes('.') ? leftPart.split('.')[1] : leftPart
+            const rightColName = rightPart.includes('.') ? rightPart.split('.')[1] : rightPart
+            conditions.push({
+              left_column: leftColName,
+              operator,
+              right_column: rightColName
+            })
+          }
         }
       }
 
@@ -101,7 +153,8 @@ export function parseSQL(sql: string): ParsedSQL | null {
         leftTable: tables[joinIndex].alias,
         rightTable: tableAlias,
         joinType,
-        conditions
+        conditions,
+        filters
       })
 
       joinIndex++

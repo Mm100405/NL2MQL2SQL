@@ -1578,6 +1578,29 @@ async function parseSQLToCanvas() {
   nodes.value = []
   edges.value = []
 
+  // 从 SELECT 子句中提取每个表的字段
+  // parsed.columns 格式: ["t0.rec_id", "t0.task_num", "t1.type_name", ...]
+  const tableColumns: Map<string, Set<string>> = new Map()
+  for (const col of parsed.columns) {
+    if (col === '*') {
+      // SELECT * 的情况，所有表的所有字段都选中
+      continue
+    }
+    // 解析列名：可能是 "alias.column" 或 "column" 格式
+    const parts = col.split('.')
+    if (parts.length === 2) {
+      const alias = parts[0]
+      const columnName = parts[1]
+      if (!tableColumns.has(alias)) {
+        tableColumns.set(alias, new Set())
+      }
+      tableColumns.get(alias)!.add(columnName)
+    } else if (parts.length === 1) {
+      // 没有表别名的列，暂时跳过（需要后续推断）
+      console.log(`列 ${col} 没有表别名，跳过`)
+    }
+  }
+
   // 根据表名查找Dataset
   const addedNodes: Map<string, Node> = new Map()
   const nodePositions: Record<string, { x: number; y: number }> = {}
@@ -1607,6 +1630,17 @@ async function parseSQLToCanvas() {
     console.log(`找到匹配的表: ${dataset.name}`)
     foundCount++
 
+    // 获取该表在 SELECT 子句中的字段
+    const selectedCols = tableColumns.get(table.alias)
+    let selectedColumns: string[]
+    if (selectedCols && selectedCols.size > 0) {
+      // 只选择 SELECT 子句中指定的字段
+      selectedColumns = Array.from(selectedCols)
+    } else {
+      // 如果 SELECT 子句是 * 或没有该表的字段，选择全部字段
+      selectedColumns = dataset.columns?.map((c: any) => c.name) || []
+    }
+
     // 创建节点
     const position = table.position || { x: 100 + i * 300, y: 100 }
     nodePositions[table.alias] = position
@@ -1619,7 +1653,7 @@ async function parseSQLToCanvas() {
         alias: table.alias,
         datasetId: dataset.id,
         columns: dataset.columns || [],
-        selectedColumns: dataset.columns?.map((c: any) => c.name) || [],
+        selectedColumns,
         leftHandles: 0,
         rightHandles: 0
       }
@@ -1674,12 +1708,22 @@ async function parseSQLToCanvas() {
         target: join.rightTable,
         sourceHandle,
         targetHandle,
+        type: 'default',
+        label: `${join.joinType} JOIN`,
         data: {
           joinType: join.joinType,
           conditions: join.conditions,
-          filters: parsed.whereConditions || []
+          filters: join.filters || []
         },
-        animated: true
+        animated: true,
+        style: {
+          stroke: '#165dff',
+          strokeWidth: 3
+        },
+        markerEnd: {
+          type: 'arrowclosed',
+          color: '#165dff'
+        }
       })
       joinCount++
     }
