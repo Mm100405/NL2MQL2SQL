@@ -14,14 +14,14 @@
         </template>
         <template #status="{ record }">
           <a-space>
-            <a-badge :status="record.is_active ? 'success' : 'default'" />
+            <a-badge :status="record.is_active ? 'success' : 'normal'" />
             <span>{{ record.is_active ? '已启用' : '未启用' }}</span>
             <a-tag v-if="record.is_default" color="arcoblue" size="small">默认</a-tag>
           </a-space>
         </template>
         <template #connectionStatus="{ record }">
           <a-space>
-            <a-badge :status="record.connectionStatus?.connected ? 'success' : record.connectionStatus?.loading ? 'processing' : 'default'" />
+            <a-badge :status="record.connectionStatus?.connected ? 'success' : record.connectionStatus?.loading ? 'processing' : 'normal'" />
             <span v-if="record.connectionStatus?.loading">测试中...</span>
             <span v-else-if="record.connectionStatus?.connected">已连接</span>
             <span v-else>未连接</span>
@@ -82,7 +82,7 @@
           <a-input v-else v-model="form.model_name" placeholder="请输入模型名称，如 llama3" />
         </a-form-item>
         <a-form-item v-if="form.provider !== 'ollama'" field="api_key" label="API Key">
-          <a-input-password v-model="form.api_key" placeholder="请输入API Key" />
+          <a-input-password v-model="form.api_key" placeholder="请输入API Key" autocomplete="current-password" />
         </a-form-item>
         <a-form-item field="api_base" label="API地址">
           <a-input

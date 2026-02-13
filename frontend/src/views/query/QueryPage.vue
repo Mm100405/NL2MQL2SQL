@@ -33,7 +33,7 @@
                   <div class="result-actions">
                     <a-space>
                       <a-button type="text" size="small" @click="handleQuote(msg.queryResult.mql)">
-                        <template #icon><icon-share-internal /></template>
+                        <template #icon><icon-share-alt /></template>
                         引用
                       </a-button>
                       <a-button type="text" size="small" @click="showGlobalAddDimension(msg.queryResult)">
@@ -53,7 +53,7 @@
                         @click="msg.queryResult.viewType = 'chart'"
                         :style="msg.queryResult.viewType === 'chart' ? {} : { color: '#4e5969' }"
                       >
-                        <template #icon><icon-bar-chart /></template>
+                        <template #icon><icon-mosaic /></template>
                         图表
                       </a-button>
                       <a-button 
@@ -62,7 +62,7 @@
                         @click="msg.queryResult.viewType = 'table'"
                         :style="msg.queryResult.viewType !== 'chart' ? {} : { color: '#4e5969' }"
                       >
-                        <template #icon><icon-table /></template>
+                        <template #icon><icon-drive-file /></template>
                         表格
                       </a-button>
                     </a-space>
@@ -165,7 +165,7 @@
         <!-- 引用上下文显示区域 -->
         <div v-if="quotedMql" class="quoted-mql-box">
           <div class="quoted-header">
-            <span class="quoted-label"><icon-share-internal /> 正在引用上下文进行分析</span>
+            <span class="quoted-label"><icon-share-alt /> 正在引用上下文进行分析</span>
             <a-button type="text" size="mini" @click="quotedMql = null">
               <template #icon><icon-close /></template>
               取消引用
@@ -299,7 +299,21 @@
 import { ref, reactive, computed, nextTick, onMounted, watch, toRaw, h } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { Message, Dropdown, Doption } from '@arco-design/web-vue'
-import { IconLayers, IconSettings, IconMore } from '@arco-design/web-vue/es/icon'
+import { 
+  IconLayers, 
+  IconSettings, 
+  IconMore, 
+  IconDriveFile, 
+  IconShareAlt, 
+  IconPlusCircle,
+  IconDownload,
+  IconMosaic,
+  IconClose,
+  IconSend,
+  IconDelete,
+  IconPlus,
+  IconFilter
+} from '@arco-design/web-vue/es/icon'
 import { useSettingsStore } from '@/stores/settings'
 import ModelNotConfigured from '@/components/query/ModelNotConfigured.vue'
 import QuerySteps from '@/components/query/QuerySteps.vue'
@@ -307,6 +321,7 @@ import ChartContainer from '@/components/common/ChartContainer.vue'
 import type { FullQueryResponse, AnalysisStep } from '@/api/types'
 import { analyzeIntent, generateMQL, mql2sql, executeSQL, getQueryHistoryDetail, startConversation, getConversationHistory, saveConversationHistory } from '@/api/query'
 import { getMetrics, getDimensions, getMetricsAllowedDimensions } from '@/api/semantic'
+import { getSystemSetting } from '@/api/settings'
 import type { Metric, Dimension } from '@/api/types'
 
 const settingsStore = useSettingsStore()
@@ -982,8 +997,8 @@ onMounted(async () => {
     allDimensions.value = d
     
     // 获取时间格式配置
-    const settings = await fetch('/api/v1/settings/system/time_formats').then(res => res.json())
-    timeFormats.value = settings.value || []
+    const timeFormatSetting = await getSystemSetting('time_formats')
+    timeFormats.value = timeFormatSetting?.value || []
   } catch (e) {
     console.error('Failed to load metadata or settings:', e)
   }

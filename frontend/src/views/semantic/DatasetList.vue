@@ -336,10 +336,6 @@ const filteredDataSources = computed(() => {
 const filteredDatasets = computed(() => {
   let result = datasets.value.filter(d => d.datasource_id === selectedDatasource.value)
 
-  console.log('Debug - selectedDatasource:', selectedDatasource.value)
-  console.log('Debug - all datasets:', datasets.value.length)
-  console.log('Debug - filtered by datasource:', result.length)
-
   // 根据搜索关键词过滤
   if (searchKeyword.value) {
     const keyword = searchKeyword.value.toLowerCase()
@@ -348,17 +344,12 @@ const filteredDatasets = computed(() => {
       d.physical_name.toLowerCase().includes(keyword) ||
       d.description?.toLowerCase().includes(keyword)
     )
-    console.log('Debug - filtered by search:', result.length)
   }
 
   // 手动分页：根据当前页和每页条数截取数据
   const start = (paginationState.value.current - 1) * paginationState.value.pageSize
   const end = start + paginationState.value.pageSize
-  const paginatedResult = result.slice(start, end)
-
-  console.log('Debug - pagination: page', paginationState.value.current, 'size', paginationState.value.pageSize)
-  console.log('Debug - paginated result length:', paginatedResult.length)
-  return paginatedResult
+  return result.slice(start, end)
 })
 
 // 获取数据源下的表数量

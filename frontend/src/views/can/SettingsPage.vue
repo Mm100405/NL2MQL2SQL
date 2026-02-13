@@ -157,7 +157,7 @@
                   </a-input>
                 </a-form-item>
                 <a-form-item label="API密钥">
-                  <a-input-password :model-value="integrationSettings.apiKey" readonly>
+                  <a-input-password :model-value="integrationSettings.apiKey" readonly autocomplete="current-password">
                     <template #append>
                       <a-button type="text" @click="regenerateApiKey">重新生成</a-button>
                     </template>

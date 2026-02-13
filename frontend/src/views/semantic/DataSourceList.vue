@@ -68,13 +68,14 @@
             <a-input-number v-model="form.connection_config.port" :placeholder="getDefaultPort()" />
           </a-form-item>
           <a-form-item field="connection_config.username" label="用户名">
-            <a-input v-model="form.connection_config.username" placeholder="请输入用户名" />
+            <a-input v-model="form.connection_config.username" placeholder="请输入用户名" autocomplete="username" />
           </a-form-item>
           <a-form-item field="connection_config.password" label="密码">
             <a-space direction="vertical" :style="{ width: '100%' }">
               <a-input-password
                 v-model="form.connection_config.password"
                 placeholder="请输入密码"
+                autocomplete="current-password"
                 @input="handlePasswordInput"
               />
               <a-button type="outline" size="small" :loading="testing" @click="handleTestConnection">
@@ -159,10 +160,10 @@ function getDefaultPort() {
 function getStatusBadge(status: string) {
   const badges: Record<string, any> = {
     active: 'success',
-    inactive: 'default',
-    error: 'error'
+    inactive: 'normal',
+    error: 'danger'
   }
-  return badges[status] || 'default'
+  return badges[status] || 'normal'
 }
 
 function getStatusText(status: string) {
