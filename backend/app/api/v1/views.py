@@ -377,3 +377,367 @@ def get_view_tables(id: str, db: Session = Depends(get_db)):
                     tables.append(dataset.to_dict())
     
     return tables
+
+
+# ============ 字段管理接口（用于 filters 增强） ============
+class ViewColumnUpdate(BaseModel):
+    """视图字段更新"""
+    columns: List[dict]
+
+
+class ColumnValueConfig(BaseModel):
+    """字段值域配置"""
+    type: str = "none"  # none | enum | range | dict | sql
+    enum_values: Optional[List[str]] = None
+    range: Optional[dict] = None
+    dict_id: Optional[str] = None
+    sql_expression: Optional[str] = None
+    value_column: Optional[str] = None
+    label_column: Optional[str] = None
+
+
+class ColumnConfig(BaseModel):
+    """单个字段配置"""
+    name: str
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+    value_config: Optional[ColumnValueConfig] = None
+    filterable: Optional[bool] = True
+    filter_operators: Optional[List[str]] = None
+    synonyms: Optional[List[str]] = None
+
+
+@router.get("/{id}/filterable-fields")
+def get_filterable_fields(id: str, db: Session = Depends(get_db)):
+    """
+    获取视图可过滤字段列表
+    
+    用于 NL 解析和前端过滤器配置，返回所有可过滤字段及其值域配置
+    """
+    view = db.query(View).filter(View.id == id).first()
+    if not view:
+        raise HTTPException(status_code=404, detail="View not found")
+    
+    from app.models.field_dict import FieldDictionary
+    
+    filterable_fields = []
+    
+    # 获取视图的列配置
+    if view.columns:
+        for col in view.columns:
+            if col.get("filterable", True):  # 默认可过滤
+                field_info = {
+                    "name": col.get("name"),
+                    "display_name": col.get("display_name") or col.get("name"),
+                    "description": col.get("description") or col.get("default_comment", ""),
+                    "type": col.get("type"),
+                    "value_config": col.get("value_config", {"type": "none"}),
+                    "filter_operators": col.get("filter_operators", ["=", "!=", "IN", "NOT IN"]),
+                    "synonyms": col.get("synonyms", [])
+                }
+                
+                # 如果有字典，获取字典信息
+                dict_id = col.get("value_config", {}).get("dict_id") if col.get("value_config") else None
+                if dict_id:
+                    dictionary = db.query(FieldDictionary).filter(
+                        FieldDictionary.id == dict_id
+                    ).first()
+                    if dictionary:
+                        field_info["dict_info"] = {
+                            "id": dictionary.id,
+                            "name": dictionary.name,
+                            "display_name": dictionary.display_name,
+                            "source_type": dictionary.source_type
+                        }
+                
+                filterable_fields.append(field_info)
+    
+    return {
+        "view_id": id,
+        "view_name": view.name,
+        "view_display_name": view.display_name,
+        "fields": filterable_fields
+    }
+
+
+@router.put("/{id}/columns")
+def update_view_columns(id: str, data: ViewColumnUpdate, db: Session = Depends(get_db)):
+    """
+    更新视图字段配置
+    
+    包括展示名、说明、值域配置、过滤开关等
+    """
+    view = db.query(View).filter(View.id == id).first()
+    if not view:
+        raise HTTPException(status_code=404, detail="View not found")
+    
+    # 验证字段配置
+    for col in data.columns:
+        name = col.get("name")
+        if not name:
+            raise HTTPException(status_code=400, detail="字段名不能为空")
+        
+        # 验证字典引用
+        value_config = col.get("value_config", {})
+        if value_config.get("type") == "dict":
+            dict_id = value_config.get("dict_id")
+            if dict_id:
+                from app.models.field_dict import FieldDictionary
+                dictionary = db.query(FieldDictionary).filter(FieldDictionary.id == dict_id).first()
+                if not dictionary:
+                    raise HTTPException(status_code=400, detail=f"字典 '{dict_id}' 不存在")
+    
+    # 更新字段配置
+    view.columns = data.columns
+    db.commit()
+    db.refresh(view)
+    
+    return view.to_dict()
+
+
+@router.patch("/{id}/columns/{column_name}")
+def update_single_column(
+    id: str, 
+    column_name: str, 
+    data: ColumnConfig, 
+    db: Session = Depends(get_db)
+):
+    """
+    更新单个字段配置
+    """
+    view = db.query(View).filter(View.id == id).first()
+    if not view:
+        raise HTTPException(status_code=404, detail="View not found")
+    
+    if not view.columns:
+        raise HTTPException(status_code=400, detail="视图尚未配置字段列表")
+    
+    # 查找并更新字段
+    found = False
+    for i, col in enumerate(view.columns):
+        if col.get("name") == column_name:
+            found = True
+            # 合并更新
+            if data.display_name is not None:
+                col["display_name"] = data.display_name
+            if data.description is not None:
+                col["description"] = data.description
+            if data.value_config is not None:
+                col["value_config"] = data.value_config.model_dump()
+            if data.filterable is not None:
+                col["filterable"] = data.filterable
+            if data.filter_operators is not None:
+                col["filter_operators"] = data.filter_operators
+            if data.synonyms is not None:
+                col["synonyms"] = data.synonyms
+            view.columns[i] = col
+            break
+    
+    if not found:
+        raise HTTPException(status_code=404, detail=f"字段 '{column_name}' 不存在")
+    
+    db.commit()
+    db.refresh(view)
+    
+    return view.to_dict()
+
+
+@router.post("/{id}/columns/sync-from-source")
+async def sync_columns_from_source(id: str, db: Session = Depends(get_db)):
+    """
+    从物理表/视图同步字段元数据
+    
+    对于单表视图：从基础表同步字段
+    对于 JOIN 视图：从所有参与 JOIN 的表同步字段
+    对于 SQL 视图：无法自动同步，需手动配置
+    """
+    view = db.query(View).filter(View.id == id).first()
+    if not view:
+        raise HTTPException(status_code=404, detail="View not found")
+    
+    if view.view_type == ViewType.SQL:
+        raise HTTPException(status_code=400, detail="SQL 视图无法自动同步，请手动配置字段")
+    
+    datasets = {d.id: d for d in db.query(Dataset).all()}
+    existing_columns = view.columns or []
+    existing_names = {c.get("name") for c in existing_columns}
+    
+    new_columns = []
+    
+    if view.view_type == ViewType.SINGLE_TABLE and view.base_table_id:
+        dataset = datasets.get(view.base_table_id)
+        if dataset and dataset.columns:
+            for col in dataset.columns:
+                col_name = col.get("name")
+                if col_name not in existing_names:
+                    new_columns.append({
+                        "name": col_name,
+                        "source_column": col_name,
+                        "type": col.get("type"),
+                        "display_name": col_name,
+                        "description": "",
+                        "default_comment": col.get("comment", ""),
+                        "filterable": True,
+                        "value_config": {"type": "none"}
+                    })
+    
+    elif view.view_type == ViewType.JOINED and view.join_config:
+        tables = view.join_config.get("tables", [])
+        for t in tables:
+            dataset_id = t.get("id")
+            alias = t.get("alias", "")
+            dataset = datasets.get(dataset_id)
+            if dataset and dataset.columns:
+                for col in dataset.columns:
+                    col_name = f"{alias}.{col.get('name')}"
+                    if col_name not in existing_names:
+                        new_columns.append({
+                            "name": col_name,
+                            "source_table": alias,
+                            "source_column": col.get("name"),
+                            "type": col.get("type"),
+                            "display_name": col.get("name"),
+                            "description": "",
+                            "default_comment": col.get("comment", ""),
+                            "filterable": True,
+                            "value_config": {"type": "none"}
+                        })
+    
+    if new_columns:
+        view.columns = existing_columns + new_columns
+        db.commit()
+        db.refresh(view)
+    
+    return {
+        "message": f"同步完成，新增 {len(new_columns)} 个字段",
+        "new_columns_count": len(new_columns),
+        "view": view.to_dict()
+    }
+
+
+@router.get("/{id}/columns/{column_name}/values")
+async def get_column_values(
+    id: str, 
+    column_name: str, 
+    limit: int = 100,
+    db: Session = Depends(get_db)
+):
+    """
+    获取字段的可选值列表
+    
+    根据字段的 value_config 配置返回可选值：
+    - enum: 直接返回枚举值列表
+    - dict: 从字典获取值
+    - sql: 执行 SQL 查询获取值
+    - range: 返回范围配置
+    - none: 从实际数据中采样
+    """
+    view = db.query(View).filter(View.id == id).first()
+    if not view:
+        raise HTTPException(status_code=404, detail="View not found")
+    
+    # 查找字段配置
+    column_config = None
+    if view.columns:
+        for col in view.columns:
+            if col.get("name") == column_name:
+                column_config = col
+                break
+    
+    if not column_config:
+        raise HTTPException(status_code=404, detail=f"字段 '{column_name}' 不存在")
+    
+    value_config = column_config.get("value_config", {"type": "none"})
+    config_type = value_config.get("type", "none")
+    
+    from app.models.field_dict import FieldDictionary
+    
+    # 枚举类型
+    if config_type == "enum":
+        enum_values = value_config.get("enum_values", [])
+        return {
+            "type": "enum",
+            "values": [{"value": v, "label": v} for v in enum_values],
+            "total": len(enum_values)
+        }
+    
+    # 字典类型
+    elif config_type == "dict":
+        dict_id = value_config.get("dict_id")
+        if not dict_id:
+            return {"type": "dict", "values": [], "error": "未配置字典"}
+        
+        dictionary = db.query(FieldDictionary).filter(FieldDictionary.id == dict_id).first()
+        if not dictionary:
+            return {"type": "dict", "values": [], "error": "字典不存在"}
+        
+        # 根据字典类型获取值
+        if dictionary.source_type == "manual":
+            values = dictionary.mappings or []
+            return {"type": "dict", "values": values, "total": len(values)}
+        else:
+            # 动态查询
+            # ... 这里可以复用 dictionaries API 的逻辑
+            return {"type": "dict", "values": dictionary.mappings or [], "total": len(dictionary.mappings or [])}
+    
+    # 范围类型
+    elif config_type == "range":
+        r = value_config.get("range", {})
+        return {
+            "type": "range",
+            "range": r
+        }
+    
+    # SQL 类型
+    elif config_type == "sql":
+        sql_expr = value_config.get("sql_expression")
+        if not sql_expr:
+            return {"type": "sql", "values": [], "error": "未配置 SQL 表达式"}
+        
+        try:
+            result = await execute_query(
+                sql=sql_expr,
+                datasource_id=view.datasource_id,
+                limit=limit,
+                db=db
+            )
+            value_col = value_config.get("value_column", 0)
+            label_col = value_config.get("label_column", value_col)
+            
+            values = []
+            for row in result.get("data", []):
+                v = row[0] if isinstance(value_col, int) or value_col.isdigit() else row.get(value_col)
+                l = row[int(label_col) if isinstance(label_col, int) or label_col.isdigit() else label_col] if label_col != value_col else v
+                values.append({"value": str(v), "label": str(l) if l else str(v)})
+            
+            return {"type": "sql", "values": values, "total": len(values)}
+        except Exception as e:
+            return {"type": "sql", "values": [], "error": str(e)}
+    
+    # 默认：从实际数据采样
+    else:
+        datasets = {d.id: d for d in db.query(Dataset).all()}
+        from_clause = view.generate_from_clause(datasets)
+        
+        # 确定列表达式
+        source_table = column_config.get("source_table")
+        source_column = column_config.get("source_column", column_name)
+        
+        if source_table and view.view_type == ViewType.JOINED:
+            col_expr = f"{source_table}.{source_column}"
+        else:
+            col_expr = source_column
+        
+        sql = f"SELECT DISTINCT {col_expr} AS value FROM {from_clause} WHERE {col_expr} IS NOT NULL LIMIT {limit}"
+        
+        try:
+            result = await execute_query(
+                sql=sql,
+                datasource_id=view.datasource_id,
+                limit=limit,
+                db=db
+            )
+            values = [{"value": str(row[0]), "label": str(row[0])} for row in result.get("data", [])]
+            return {"type": "sampled", "values": values, "total": len(values)}
+        except Exception as e:
+            return {"type": "sampled", "values": [], "error": str(e)}

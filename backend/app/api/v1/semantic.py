@@ -40,7 +40,9 @@ class MetricCreate(BaseModel):
     name: str
     display_name: Optional[str] = None
     metric_type: str = "basic"
+    source_type: Optional[str] = "physical"  # physical | view
     dataset_id: Optional[str] = None
+    view_id: Optional[str] = None
     aggregation: Optional[str] = None
     calculation_method: Optional[str] = "field"
     measure_column: Optional[str] = None
@@ -58,7 +60,9 @@ class MetricCreate(BaseModel):
 
 
 class DimensionCreate(BaseModel):
-    dataset_id: str
+    source_type: Optional[str] = "physical"  # physical | view
+    dataset_id: Optional[str] = None
+    view_id: Optional[str] = None
     name: str
     display_name: Optional[str] = None
     physical_column: str
@@ -600,6 +604,14 @@ def get_inherited_dimensions(metric_data: dict, db: Session) -> List[str]:
 def create_metric(data: MetricCreate, db: Session = Depends(get_db)):
     metric_dict = data.model_dump()
     
+    # 移除前端辅助字段
+    metric_dict.pop("source_type", None)
+    
+    # 将空字符串转换为 None（外键字段）
+    for key in ['view_id', 'dataset_id', 'base_metric_id', 'date_column_id']:
+        if metric_dict.get(key) == '':
+            metric_dict[key] = None
+    
     # Handle dimension inheritance for derived/composite metrics
     if metric_dict["metric_type"] in ["derived", "composite"]:
         inherited = get_inherited_dimensions(metric_dict, db)
@@ -650,6 +662,9 @@ def update_metric(id: str, data: dict, db: Session = Depends(get_db)):
     
     for key, value in data.items():
         if hasattr(metric, key):
+            # 将空字符串转换为 None（外键字段）
+            if key in ['view_id', 'dataset_id', 'base_metric_id', 'date_column_id'] and value == '':
+                value = None
             setattr(metric, key, value)
     
     db.commit()
@@ -685,10 +700,12 @@ def validate_metric_formula(formula: str, db: Session = Depends(get_db)):
 
 # ============ Dimension Routes ============
 @router.get("/dimensions")
-def get_dimensions(dataset_id: Optional[str] = None, db: Session = Depends(get_db)):
+def get_dimensions(dataset_id: Optional[str] = None, view_id: Optional[str] = None, db: Session = Depends(get_db)):
     query = db.query(Dimension)
     if dataset_id:
         query = query.filter(Dimension.dataset_id == dataset_id)
+    if view_id:
+        query = query.filter(Dimension.view_id == view_id)
     dimensions = query.all()
     return [d.to_dict() for d in dimensions]
 
@@ -703,7 +720,17 @@ def get_dimension(id: str, db: Session = Depends(get_db)):
 
 @router.post("/dimensions")
 def create_dimension(data: DimensionCreate, db: Session = Depends(get_db)):
-    dimension = Dimension(**data.model_dump())
+    dimension_dict = data.model_dump()
+    
+    # 移除前端辅助字段
+    dimension_dict.pop("source_type", None)
+    
+    # 将空字符串转换为 None（外键字段）
+    for key in ['view_id', 'dataset_id']:
+        if dimension_dict.get(key) == '':
+            dimension_dict[key] = None
+    
+    dimension = Dimension(**dimension_dict)
     db.add(dimension)
     db.commit()
     db.refresh(dimension)
@@ -718,6 +745,9 @@ def update_dimension(id: str, data: dict, db: Session = Depends(get_db)):
     
     for key, value in data.items():
         if hasattr(dimension, key):
+            # 将空字符串转换为 None（外键字段）
+            if key in ['view_id', 'dataset_id'] and value == '':
+                value = None
             setattr(dimension, key, value)
     
     db.commit()

@@ -81,11 +81,40 @@
 
             <!-- 1. 基础指标配置 -->
             <template v-if="form.metric_type === 'basic'">
-              <a-form-item field="dataset_id" label="数据集" required>
-                <a-select v-model="form.dataset_id" placeholder="选择数据集">
-                  <a-option v-for="ds in datasets" :key="ds.id" :value="ds.id">{{ ds.name }}</a-option>
-                </a-select>
+              <a-form-item label="数据来源类型">
+                <a-radio-group v-model="form.source_type" type="button">
+                  <a-radio value="physical">物理表</a-radio>
+                  <a-radio value="view">视图</a-radio>
+                </a-radio-group>
               </a-form-item>
+
+              <!-- 物理表选择 -->
+              <template v-if="form.source_type === 'physical'">
+                <a-form-item label="数据源" required>
+                  <a-select v-model="selectedDatasourceId" placeholder="选择数据源" @change="form.dataset_id = ''">
+                    <a-option v-for="ds in datasources" :key="ds.id" :value="ds.id">{{ ds.name }}</a-option>
+                  </a-select>
+                </a-form-item>
+
+                <a-form-item field="dataset_id" label="物理表" required>
+                  <a-select v-model="form.dataset_id" placeholder="选择物理表" :disabled="!selectedDatasourceId">
+                    <a-option v-for="dt in filteredDatasets" :key="dt.id" :value="dt.id">
+                      {{ dt.name }} ({{ dt.physical_name }})
+                    </a-option>
+                  </a-select>
+                </a-form-item>
+              </template>
+
+              <!-- 视图选择 -->
+              <template v-else>
+                <a-form-item field="view_id" label="视图" required>
+                  <a-select v-model="form.view_id" placeholder="选择视图">
+                    <a-option v-for="v in views" :key="v.id" :value="v.id">
+                      {{ v.display_name || v.name }}
+                    </a-option>
+                  </a-select>
+                </a-form-item>
+              </template>
 
               <a-form-item label="统计方式">
                 <a-radio-group v-model="form.calculation_method">
@@ -110,7 +139,11 @@
                   </a-col>
                   <a-col :span="12">
                     <a-form-item field="measure_column" label="度量字段" required>
-                      <a-input v-model="form.measure_column" placeholder="输入物理字段名" />
+                      <a-select v-model="form.measure_column" placeholder="选择字段" allow-search allow-clear>
+                        <a-option v-for="col in availableColumns" :key="col.name" :value="col.name">
+                          {{ col.name }} <span v-if="col.comment || col.description" style="color: var(--color-text-3)">（{{ col.comment || col.description }}）</span>
+                        </a-option>
+                      </a-select>
                     </a-form-item>
                   </a-col>
                 </a-row>
@@ -129,8 +162,10 @@
               <a-row :gutter="16">
                 <a-col :span="12">
                   <a-form-item label="指标日期标识">
-                    <a-select v-model="form.date_column_id" placeholder="选择日期字段">
-                      <a-option v-for="d in currentDatasetDimensions" :key="d.id" :value="d.id">{{ d.name }}</a-option>
+                    <a-select v-model="form.date_column_id" placeholder="选择日期字段" allow-search allow-clear>
+                      <a-option v-for="col in availableColumns.filter(c => c.type?.toLowerCase().includes('date') || c.type?.toLowerCase().includes('time'))" :key="col.name" :value="col.name">
+                        {{ col.name }} <span v-if="col.comment || col.description" style="color: var(--color-text-3)">（{{ col.comment || col.description }}）</span>
+                      </a-option>
                     </a-select>
                   </a-form-item>
                 </a-col>
@@ -247,8 +282,10 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import type { FormInstance } from '@arco-design/web-vue'
-import { getMetrics, getDatasets, createMetric, updateMetric, deleteMetric, getDimensions } from '@/api/semantic'
-import type { Metric, Dataset } from '@/api/types'
+import { getMetrics, getDatasets, createMetric, updateMetric, deleteMetric, getDimensions, getDataSources } from '@/api/semantic'
+import { getViews } from '@/api/views'
+import type { Metric, Dataset, DataSource, CommonColumnInfo } from '@/api/types'
+import type { View } from '@/api/views'
 
 const router = useRouter()
 const loading = ref(false)
@@ -259,14 +296,23 @@ const editingId = ref('')
 const formRef = ref<FormInstance>()
 const metrics = ref<Metric[]>([])
 const datasets = ref<Dataset[]>([])
+const datasources = ref<DataSource[]>([])
+const views = ref<View[]>([])
 const filterType = ref('')
 const datasetDimensionsMap = reactive<Record<string, any[]>>({})
+const viewDimensionsMap = reactive<Record<string, any[]>>({})
+
+// 表类型选择：物理表 或 视图
+const tableType = ref<'physical' | 'view'>('physical')
+const selectedDatasourceId = ref('')
 
 const form = reactive({
   name: '',
   display_name: '',
   metric_type: 'basic' as const,
+  source_type: 'physical' as 'physical' | 'view',  // 数据来源类型
   dataset_id: '',
+  view_id: '',  // 视图ID
   aggregation: 'SUM' as const,
   calculation_method: 'field' as 'field' | 'expression',
   measure_column: '',
@@ -291,10 +337,37 @@ const derivationTypes = [
   { label: '环比增长率', value: 'mom_growth' }
 ]
 
+// 获取当前选择的物理表或视图的列信息
+const availableColumns = computed((): CommonColumnInfo[] => {
+  if (form.source_type === 'physical' && form.dataset_id) {
+    const dataset = datasets.value.find(d => d.id === form.dataset_id)
+    return (dataset?.columns || []).map(col => ({
+      name: col.name,
+      type: col.type,
+      comment: col.comment
+    }))
+  } else if (form.source_type === 'view' && form.view_id) {
+    const view = views.value.find(v => v.id === form.view_id)
+    return (view?.columns || []).map(col => ({
+      name: col.name,
+      type: col.type,
+      comment: col.description
+    }))
+  }
+  return []
+})
+
 const currentDatasetDimensions = computed(() => {
   if (form.metric_type === 'basic') {
-    if (!form.dataset_id) return []
-    return datasetDimensionsMap[form.dataset_id] || []
+    // 物理表：从数据集维度映射获取
+    if (form.source_type === 'physical' && form.dataset_id) {
+      return datasetDimensionsMap[form.dataset_id] || []
+    }
+    // 视图：从视图维度映射获取
+    if (form.source_type === 'view' && form.view_id) {
+      return viewDimensionsMap[form.view_id] || []
+    }
+    return []
   }
   
   // For derived and composite, inherit from base metrics
@@ -320,9 +393,8 @@ const currentDatasetDimensions = computed(() => {
     }
   }
   
-  // Map IDs back to objects (we might need to fetch them if they are from different datasets)
-  // For simplicity, we assume they are already in the datasetDimensionsMap or we can find them in other metrics' context
-  const allDims = Object.values(datasetDimensionsMap).flat()
+  // Map IDs back to objects
+  const allDims = [...Object.values(datasetDimensionsMap).flat(), ...Object.values(viewDimensionsMap).flat()]
   return allDims.filter(d => inheritedIds.has(d.id))
 })
 
@@ -360,6 +432,12 @@ const filteredMetrics = computed(() => {
   return metrics.value.filter(m => m.metric_type === filterType.value)
 })
 
+// 根据数据源过滤的数据集列表
+const filteredDatasets = computed(() => {
+  if (!selectedDatasourceId.value) return []
+  return datasets.value.filter(d => d.datasource_id === selectedDatasourceId.value)
+})
+
 function getTypeColor(type: string) {
   const colors: Record<string, string> = {
     basic: 'blue',
@@ -389,13 +467,17 @@ function removeFilter(index: number) {
 async function fetchData() {
   loading.value = true
   try {
-    const [m, ds, allDims] = await Promise.all([
+    const [m, ds, allDims, dsSources, allViews] = await Promise.all([
       getMetrics(),
       getDatasets(),
-      getDimensions()
+      getDimensions(),
+      getDataSources(),
+      getViews()
     ])
     metrics.value = m
     datasets.value = ds
+    datasources.value = dsSources
+    views.value = allViews
     
     // Group dimensions by dataset_id
     allDims.forEach(d => {
@@ -407,6 +489,12 @@ async function fetchData() {
         datasetDimensionsMap[dsId].push(d)
       }
     })
+    
+    // 获取每个视图的维度
+    for (const view of allViews) {
+      const viewDims = await getDimensions({ view_id: view.id })
+      viewDimensionsMap[view.id] = viewDims
+    }
   } catch (error) {
     console.error('Failed to fetch data:', error)
   } finally {
@@ -417,17 +505,25 @@ async function fetchData() {
 function showCreateModal() {
   isEdit.value = false
   resetForm()
+  tableType.value = 'physical'
+  selectedDatasourceId.value = ''
   modalVisible.value = true
 }
 
 function handleEdit(record: Metric) {
   isEdit.value = true
   editingId.value = record.id
+  
+  // 判断来源类型并设置相关字段
+  const sourceType = record.view_id ? 'view' : 'physical'
+  
   Object.assign(form, {
     name: record.name,
     display_name: record.display_name,
     metric_type: record.metric_type,
+    source_type: sourceType,
     dataset_id: record.dataset_id || '',
+    view_id: record.view_id || '',
     aggregation: record.aggregation || 'SUM',
     calculation_method: record.calculation_method || 'field',
     measure_column: record.measure_column || '',
@@ -443,6 +539,17 @@ function handleEdit(record: Metric) {
     description: record.description || '',
     filters: record.filters || []
   })
+  
+  // 设置数据源ID（如果是物理表）
+  if (sourceType === 'physical' && record.dataset_id) {
+    const dataset = datasets.value.find(d => d.id === record.dataset_id)
+    if (dataset) {
+      selectedDatasourceId.value = dataset.datasource_id
+    }
+  } else {
+    selectedDatasourceId.value = ''
+  }
+  
   modalVisible.value = true
 }
 
@@ -473,7 +580,9 @@ function resetForm() {
     name: '',
     display_name: '',
     metric_type: 'basic',
+    source_type: 'physical',
     dataset_id: '',
+    view_id: '',
     aggregation: 'SUM',
     calculation_method: 'field',
     measure_column: '',
@@ -489,6 +598,7 @@ function resetForm() {
     description: '',
     filters: []
   })
+  selectedDatasourceId.value = ''
 }
 
 function handleViewLineage(record: Metric) {

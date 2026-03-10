@@ -95,7 +95,7 @@ export function validateMetricFormula(formula: string): Promise<{ valid: boolean
 }
 
 // ============ 维度管理 ============
-export function getDimensions(params?: { dataset_id?: string }): Promise<Dimension[]> {
+export function getDimensions(params?: { dataset_id?: string; view_id?: string }): Promise<Dimension[]> {
   return request.get('/semantic/dimensions', { params })
 }
 

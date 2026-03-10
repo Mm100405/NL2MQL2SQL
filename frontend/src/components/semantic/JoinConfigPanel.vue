@@ -134,11 +134,11 @@
         </div>
       </a-form-item>
 
-      <!-- WHERE筛选条件 -->
+      <!-- 筛选条件 -->
       <a-form-item>
         <template #label>
           <div class="filter-label">
-            <span>筛选条件 (WHERE)</span>
+            <span>筛选条件 (AND)</span>
             <a-switch 
               v-model="showFilters" 
               size="small"

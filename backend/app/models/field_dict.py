@@ -45,6 +45,7 @@ class FieldDictionary(Base):
     # 自动生成配置（source_type = auto 时使用）
     auto_source_dataset_id = Column(String(36), ForeignKey("datasets.id"), nullable=True)
     auto_source_column = Column(String(255), nullable=True)
+    auto_filters = Column(JSON, nullable=True)  # 自动生成时的过滤条件
     auto_last_sync = Column(DateTime, nullable=True)  # 上次同步时间
     
     description = Column(Text, nullable=True)
@@ -63,6 +64,7 @@ class FieldDictionary(Base):
             "ref_label_column": self.ref_label_column,
             "auto_source_dataset_id": self.auto_source_dataset_id,
             "auto_source_column": self.auto_source_column,
+            "auto_filters": self.auto_filters or [],
             "auto_last_sync": self.auto_last_sync.isoformat() if self.auto_last_sync else None,
             "description": self.description,
             "created_at": self.created_at.isoformat() if self.created_at else None,

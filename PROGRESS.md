@@ -191,3 +191,213 @@ npm run dev
 - `GET /api/v1/big/sql-analysis` - 获取SQL分析历史
 - `GET /api/v1/big/lineage-graph/{target}` - 获取血缘图谱
 
+---
+
+## 第四阶段：功能完善
+
+### 功能点 1：MQL Filters 生成增强（优先）
+
+#### 背景
+当前问题：自然语言中的过滤条件不能正确映射到 MQL 的 `filters` 字段。
+
+#### 核心问题分析
+1. **Prompt 不明确**：`nl_parser.py` 中对 filters 的说明过于简单
+2. **时间/非时间过滤混淆**：LLM 可能将非时间条件放入 `timeConstraint`
+3. **缺少字段值提示**：LLM 不知道字段的可选值
+4. **MQLValidator 未验证 filters**：缺少对 filters 字段的校验
+
+#### 方案要点
+
+##### 1. 数据模型增强
+
+###### 1.1 View.columns 字段结构扩展
+```python
+[{
+    # 基础字段
+    "name": "channel",
+    "source_table": "t0",
+    "source_column": "channel_code",
+    "type": "VARCHAR(50)",
+    
+    # 展示信息（可编辑）
+    "display_name": "销售渠道",
+    "description": "订单来源渠道",
+    "default_comment": "渠道编码",  # 默认值：物理表注释
+    "synonyms": ["渠道", "来源"],
+    
+    # 值域配置
+    "value_config": {
+        "type": "dict",  # none | enum | range | dict | sql
+        
+        # enum 类型
+        "enum_values": ["ONLINE", "OFFLINE"],
+        
+        # range 类型
+        "range": {"min": 0, "max": 100, "step": 1},
+        
+        # dict 类型
+        "dict_id": "dictionary_uuid",
+        
+        # sql 类型
+        "sql_expression": "SELECT DISTINCT channel FROM orders",
+        "value_column": "channel",
+        "label_column": "channel_name"
+    },
+    
+    # 过滤配置
+    "filterable": true,
+    "filter_operators": ["=", "IN", "NOT IN", "LIKE"]
+}]
+```
+
+###### 1.2 FieldDictionary 字典模型（已存在，需扩展使用）
+- `source_type`: manual / view_ref / auto
+- `mappings`: 手动配置的值映射
+- `ref_view_id`: 引用视图
+- `auto_source_dataset_id`: 自动生成
+
+##### 2. API 新增/修改
+
+###### 2.1 字典管理 API（新增 `backend/app/api/v1/dictionary.py`）
+| 接口 | 方法 | 说明 |
+|------|------|------|
+| `/api/v1/dictionaries` | GET | 获取字典列表 |
+| `/api/v1/dictionaries` | POST | 创建字典 |
+| `/api/v1/dictionaries/{id}` | PUT | 更新字典 |
+| `/api/v1/dictionaries/{id}/values` | GET | 获取字典可选值 |
+| `/api/v1/dictionaries/{id}/sync` | POST | 同步自动字典 |
+
+###### 2.2 视图字段管理 API（修改 `backend/app/api/v1/views.py`）
+| 接口 | 方法 | 说明 |
+|------|------|------|
+| `/api/v1/views/{id}/filterable-fields` | GET | 获取可过滤字段列表 |
+| `/api/v1/views/{id}/columns` | PUT | 更新字段配置 |
+| `/api/v1/views/{id}/columns/sync-from-source` | POST | 从物理表同步字段元数据 |
+
+##### 3. NL Parser 增强
+
+###### 3.1 Prompt 模板修改
+```python
+NL_TO_MQL_PROMPT = """
+...
+⚠️ filters 使用规则：
+1. 字段名用 [中括号] 包裹，使用「展示名」或「逻辑名」
+2. 字符串值用单引号 '值'
+3. 从下方「可过滤字段」列表中选择字段
+4. 值必须从字段的可选值中选择（如果有）
+
+可过滤字段（视图/表的所有可过滤字段）：
+{filterable_fields}
+
+示例：
+用户："线上渠道已完成的订单金额"
+→ filters: ["[渠道] = '线上'", "[订单状态] = '完成'"]
+"""
+```
+
+###### 3.2 新增函数
+```python
+def build_filterable_fields_prompt(view_id: str, db: Session) -> str:
+    """构建可过滤字段的 Prompt，包含可选值"""
+```
+
+##### 4. MQLValidator 增强
+
+###### 4.1 新增 filters 验证方法
+```python
+def validate_filters(self, filters: List[str], db: Session) -> Tuple[bool, str]:
+    """验证 filters 字段"""
+    # 1. 检查字段引用格式 [field]
+    # 2. 验证字段是否存在
+    # 3. 检查操作符是否合法
+    # 4. 验证值是否在可选值范围内
+```
+
+##### 5. 前端适配
+
+###### 5.1 视图字段配置组件（新增）
+- 字段展示名编辑
+- 字段说明编辑
+- 值域配置（枚举/范围/字典/SQL）
+- 过滤开关
+
+###### 5.2 字典管理页面（新增）
+- 手动配置字典
+- 引用视图字典
+- 自动生成字典
+
+#### 实施计划
+
+| 阶段 | 内容 | 文件 | 优先级 | 状态 |
+|------|------|------|--------|------|
+| **Phase 1** | 字典管理 API | 增强 `dictionaries.py` | P0 | ✅ 已完成 |
+| **Phase 2** | 视图字段管理 API | `views.py` 增强 | P0 | ✅ 已完成 |
+| **Phase 3** | NL Parser Prompt 增强 | `nl_parser.py` | P0 | ✅ 已完成 |
+| **Phase 4** | MQLValidator filters 验证 | `mql_validator.py` | P1 | ✅ 已完成 |
+| **Phase 5** | 前端字段配置界面 | 整合到 `ViewDesigner.vue` 的字段列表Tab | P1 | ✅ 已完成 |
+| **Phase 6** | 前端字典管理界面 | 新增 `DictionaryManage.vue` | P2 | ✅ 已完成 |
+
+#### 关键代码位置
+
+| 功能 | 文件路径 |
+|------|----------|
+| NL 解析 Prompt | `backend/app/services/nl_parser.py:14-127` |
+| MQL 验证器 | `backend/app/utils/mql_validator.py` |
+| 视图模型 | `backend/app/models/view.py` |
+| 字典模型 | `backend/app/models/field_dict.py` |
+| 视图 API | `backend/app/api/v1/views.py` |
+| 字典 API | `backend/app/api/v1/dictionaries.py` |
+
+---
+
+### 功能点 2：多视图指标处理（低优先级）
+
+#### 背景
+当用户查询涉及跨视图/跨数据源的指标时，需要自动拆分为多个独立查询。
+
+#### 核心约束
+- **维度限定**：只能选择该视图/数据集已定义的维度
+- **字段限定**：只能选择该视图/数据集的可过滤字段
+- **结果分离**：各视图独立返回结果，无公共维度关联
+
+#### 分步生成流程
+```
+Step 1: 指标识别 → LLM 先识别用户问题中的指标
+Step 2: 视图分组 → 按指标所属视图分组
+Step 3: 分组生成 → 每组只提供该视图的可用维度/字段，分别生成 MQL
+Step 4: 并行执行 → 多个查询并行执行
+Step 5: 返回多结果 → 前端分 Tab 展示各视图结果
+```
+
+#### 新增服务（待开发）
+
+##### 1. 指标识别服务（`backend/app/services/metric_selector.py`）
+- 从自然语言中识别指标意图
+- 返回指标列表 + 原始意图
+
+##### 2. 视图分组服务（`backend/app/services/view_grouper.py`）
+- 按指标所属视图/数据源分组
+- 确定每个分组的可用维度和字段
+
+#### 实施计划
+
+| 阶段 | 内容 | 文件 | 工作量 | 状态 |
+|------|------|------|--------|------|
+| Phase 1 | 指标识别服务 | 新增 `metric_selector.py` | 1天 | 待开发 |
+| Phase 2 | 视图分组服务 | 新增 `view_grouper.py` | 1天 | 待开发 |
+| Phase 3 | NL Parser 重构 | `nl_parser.py` | 2天 | 待开发 |
+| Phase 4 | 查询入口改造 | `query.py` | 1天 | 待开发 |
+| Phase 5 | 前端多结果展示 | `MultiSourceResult.vue` | 1天 | 待开发 |
+
+---
+
+## 待办事项
+
+- [x] **P0** 完成 MQL filters 生成的 Prompt 增强
+- [x] **P0** 完成字典管理 API 开发
+- [x] **P0** 完成视图字段管理 API 开发
+- [x] **P1** 完成 MQLValidator filters 验证
+- [x] **P1** 完成前端字段配置界面
+- [x] **P2** 完成前端字典管理界面
+- [ ] **低优** 多视图指标处理功能
+

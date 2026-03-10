@@ -66,15 +66,48 @@
             </a-form-item>
           </a-col>
         </a-row>
-        <a-form-item field="dataset_id" label="数据集">
-          <a-select v-model="form.dataset_id" placeholder="选择数据集">
-            <a-option v-for="ds in datasets" :key="ds.id" :value="ds.id">{{ ds.name }}</a-option>
-          </a-select>
+        <a-form-item label="数据来源类型">
+          <a-radio-group v-model="form.source_type" type="button">
+            <a-radio value="physical">物理表</a-radio>
+            <a-radio value="view">视图</a-radio>
+          </a-radio-group>
         </a-form-item>
+
+        <!-- 物理表选择 -->
+        <template v-if="form.source_type === 'physical'">
+          <a-form-item label="数据源" required>
+            <a-select v-model="selectedDatasourceId" placeholder="选择数据源" @change="form.dataset_id = ''">
+              <a-option v-for="ds in datasources" :key="ds.id" :value="ds.id">{{ ds.name }}</a-option>
+            </a-select>
+          </a-form-item>
+
+          <a-form-item field="dataset_id" label="物理表" required>
+            <a-select v-model="form.dataset_id" placeholder="选择物理表" :disabled="!selectedDatasourceId">
+              <a-option v-for="dt in filteredDatasets" :key="dt.id" :value="dt.id">
+                {{ dt.name }} ({{ dt.physical_name }})
+              </a-option>
+            </a-select>
+          </a-form-item>
+        </template>
+
+        <!-- 视图选择 -->
+        <template v-else>
+          <a-form-item field="view_id" label="视图" required>
+            <a-select v-model="form.view_id" placeholder="选择视图">
+              <a-option v-for="v in views" :key="v.id" :value="v.id">
+                {{ v.display_name || v.name }}
+              </a-option>
+            </a-select>
+          </a-form-item>
+        </template>
         <a-row :gutter="16">
           <a-col :span="12">
             <a-form-item field="physical_column" label="物理字段">
-              <a-input v-model="form.physical_column" placeholder="物理字段名" />
+              <a-select v-model="form.physical_column" placeholder="选择字段" allow-search allow-clear @change="handleColumnChange">
+                <a-option v-for="col in availableColumns" :key="col.name" :value="col.name">
+                  {{ col.name }} <span v-if="col.comment || col.description" style="color: var(--color-text-3)">（{{ col.comment || col.description }}）</span>
+                </a-option>
+              </a-select>
             </a-form-item>
           </a-col>
           <a-col :span="12">
@@ -134,12 +167,14 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import type { FormInstance } from '@arco-design/web-vue'
-import { getDimensions, getDatasets, createDimension, updateDimension, deleteDimension } from '@/api/semantic'
+import { getDimensions, getDatasets, createDimension, updateDimension, deleteDimension, getDataSources } from '@/api/semantic'
 import { getSystemSetting } from '@/api/settings'
-import type { Dimension, Dataset, DimensionType } from '@/api/types'
+import { getViews } from '@/api/views'
+import type { Dimension, Dataset, DimensionType, DataSource, CommonColumnInfo } from '@/api/types'
+import type { View } from '@/api/views'
 
 const loading = ref(false)
 const submitting = ref(false)
@@ -149,12 +184,19 @@ const editingId = ref('')
 const formRef = ref<FormInstance>()
 const dimensions = ref<Dimension[]>([])
 const datasets = ref<Dataset[]>([])
+const datasources = ref<DataSource[]>([])
+const views = ref<View[]>([])
 const timeFormatOptions = ref<any[]>([])
+
+// 表类型选择：物理表 或 视图
+const selectedDatasourceId = ref('')
 
 const form = reactive({
   name: '',
   display_name: '',
+  source_type: 'physical' as 'physical' | 'view',  // 数据来源类型
   dataset_id: '',
+  view_id: '',  // 视图ID
   physical_column: '',
   data_type: 'string' as 'string' | 'number' | 'date' | 'datetime',
   dimension_type: 'normal' as DimensionType,
@@ -169,8 +211,28 @@ const form = reactive({
 const rules = {
   name: [{ required: true, message: '请输入维度名称' }],
   dataset_id: [{ required: true, message: '请选择数据集' }],
-  physical_column: [{ required: true, message: '请输入物理字段' }]
+  physical_column: [{ required: true, message: '请选择物理字段' }]
 }
+
+// 获取当前选择的物理表或视图的列信息
+const availableColumns = computed((): CommonColumnInfo[] => {
+  if (form.source_type === 'physical' && form.dataset_id) {
+    const dataset = datasets.value.find(d => d.id === form.dataset_id)
+    return (dataset?.columns || []).map(col => ({
+      name: col.name,
+      type: col.type,
+      comment: col.comment
+    }))
+  } else if (form.source_type === 'view' && form.view_id) {
+    const view = views.value.find(v => v.id === form.view_id)
+    return (view?.columns || []).map(col => ({
+      name: col.name,
+      type: col.type,
+      comment: col.description
+    }))
+  }
+  return []
+})
 
 const columns = [
   { title: '维度名称', dataIndex: 'name', width: 200, ellipsis: true },
@@ -205,16 +267,38 @@ function getTypeLabel(type: string) {
   return labels[type] || type
 }
 
+// 根据选择的字段自动推断数据类型
+function handleColumnChange(columnName: string) {
+  if (!columnName) return
+  const column = availableColumns.value.find(c => c.name === columnName)
+  if (column?.type) {
+    const colType = column.type.toLowerCase()
+    if (colType.includes('int') || colType.includes('decimal') || colType.includes('numeric') || colType.includes('float') || colType.includes('double')) {
+      form.data_type = 'number'
+    } else if (colType.includes('datetime') || colType.includes('timestamp')) {
+      form.data_type = 'datetime'
+    } else if (colType.includes('date')) {
+      form.data_type = 'date'
+    } else {
+      form.data_type = 'string'
+    }
+  }
+}
+
 async function fetchData() {
   loading.value = true
   try {
-    const [dims, ds, setting] = await Promise.all([
+    const [dims, ds, setting, dsSources, allViews] = await Promise.all([
       getDimensions(),
       getDatasets(),
-      getSystemSetting('time_formats').catch(() => ({ value: [] }))
+      getSystemSetting('time_formats').catch(() => ({ value: [] })),
+      getDataSources(),
+      getViews()
     ])
     dimensions.value = dims
     datasets.value = ds
+    datasources.value = dsSources
+    views.value = allViews
     timeFormatOptions.value = (setting as any).value || []
   } catch (error) {
     console.error('Failed to fetch data:', error)
@@ -223,19 +307,32 @@ async function fetchData() {
   }
 }
 
+// 根据数据源过滤的数据集列表
+const filteredDatasets = computed(() => {
+  if (!selectedDatasourceId.value) return []
+  return datasets.value.filter(d => d.datasource_id === selectedDatasourceId.value)
+})
+
 function showCreateModal() {
   isEdit.value = false
   resetForm()
+  selectedDatasourceId.value = ''
   modalVisible.value = true
 }
 
 function handleEdit(record: Dimension) {
   isEdit.value = true
   editingId.value = record.id
+  
+  // 判断来源类型并设置相关字段
+  const sourceType = record.view_id ? 'view' : 'physical'
+  
   Object.assign(form, {
     name: record.name,
     display_name: record.display_name,
+    source_type: sourceType,
     dataset_id: record.dataset_id,
+    view_id: record.view_id || '',
     physical_column: record.physical_column,
     data_type: record.data_type,
     dimension_type: record.dimension_type,
@@ -243,6 +340,17 @@ function handleEdit(record: Dimension) {
     synonyms: record.synonyms || [],
     description: record.description || ''
   })
+  
+  // 设置数据源ID（如果是物理表）
+  if (sourceType === 'physical' && record.dataset_id) {
+    const dataset = datasets.value.find(d => d.id === record.dataset_id)
+    if (dataset) {
+      selectedDatasourceId.value = dataset.datasource_id
+    }
+  } else {
+    selectedDatasourceId.value = ''
+  }
+  
   modalVisible.value = true
 }
 
@@ -272,7 +380,9 @@ function resetForm() {
   Object.assign(form, {
     name: '',
     display_name: '',
+    source_type: 'physical',
     dataset_id: '',
+    view_id: '',
     physical_column: '',
     data_type: 'string',
     dimension_type: 'normal',
@@ -283,6 +393,7 @@ function resetForm() {
     synonyms: [],
     description: ''
   })
+  selectedDatasourceId.value = ''
 }
 
 async function handleDelete(id: string) {

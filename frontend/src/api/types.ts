@@ -61,6 +61,14 @@ export interface ColumnInfo {
   comment?: string
 }
 
+// 通用列信息（用于选择下拉）
+export interface CommonColumnInfo {
+  name: string
+  type?: string
+  comment?: string
+  description?: string
+}
+
 // 指标类型
 export type MetricType = 'basic' | 'derived' | 'composite'
 
@@ -73,7 +81,9 @@ export interface Metric {
   name: string
   display_name: string
   metric_type: MetricType
+  source_type?: 'physical' | 'view'  // 数据来源类型
   dataset_id?: string
+  view_id?: string  // 视图ID
   aggregation?: AggregationType
   calculation_method?: 'field' | 'expression'
   measure_column?: string
@@ -106,7 +116,9 @@ export type DimensionType = 'time' | 'geo' | 'normal' | 'categorical' | 'numeric
 // 维度
 export interface Dimension {
   id: string
+  source_type?: 'physical' | 'view'  // 数据来源类型
   dataset_id: string
+  view_id?: string  // 视图ID
   name: string
   display_name: string
   physical_column: string

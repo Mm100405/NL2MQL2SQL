@@ -32,6 +32,7 @@ class DictionaryCreate(BaseModel):
     ref_label_column: Optional[str] = None
     auto_source_dataset_id: Optional[str] = None
     auto_source_column: Optional[str] = None
+    auto_filters: Optional[List[dict]] = None
     description: Optional[str] = None
 
 
@@ -45,6 +46,7 @@ class DictionaryUpdate(BaseModel):
     ref_label_column: Optional[str] = None
     auto_source_dataset_id: Optional[str] = None
     auto_source_column: Optional[str] = None
+    auto_filters: Optional[List[dict]] = None
     description: Optional[str] = None
 
 
@@ -53,6 +55,7 @@ class AutoGenerateRequest(BaseModel):
     dataset_id: str
     column_name: str
     dictionary_name: str
+    filters: Optional[List[dict]] = None
     limit: int = 1000
 
 
@@ -96,16 +99,21 @@ def create_dictionary(data: DictionaryCreate, db: Session = Depends(get_db)):
         if not data.auto_source_dataset_id or not data.auto_source_column:
             raise HTTPException(status_code=400, detail="auto_source_dataset_id and auto_source_column are required for auto dictionary")
     
+    # 将空字符串转换为 None，避免外键约束问题
+    def _empty_to_none(val):
+        return val if val else None
+
     dictionary = FieldDictionary(
         name=data.name,
         display_name=data.display_name,
         source_type=data.source_type,
         mappings=data.mappings,
-        ref_view_id=data.ref_view_id,
-        ref_value_column=data.ref_value_column,
-        ref_label_column=data.ref_label_column,
-        auto_source_dataset_id=data.auto_source_dataset_id,
-        auto_source_column=data.auto_source_column,
+        ref_view_id=_empty_to_none(data.ref_view_id),
+        ref_value_column=_empty_to_none(data.ref_value_column),
+        ref_label_column=_empty_to_none(data.ref_label_column),
+        auto_source_dataset_id=_empty_to_none(data.auto_source_dataset_id),
+        auto_source_column=_empty_to_none(data.auto_source_column),
+        auto_filters=data.auto_filters if data.auto_filters else None,
         description=data.description
     )
     db.add(dictionary)
@@ -128,7 +136,13 @@ def update_dictionary(id: str, data: DictionaryUpdate, db: Session = Depends(get
             raise HTTPException(status_code=400, detail=f"Dictionary name '{data.name}' already exists")
     
     update_data = data.model_dump(exclude_unset=True)
+    # 将空字符串转换为 None，避免外键约束问题
     for key, value in update_data.items():
+        if value == '':
+            value = None
+        # 处理空数组转为 None（auto_filters）
+        if key == 'auto_filters' and (value == [] or value == None):
+            value = None
         setattr(dictionary, key, value)
     
     db.commit()
@@ -230,8 +244,32 @@ async def auto_generate_dictionary(request: AutoGenerateRequest, db: Session = D
     if not column_exists:
         raise HTTPException(status_code=400, detail=f"Column '{request.column_name}' not found in dataset")
     
+    # 构建过滤条件
+    where_conditions = [f"`{request.column_name}` IS NOT NULL"]
+    
+    # 添加用户配置的过滤条件
+    filters = request.filters or []
+    for filter_item in filters:
+        column = filter_item.get("column", "")
+        operator = filter_item.get("operator", "=")
+        value = filter_item.get("value", "")
+        
+        if column and operator and value:
+            if operator == "IN":
+                values = [f"'{v.strip()}'" for v in value.split(",") if v.strip()]
+                if values:
+                    where_conditions.append(f"`{column}` IN ({', '.join(values)})")
+            elif operator == "LIKE":
+                where_conditions.append(f"`{column}` LIKE '%{value}%'")
+            elif operator in ["IS NULL", "IS NOT NULL"]:
+                where_conditions.append(f"`{column}` {operator}")
+            else:
+                where_conditions.append(f"`{column}` {operator} '{value}'")
+    
+    where_clause = " AND ".join(where_conditions)
+    
     # 查询去重值
-    sql = f"SELECT DISTINCT `{request.column_name}` AS value FROM {dataset.physical_name} WHERE `{request.column_name}` IS NOT NULL LIMIT {request.limit}"
+    sql = f"SELECT DISTINCT `{request.column_name}` AS value FROM {dataset.physical_name} WHERE {where_clause} LIMIT {request.limit}"
     
     try:
         result = await execute_query(
@@ -259,6 +297,8 @@ async def auto_generate_dictionary(request: AutoGenerateRequest, db: Session = D
             # 更新现有字典
             existing.mappings = mappings
             existing.auto_last_sync = datetime.utcnow()
+            if request.filters:
+                existing.auto_filters = request.filters
             db.commit()
             db.refresh(existing)
             return existing.to_dict()
@@ -271,6 +311,7 @@ async def auto_generate_dictionary(request: AutoGenerateRequest, db: Session = D
                 mappings=mappings,
                 auto_source_dataset_id=request.dataset_id,
                 auto_source_column=request.column_name,
+                auto_filters=request.filters or [],
                 auto_last_sync=datetime.utcnow()
             )
             db.add(dictionary)
@@ -301,8 +342,33 @@ async def sync_dictionary(id: str, db: Session = Depends(get_db)):
     if not dataset:
         raise HTTPException(status_code=404, detail="Source dataset not found")
     
+    # 构建过滤条件
+    where_conditions = [f"`{dictionary.auto_source_column}` IS NOT NULL"]
+    
+    # 添加用户配置的过滤条件
+    auto_filters = dictionary.auto_filters or []
+    for filter_item in auto_filters:
+        column = filter_item.get("column", "")
+        operator = filter_item.get("operator", "=")
+        value = filter_item.get("value", "")
+        
+        if column and operator and value:
+            # 处理特殊操作符
+            if operator == "IN":
+                values = [f"'{v.strip()}'" for v in value.split(",") if v.strip()]
+                if values:
+                    where_conditions.append(f"`{column}` IN ({', '.join(values)})")
+            elif operator == "LIKE":
+                where_conditions.append(f"`{column}` LIKE '%{value}%'")
+            elif operator in ["IS NULL", "IS NOT NULL"]:
+                where_conditions.append(f"`{column}` {operator}")
+            else:
+                where_conditions.append(f"`{column}` {operator} '{value}'")
+    
+    where_clause = " AND ".join(where_conditions)
+    
     # 查询去重值
-    sql = f"SELECT DISTINCT `{dictionary.auto_source_column}` AS value FROM {dataset.physical_name} WHERE `{dictionary.auto_source_column}` IS NOT NULL LIMIT 1000"
+    sql = f"SELECT DISTINCT `{dictionary.auto_source_column}` AS value FROM {dataset.physical_name} WHERE {where_clause} LIMIT 1000"
     
     try:
         result = await execute_query(
@@ -383,3 +449,115 @@ def delete_mapping(id: str, value: str, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(dictionary)
     return dictionary.to_dict()
+
+
+# ============ NL 解析支持接口 ============
+class ResolveValueRequest(BaseModel):
+    """值解析请求"""
+    label: str
+
+
+class BatchResolveRequest(BaseModel):
+    """批量值解析请求"""
+    labels: List[str]
+
+
+@router.post("/{id}/resolve-value")
+def resolve_value(id: str, request: ResolveValueRequest, db: Session = Depends(get_db)):
+    """
+    根据标签或同义词解析实际值
+    
+    用于自然语言解析时，将用户输入的标签词转换为实际值
+    例如：用户说"线上"，解析为 "ONLINE"
+    """
+    dictionary = db.query(FieldDictionary).filter(FieldDictionary.id == id).first()
+    if not dictionary:
+        raise HTTPException(status_code=404, detail="字典不存在")
+    
+    actual_value = dictionary.get_value_from_label(request.label)
+    
+    return {
+        "dict_id": id,
+        "input": request.label,
+        "resolved_value": actual_value,
+        "found": actual_value != request.label
+    }
+
+
+@router.post("/{id}/batch-resolve")
+def batch_resolve_values(id: str, request: BatchResolveRequest, db: Session = Depends(get_db)):
+    """
+    批量解析值
+    
+    用于自然语言解析时，批量将用户输入的标签词转换为实际值
+    """
+    dictionary = db.query(FieldDictionary).filter(FieldDictionary.id == id).first()
+    if not dictionary:
+        raise HTTPException(status_code=404, detail="字典不存在")
+    
+    results = []
+    for label in request.labels:
+        actual_value = dictionary.get_value_from_label(label)
+        results.append({
+            "input": label,
+            "resolved_value": actual_value,
+            "found": actual_value != label
+        })
+    
+    return {
+        "dict_id": id,
+        "results": results
+    }
+
+
+@router.get("/{id}/labels")
+def get_dictionary_labels(id: str, db: Session = Depends(get_db)):
+    """
+    获取字典的所有标签（用于 NL 提示）
+    
+    返回所有 label 和 synonyms，供 LLM 作为可选值提示
+    """
+    dictionary = db.query(FieldDictionary).filter(FieldDictionary.id == id).first()
+    if not dictionary:
+        raise HTTPException(status_code=404, detail="字典不存在")
+    
+    labels = set()
+    if dictionary.mappings:
+        for m in dictionary.mappings:
+            if m.get("label"):
+                labels.add(m.get("label"))
+            # 添加同义词
+            for syn in (m.get("synonyms") or []):
+                labels.add(syn)
+    
+    return {
+        "dict_id": id,
+        "dict_name": dictionary.name,
+        "labels": sorted(list(labels))
+    }
+
+
+@router.get("/by-name/{name}")
+def get_dictionary_by_name(name: str, db: Session = Depends(get_db)):
+    """根据字典名称获取字典（用于内部调用）"""
+    dictionary = db.query(FieldDictionary).filter(FieldDictionary.name == name).first()
+    if not dictionary:
+        raise HTTPException(status_code=404, detail=f"字典 '{name}' 不存在")
+    return dictionary.to_dict()
+
+
+@router.post("/by-name/{name}/resolve")
+def resolve_by_dict_name(name: str, request: ResolveValueRequest, db: Session = Depends(get_db)):
+    """根据字典名称解析值（用于内部调用）"""
+    dictionary = db.query(FieldDictionary).filter(FieldDictionary.name == name).first()
+    if not dictionary:
+        raise HTTPException(status_code=404, detail=f"字典 '{name}' 不存在")
+    
+    actual_value = dictionary.get_value_from_label(request.label)
+    
+    return {
+        "dict_name": name,
+        "input": request.label,
+        "resolved_value": actual_value,
+        "found": actual_value != request.label
+    }

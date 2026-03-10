@@ -89,6 +89,7 @@
           <a-menu-item key="Views">视图管理</a-menu-item>
           <a-menu-item key="Metrics">指标管理</a-menu-item>
           <a-menu-item key="Dimensions">维度管理</a-menu-item>
+          <a-menu-item key="Dictionaries">字典管理</a-menu-item>
           <a-menu-item key="Lineage">血缘管理</a-menu-item>
         </a-sub-menu>
 
@@ -246,6 +247,7 @@ function updateOpenKeys() {
     'Datasets': 'Semantic',
     'Metrics': 'Semantic',
     'Dimensions': 'Semantic',
+    'Dictionaries': 'Semantic',
     'Lineage': 'Semantic',
     'ModelConfig': 'Settings',
     'QueryConfig': 'Settings',

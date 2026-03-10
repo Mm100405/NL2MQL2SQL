@@ -64,6 +64,12 @@ const routes: RouteRecordRaw[] = [
             meta: { title: '维度管理' }
           },
           {
+            path: 'dictionaries',
+            name: 'Dictionaries',
+            component: () => import('@/views/semantic/DictionaryManage.vue'),
+            meta: { title: '字典管理' }
+          },
+          {
             path: 'lineage',
             name: 'Lineage',
             component: () => import('@/views/semantic/LineagePage.vue'),

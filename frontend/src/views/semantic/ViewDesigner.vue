@@ -231,11 +231,74 @@
               <a-empty v-else description="点击连线查看配置" />
             </a-tab-pane>
             <a-tab-pane key="columns" title="字段列表">
-              <div class="column-list">
-                <div v-for="col in viewColumns" :key="col.name" class="column-row">
-                  <a-checkbox v-model="col.selected">{{ col.name }}</a-checkbox>
-                  <span class="col-type">{{ col.type }}</span>
-                </div>
+              <div class="column-config-panel">
+                <a-table
+                  :columns="columnConfigColumns"
+                  :data="columnConfigs"
+                  :pagination="false"
+                  :bordered="true"
+                  size="small"
+                >
+                  <template #selected="{ rowIndex }">
+                    <a-checkbox v-model="columnConfigs[rowIndex].selected" />
+                  </template>
+                  <template #name="{ rowIndex }">
+                    <span style="font-family: monospace">{{ columnConfigs[rowIndex].name }}</span>
+                  </template>
+                  <template #display_name="{ rowIndex }">
+                    <a-input v-model="columnConfigs[rowIndex].display_name" placeholder="展示名称" size="small" allow-clear />
+                  </template>
+                  <template #source_comment="{ rowIndex }">
+                    <span :title="columnConfigs[rowIndex].source_comment" style="color: var(--color-text-3); font-size: 12px">
+                      {{ columnConfigs[rowIndex].source_comment || '-' }}
+                    </span>
+                  </template>
+                  <template #description="{ rowIndex }">
+                    <a-input v-model="columnConfigs[rowIndex].description" placeholder="自定义说明" size="small" allow-clear />
+                  </template>
+                  <template #filterable="{ rowIndex }">
+                    <a-switch v-model="columnConfigs[rowIndex].filterable" size="small" />
+                  </template>
+                  <template #value_config_type="{ rowIndex }">
+                    <a-select
+                      v-model="columnConfigs[rowIndex].value_config_type"
+                      placeholder="值域"
+                      size="small"
+                      style="width: 100px"
+                      @change="handleValueConfigTypeChange(rowIndex)"
+                    >
+                      <a-option value="">不配置</a-option>
+                      <a-option value="enum">枚举</a-option>
+                      <a-option value="dict">字典</a-option>
+                    </a-select>
+                  </template>
+                  <template #value_config="{ rowIndex }">
+                    <template v-if="columnConfigs[rowIndex].value_config_type === 'enum'">
+                      <a-select
+                        v-model="columnConfigs[rowIndex].enum_values"
+                        multiple
+                        placeholder="枚举值"
+                        size="small"
+                        style="width: 160px"
+                        allow-create
+                      />
+                    </template>
+                    <template v-else-if="columnConfigs[rowIndex].value_config_type === 'dict'">
+                      <a-select
+                        v-model="columnConfigs[rowIndex].dict_id"
+                        placeholder="选择字典"
+                        size="small"
+                        style="width: 160px"
+                        allow-search
+                      >
+                        <a-option v-for="d in dictionaries" :key="d.id" :value="d.id">
+                          {{ d.display_name || d.name }}
+                        </a-option>
+                      </a-select>
+                    </template>
+                    <span v-else style="color: var(--color-text-4)">-</span>
+                  </template>
+                </a-table>
               </div>
             </a-tab-pane>
           </a-tabs>
@@ -364,6 +427,7 @@ import JoinConfigPanel from '@/components/semantic/JoinConfigPanel.vue'
 import type { JoinConfig } from '@/components/semantic/JoinConfigPanel.vue'
 import { getDataSources, getDatasets } from '@/api/semantic'
 import { getView, createView, updateView, previewView, generateViewSQL } from '@/api/views'
+import { getDictionaries } from '@/api/dictionaries'
 import type { Dataset, DataSource } from '@/api/types'
 import { parseSQL } from '@/utils/sqlParser'
 
@@ -457,6 +521,106 @@ const columnWidths = ref<Record<string, number>>({})  // 存储自定义列宽
 
 // 视图字段
 const viewColumns = ref<Array<{ name: string; type: string; selected: boolean; source_table?: string }>>([])
+
+// 字典列表
+const dictionaries = ref<any[]>([])
+
+// 字段配置表格列定义
+const columnConfigColumns = [
+  { title: '选用', slotName: 'selected', width: 50 },
+  { title: '字段名', slotName: 'name', width: 100 },
+  { title: '类型', dataIndex: 'type', width: 70 },
+  { title: '物理说明', slotName: 'source_comment', width: 120 },
+  { title: '展示名', slotName: 'display_name', width: 100 },
+  { title: '自定义说明', slotName: 'description', width: 130 },
+  { title: '可过滤', slotName: 'filterable', width: 60 },
+  { title: '值域类型', slotName: 'value_config_type', width: 90 },
+  { title: '值域配置', slotName: 'value_config', width: 160 }
+]
+
+// 字段配置数据（扩展版）
+interface ColumnConfig {
+  name: string
+  type: string
+  selected: boolean
+  source_table?: string
+  source_comment?: string  // 物理表字段注释
+  display_name?: string
+  description?: string  // 自定义说明
+  filterable: boolean
+  value_config_type: '' | 'enum' | 'dict'
+  enum_values?: string[]
+  dict_id?: string
+}
+
+const columnConfigs = ref<ColumnConfig[]>([])
+
+// 监听 viewColumns 变化，更新 columnConfigs
+watch(viewColumns, (newCols) => {
+  console.log('[watch viewColumns] triggered, newCols:', JSON.stringify(newCols))
+  // 保留已有的配置
+  const existingConfigs = new Map(columnConfigs.value.map(c => [c.name, c]))
+  console.log('[watch viewColumns] existingConfigs size:', existingConfigs.size)
+  
+  columnConfigs.value = newCols.map(col => {
+    const existing = existingConfigs.get(col.name)
+    
+    // 从 viewColumns 中的字段数据解析值域配置
+    let valueConfigType = ''
+    let enumValues: string[] = []
+    let dictId = ''
+    
+    // 解析 value_config
+    const vc = (col as any).value_config
+    console.log('[watch viewColumns] col:', col.name, 'value_config:', vc)
+    if (vc) {
+      const vcType = vc.type
+      if (vcType === 'enum') {
+        valueConfigType = 'enum'
+        enumValues = vc.enum_values || []
+      } else if (vcType === 'dict') {
+        valueConfigType = 'dict'
+        dictId = vc.dict_id || ''
+      }
+    }
+    
+    console.log('[watch viewColumns] parsed:', col.name, 'valueConfigType:', valueConfigType, 'dictId:', dictId, 'description:', col.description)
+    
+    // 决定使用哪个值：优先使用用户编辑过的配置，否则从后端数据恢复
+    const useExistingDisplayName = existing?.display_name !== undefined && existing?.display_name !== ''
+    const useExistingDesc = existing?.description !== undefined && existing?.description !== ''
+
+    const result = {
+      name: col.name,
+      type: col.type,
+      selected: col.selected,
+      source_table: col.source_table,
+      source_comment: (col as any).source_comment || (col as any).comment || '',
+      // 展示名称：优先使用用户已编辑的值
+      display_name: useExistingDisplayName ? existing!.display_name : ((col as any).display_name || ''),
+      // 自定义说明：优先使用用户已编辑的值
+      description: useExistingDesc ? existing!.description : ((col as any).description || ''),
+      filterable: existing?.filterable !== undefined ? existing.filterable : ((col as any).filterable ?? true),
+      // 值域配置：优先使用用户已编辑的值，否则使用解析出的值
+      value_config_type: (existing?.value_config_type && existing.value_config_type !== '') 
+        ? existing.value_config_type : valueConfigType,
+      enum_values: (existing?.enum_values?.length) ? existing.enum_values : enumValues,
+      dict_id: (existing?.dict_id && existing.dict_id !== '') ? existing.dict_id : dictId
+    }
+    console.log('[watch viewColumns] result:', col.name, result)
+    return result
+  })
+}, { immediate: true })
+
+// 处理值域类型变化
+function handleValueConfigTypeChange(rowIndex: number) {
+  const config = columnConfigs.value[rowIndex]
+  if (config.value_config_type === 'enum') {
+    config.enum_values = []
+  } else if (config.value_config_type === 'dict') {
+    config.dict_id = ''
+  }
+}
 
 // 字段连接状态
 const connectingColumn = ref<{ nodeId: string; columnName: string } | null>(null)
@@ -688,6 +852,43 @@ async function loadView() {
 
     // 恢复字段列表
     if (view.columns) {
+      // 直接将后端列数据转换为前端期望的格式
+      const convertedColumns: ColumnConfig[] = view.columns.map((c: any) => {
+        // 解析 value_config
+        let valueConfigType: '' | 'enum' | 'dict' = ''
+        let enumValues: string[] = []
+        let dictId = ''
+
+        const vc = c.value_config
+        if (vc) {
+          const vcType = vc.type
+          if (vcType === 'enum') {
+            valueConfigType = 'enum'
+            enumValues = vc.enum_values || []
+          } else if (vcType === 'dict') {
+            valueConfigType = 'dict'
+            dictId = vc.dict_id || ''
+          }
+        }
+
+        return {
+          name: c.name,
+          type: c.type,
+          selected: true,
+          source_table: c.source_table,
+          source_comment: (c.source_comment || '') as string,
+          display_name: (c.display_name || '') as string,
+          description: (c.description || '') as string,
+          filterable: (c.filterable ?? true) as boolean,
+          value_config_type: valueConfigType,
+          enum_values: enumValues,
+          dict_id: dictId
+        }
+      })
+
+      columnConfigs.value = convertedColumns
+
+      // 设置 viewColumns（仅用于触发后续的 watch）
       viewColumns.value = view.columns.map((c: any) => ({
         ...c,
         selected: true
@@ -1290,6 +1491,7 @@ function updateViewColumns() {
           name: col.name,
           type: col.type,
           source_table: node.data.alias,
+          source_comment: col.comment || '',  // 物理表字段说明
           selected: true
         })
       }
@@ -1317,11 +1519,27 @@ async function handleSave() {
       description: formData.value.description,
       datasource_id: selectedDatasource.value,
       view_type: viewType.value,
-      columns: viewColumns.value.filter(c => c.selected).map(c => ({
-        name: c.name,
-        type: c.type,
-        source_table: c.source_table
-      }))
+      columns: viewColumns.value.filter(c => c.selected).map(c => {
+        const config = columnConfigs.value.find(cc => cc.name === c.name)
+        const colData: any = {
+          name: c.name,
+          type: c.type,
+          source_table: c.source_table,
+          source_comment: c.source_comment  // 物理表字段说明
+        }
+        // 添加字段配置
+        if (config) {
+          if (config.display_name) colData.display_name = config.display_name
+          if (config.description) colData.description = config.description
+          colData.filterable = config.filterable
+          if (config.value_config_type === 'enum' && config.enum_values?.length) {
+            colData.value_config = { type: 'enum', enum_values: config.enum_values }
+          } else if (config.value_config_type === 'dict' && config.dict_id) {
+            colData.value_config = { type: 'dict', dict_id: config.dict_id }
+          }
+        }
+        return colData
+      })
     }
     
     if (viewType.value === 'sql') {
@@ -1754,6 +1972,12 @@ function syncSQLFromCanvas() {
 
 onMounted(async () => {
   await loadDatasources()
+  // 加载字典列表
+  try {
+    dictionaries.value = await getDictionaries()
+  } catch (e) {
+    console.error('Failed to load dictionaries:', e)
+  }
   if (isEdit.value) {
     // 编辑模式：先加载视图，视图会设置数据源并加载表
     await loadView()
