@@ -2,10 +2,31 @@
 from typing import Dict, List, Any, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import create_engine, text
+from decimal import Decimal
 import urllib.parse
 
 from app.models.datasource import DataSource
 from app.utils.encryption import decrypt_api_key
+
+
+def convert_decimal(value: Any) -> Any:
+    """
+    递归转换Decimal类型为float，用于JSON序列化
+
+    Args:
+        value: 需要转换的值，可以是任何类型
+
+    Returns:
+        转换后的值，Decimal被转换为float，其他类型保持不变
+    """
+    if isinstance(value, Decimal):
+        return float(value)
+    elif isinstance(value, list):
+        return [convert_decimal(item) for item in value]
+    elif isinstance(value, dict):
+        return {k: convert_decimal(v) for k, v in value.items()}
+    else:
+        return value
 
 
 async def execute_query(
@@ -33,11 +54,14 @@ async def execute_query(
             # Add LIMIT if not present
             if "LIMIT" not in sql.upper():
                 sql = f"{sql} LIMIT {limit}"
-            
+
             result = conn.execute(text(sql))
             columns = list(result.keys())
             data = [list(row) for row in result.fetchall()]
-            
+
+            # 转换Decimal类型为float，便于JSON序列化
+            data = convert_decimal(data)
+
             return {
                 "columns": columns,
                 "data": data,

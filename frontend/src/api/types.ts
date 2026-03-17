@@ -227,6 +227,10 @@ export interface QueryRequest {
     suggested_metrics?: string[]
     suggested_dimensions?: string[]
     quoted_mql?: any
+    data_format_config?: {
+      targetFormat: any
+      apiParameters: string[]
+    }
   }
 }
 
@@ -263,4 +267,71 @@ export interface FullQueryResponse {
   steps: AnalysisStep[]
   query_id: string
   viewType?: 'table' | 'chart'
+  dataFormatConfigId?: string  // 数据格式配置ID（查询成功后生成）
+}
+
+// 数据格式配置
+export interface DataFormatConfig {
+  id: string
+  name: string
+  natural_language: string
+  target_format_example: Record<string, any>
+  api_parameters_str: string
+  transform_script: string
+  parameter_mappings: Record<string, any>
+  mql_template: Record<string, any>
+  used_view_id?: string
+  generated_api?: GeneratedApi
+  status: 'validated' | 'failed' | 'draft'
+  error_message?: string
+  created_at: string
+  updated_at: string
+}
+
+// 生成的API信息
+export interface GeneratedApi {
+  endpoint: string
+  method: string
+  description: string
+  parameters?: ParameterInfo[]
+  parameterConfig?: Record<string, ParameterConfig>
+  requestBody?: {
+    type: string
+    properties: Record<string, any>
+    required: string[]
+  }
+  responseBody?: any
+  mqlTemplate: {
+    metrics: any[]
+    metricDefinitions: Record<string, any>
+    dimensions: any[]
+    filters: string[]
+    timeConstraint: string
+    limit: number
+    queryResultType: string
+  }
+  example?: {
+    request: Record<string, any>
+    response: any
+  }
+}
+
+// 参数配置信息
+export interface ParameterConfig {
+  sourceField: string
+  fieldType: string
+  fieldName: string
+  displayName?: string
+  dictValues?: Array<{ label: string; value: any }>
+  viewName?: string
+  required?: boolean
+  paramName?: string  // 原始参数名（用户输入的）
+}
+
+// 参数信息
+export interface ParameterInfo {
+  name: string
+  sourceField?: string
+  type?: string
+  required?: boolean
 }

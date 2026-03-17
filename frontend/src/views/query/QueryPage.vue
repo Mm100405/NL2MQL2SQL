@@ -152,7 +152,32 @@
                 </div>
               
               <div class="result-footer">
-                <span class="timestamp">{{ msg.queryResult.query_id }}</span>
+                <div class="footer-left">
+                  <span class="timestamp">{{ msg.queryResult.query_id }}</span>
+                  <span v-if="msg.queryResult.dataFormatConfigId" class="config-id">
+                    API配置ID: {{ msg.queryResult.dataFormatConfigId }}
+                  </span>
+                </div>
+                <div class="footer-right">
+                  <a-button
+                    v-if="!msg.queryResult.dataFormatConfigId"
+                    type="primary"
+                    size="small"
+                    @click="handleGenerateApi(msg.queryResult)"
+                  >
+                    <template #icon><icon-thunderbolt /></template>
+                    生成API
+                  </a-button>
+                  <a-button
+                    v-else
+                    type="outline"
+                    size="small"
+                    @click="openApiDebug(msg.queryResult.dataFormatConfigId!)"
+                  >
+                    <template #icon><icon-code /></template>
+                    API调试
+                  </a-button>
+                </div>
               </div>
             </div>
           </a-card>
@@ -190,15 +215,26 @@
           />
           <div class="input-footer">
             <span class="input-hint">服务生成的所有内容均由人工智能模型生成，请谨慎识别数据准确性。</span>
-            <a-button 
-              type="primary" 
-              shape="circle" 
-              :loading="loading" 
-              @click="handleQuery"
-              class="send-btn"
-            >
-              <template #icon><icon-send /></template>
-            </a-button>
+            <a-space>
+              <a-button 
+                type="outline"
+                size="small"
+                @click="showDataFormatConfig"
+                title="配置输出格式"
+              >
+                <template #icon><icon-settings /></template>
+                格式
+              </a-button>
+              <a-button 
+                type="primary" 
+                shape="circle" 
+                :loading="loading" 
+                @click="handleQuery"
+                class="send-btn"
+              >
+                <template #icon><icon-send /></template>
+              </a-button>
+            </a-space>
           </div>
         </div>
       </div>
@@ -292,6 +328,19 @@
         </a-form-item>
       </a-form>
     </a-modal>
+
+    <!-- 数据格式配置弹窗 -->
+    <DataFormatConfigModal
+      v-model:visible="dataFormatConfigVisible"
+      :initial-config="dataFormatConfig"
+      @save="handleDataFormatSave"
+    />
+
+    <!-- API 调试弹窗 -->
+    <ApiDebugModal
+      v-model:visible="apiDebugVisible"
+      :config-id="apiDebugConfigId"
+    />
   </div>
 </template>
 
@@ -312,16 +361,22 @@ import {
   IconSend,
   IconDelete,
   IconPlus,
-  IconFilter
+  IconFilter,
+  IconThunderbolt,
+  IconFile,
+  IconCode
 } from '@arco-design/web-vue/es/icon'
 import { useSettingsStore } from '@/stores/settings'
 import ModelNotConfigured from '@/components/query/ModelNotConfigured.vue'
 import QuerySteps from '@/components/query/QuerySteps.vue'
 import ChartContainer from '@/components/common/ChartContainer.vue'
+import DataFormatConfigModal from '@/components/query/DataFormatConfigModal.vue'
+import ApiDebugModal from '@/components/query/ApiDebugModal.vue'
 import type { FullQueryResponse, AnalysisStep } from '@/api/types'
 import { analyzeIntent, generateMQL, mql2sql, executeSQL, getQueryHistoryDetail, startConversation, getConversationHistory, saveConversationHistory } from '@/api/query'
 import { getMetrics, getDimensions, getMetricsAllowedDimensions } from '@/api/semantic'
 import { getSystemSetting } from '@/api/settings'
+import { generateDataFormatConfig } from '@/api/data_format'
 import type { Metric, Dimension } from '@/api/types'
 
 const settingsStore = useSettingsStore()
@@ -333,6 +388,17 @@ const loading = ref(false)
 const chatContainer = ref<HTMLElement | null>(null)
 const currentQueryTitle = ref('问数对话')
 const conversationId = ref<string | null>(null)  // 当前对话ID
+
+// 数据格式配置弹窗
+const dataFormatConfigVisible = ref(false)
+const dataFormatConfig = ref<{
+  targetFormat: any
+  apiParameters: string[]
+} | undefined>(undefined)
+
+// API 调试弹窗
+const apiDebugVisible = ref(false)
+const apiDebugConfigId = ref<string>('')
 
 interface MessageItem {
   type: 'user' | 'agent'
@@ -1065,6 +1131,193 @@ function handleEnter(e: KeyboardEvent) {
   handleQuery()
 }
 
+// 显示数据格式配置弹窗
+function showDataFormatConfig() {
+  dataFormatConfigVisible.value = true
+}
+
+// 处理生成API按钮点击
+function handleGenerateApi(queryResult: FullQueryResponse) {
+  activeQueryResult.value = queryResult
+  showDataFormatConfig()
+}
+
+// 打开API调试
+function openApiDebug(configId: string) {
+  apiDebugConfigId.value = configId
+  apiDebugVisible.value = true
+}
+
+// 处理数据格式配置保存
+async function handleDataFormatSave(config: { targetFormat: any, apiParameters: string[] }) {
+  dataFormatConfig.value = config
+  
+  // 如果是从"生成API"按钮触发的，立即生成配置
+  if (activeQueryResult.value) {
+    await generateDataFormatForQuery(activeQueryResult.value)
+  }
+}
+
+// 为指定查询结果生成数据格式配置
+async function generateDataFormatForQuery(queryResult: FullQueryResponse) {
+  if (!dataFormatConfig.value) {
+    Message.warning('请先配置数据格式')
+    return
+  }
+  
+  // 验证目标格式
+  const targetFormat = dataFormatConfig.value.targetFormat
+  if (!targetFormat) {
+    Message.error('目标格式不能为空')
+    return
+  }
+  
+  // 如果是字符串，尝试解析为JSON
+  let parsedTargetFormat = targetFormat
+  if (typeof targetFormat === 'string') {
+    try {
+      parsedTargetFormat = JSON.parse(targetFormat)
+    } catch (e) {
+      Message.error('目标格式JSON解析失败')
+      return
+    }
+  }
+  
+  // 确保是数组
+  if (!Array.isArray(parsedTargetFormat)) {
+    Message.error('目标格式必须是数组')
+    return
+  }
+  
+  try {
+    // 添加加载步骤
+    if (queryResult.steps) {
+      queryResult.steps.push({ 
+        title: '生成数据格式配置', 
+        content: '正在生成数据格式配置...', 
+        status: 'loading' 
+      })
+    }
+    
+    const apiParametersStr = dataFormatConfig.value.apiParameters.join('、')
+    
+    // 深度克隆数据，避免 Proxy 对象问题
+    const clonedTargetFormat = JSON.parse(JSON.stringify(parsedTargetFormat))
+    const mql = JSON.parse(JSON.stringify(queryResult.mql))
+    const queryResultData = JSON.parse(JSON.stringify({
+      columns: queryResult.result.columns || [],
+      data: (queryResult.result.data || []).slice(0, 5),
+      total_count: queryResult.result.total_count || 0,
+      execution_time: queryResult.result.execution_time || 0
+    }))
+    
+    // 构建请求数据
+    const requestData: any = {
+      natural_language: queryResult.natural_language || '',
+      target_format_example: clonedTargetFormat,
+      api_parameters: apiParametersStr || ''
+    }
+    
+    // 传入前置查询结果
+    if (mql && Object.keys(mql).length > 0) {
+      requestData.existing_mql = mql
+    }
+    if (queryResult.sql) {
+      requestData.existing_sql = queryResult.sql
+    }
+    if (queryResult.result && queryResult.result.data && queryResult.result.data.length > 0) {
+      requestData.existing_query_result = queryResultData
+    }
+    
+    console.log('发送数据格式配置请求:', JSON.stringify(requestData, null, 2))
+    
+    const configResult = await generateDataFormatConfig(requestData)
+    
+    // 移除loading步骤
+    if (queryResult.steps) {
+      queryResult.steps.pop()
+    }
+    
+    if (configResult.success) {
+      queryResult.dataFormatConfigId = configResult.configId
+      if (queryResult.steps) {
+        queryResult.steps.push({
+          title: '数据格式配置',
+          content: `数据格式配置已生成（ID: ${configResult.configId}），API端点：${configResult.apiEndpoint || '未生成'}`,
+          status: 'success'
+        })
+      }
+      Message.success('数据格式配置已生成')
+
+      // 保存到历史记录
+      if (conversationId.value) {
+        try {
+          await saveConversationHistory(conversationId.value, messages.value.map(msg => ({
+            type: msg.type,
+            content: msg.content,
+            queryResult: msg.queryResult ? toRaw(msg.queryResult) : undefined
+          })))
+          console.log('历史记录已保存（包含 dataFormatConfigId）')
+        } catch (error) {
+          console.error('保存历史记录失败:', error)
+        }
+      }
+    } else {
+      if (queryResult.steps) {
+        queryResult.steps.push({ 
+          title: '数据格式配置', 
+          content: `配置生成失败：${configResult.error || '未知错误'}`, 
+          status: 'error' 
+        })
+      }
+      console.error('数据格式配置生成失败:', configResult)
+    }
+  } catch (error: any) {
+    console.error('生成数据格式配置失败:', error)
+    console.error('错误详情:', error.response?.data || error.message)
+    
+    // 输出详细的验证错误
+    if (error.response?.data?.detail) {
+      console.error('验证错误详情:', JSON.stringify(error.response.data.detail, null, 2))
+      
+      // 构建友好的错误消息
+      let errorMessage = error.response?.data?.detail
+      if (Array.isArray(errorMessage)) {
+        errorMessage = errorMessage.map((err: any) => {
+          if (err.msg) return `${err.loc?.join('.') || 'field'}: ${err.msg}`
+          return JSON.stringify(err)
+        }).join('; ')
+      }
+      
+      // 移除loading步骤
+      if (queryResult.steps) {
+        queryResult.steps.pop()
+      }
+      
+      if (queryResult.steps) {
+        queryResult.steps.push({ 
+          title: '数据格式配置', 
+          content: `配置生成出错：${errorMessage}`, 
+          status: 'error' 
+        })
+      }
+    } else {
+      // 移除loading步骤
+      if (queryResult.steps) {
+        queryResult.steps.pop()
+      }
+      
+      if (queryResult.steps) {
+        queryResult.steps.push({ 
+          title: '数据格式配置', 
+          content: `配置生成出错：${error.message || '未知错误'}`, 
+          status: 'error' 
+        })
+      }
+    }
+  }
+}
+
 async function handleQuery() {
   if (!queryInput.value.trim() || loading.value) return
 
@@ -1082,7 +1335,8 @@ async function handleQuery() {
   messages.value.push({ type: 'user', content: userQuestion })
   queryInput.value = ''
   
-  const agentMsg: MessageItem = { 
+  // 添加 agent 消息占位
+  messages.value.push({ 
     type: 'agent', 
     loading: true,
     queryResult: {
@@ -1098,13 +1352,14 @@ async function handleQuery() {
       result: { columns: [], data: [], total_count: 0, execution_time: 0 },
       query_id: ''
     }
-  }
-  messages.value.push(agentMsg)
+  })
   
+  const agentIndex = messages.value.length - 1
   loading.value = true
   scrollToBottom()
 
   try {
+    const agentMsg = messages.value[agentIndex]!
     const res = agentMsg.queryResult
     if (!res) return
 
@@ -1122,7 +1377,8 @@ async function handleQuery() {
       context: {
         suggested_metrics: intentRes.suggested_metrics,
         suggested_dimensions: intentRes.suggested_dimensions,
-        quoted_mql: quotedMql.value // 传入引用的上下文
+        quoted_mql: quotedMql.value, // 传入引用的上下文
+        data_format_config: dataFormatConfig.value // 传入数据格式配置
       }
     })
     
@@ -1157,8 +1413,75 @@ async function handleQuery() {
     res.steps.pop()
     res.steps.push({ title: '查询完成', content: '数据已成功检索。', status: 'success' })
     
-    agentMsg.loading = false
+    messages.value[agentIndex]!.loading = false
     Message.success('查询成功')
+    
+    // 如果配置了数据格式，生成数据格式配置
+    if (dataFormatConfig.value) {
+      try {
+        res.steps.push({ title: '生成数据格式配置', content: '正在生成数据格式配置...', status: 'loading' })
+        await nextTick()
+        scrollToBottom()
+        
+        const apiParametersStr = dataFormatConfig.value.apiParameters.join('、')
+        
+        // 构建请求数据
+        const requestData: any = {
+          natural_language: userQuestion,
+          target_format_example: dataFormatConfig.value.targetFormat,
+          api_parameters: apiParametersStr
+        }
+        
+        // 只有在有结果时才传入前置数据
+        if (res.mql && Object.keys(res.mql).length > 0) {
+          requestData.existing_mql = res.mql
+        }
+        if (res.sql) {
+          requestData.existing_sql = res.sql
+        }
+        if (res.result && res.result.data && res.result.data.length > 0) {
+          // 只取前5条作为样本数据
+          requestData.existing_query_result = {
+            columns: res.result.columns || [],
+            data: (res.result.data || []).slice(0, 5),
+            total_count: res.result.total_count || 0,
+            execution_time: res.result.execution_time || 0
+          }
+        }
+        
+        console.log('发送数据格式配置请求:', requestData)
+        
+        const configResult = await generateDataFormatConfig(requestData)
+        
+        if (configResult.success) {
+          res.dataFormatConfigId = configResult.configId
+          res.steps.pop()
+          res.steps.push({ 
+            title: '数据格式配置', 
+            content: `数据格式配置已生成（ID: ${configResult.configId}），API端点：${configResult.apiEndpoint || '未生成'}`, 
+            status: 'success' 
+          })
+          Message.success('数据格式配置已生成')
+        } else {
+          res.steps.pop()
+          res.steps.push({ 
+            title: '数据格式配置', 
+            content: `配置生成失败：${configResult.error || '未知错误'}`, 
+            status: 'error' 
+          })
+          console.error('数据格式配置生成失败:', configResult)
+        }
+      } catch (error: any) {
+        console.error('生成数据格式配置失败:', error)
+        console.error('错误详情:', error.response?.data || error.message)
+        res.steps.pop()
+        res.steps.push({ 
+          title: '数据格式配置', 
+          content: `配置生成出错：${error.response?.data?.detail || error.message || '未知错误'}`, 
+          status: 'error' 
+        })
+      }
+    }
     
     // 保存完整的对话历史
     if (conversationId.value) {
@@ -1174,6 +1497,7 @@ async function handleQuery() {
     }
   } catch (error) {
     console.error('Query execution error:', error)
+    const agentMsg = messages.value[agentIndex]!
     agentMsg.loading = false
     agentMsg.error = true
     if (agentMsg.queryResult && agentMsg.queryResult.steps) {
@@ -1727,6 +2051,25 @@ async function handleAdjust() {
   border-top: 1px solid #f2f3f5;
   color: var(--color-text-4);
   font-size: 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.footer-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.footer-right {
+  display: flex;
+  align-items: center;
+}
+
+.config-id {
+  color: var(--color-success-light-3);
+  font-weight: 500;
 }
 
 .input-container {

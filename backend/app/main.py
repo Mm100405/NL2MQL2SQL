@@ -1,10 +1,25 @@
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+import logging
 
 from app.config import settings
 from app.database import engine, Base
-from app.api.v1 import query, semantic, settings as settings_api, air, can, big, views, dictionaries
+from app.api.v1 import query, semantic, settings as settings_api, air, can, big, views, dictionaries, data_format
+
+# 配置日志系统
+import os
+log_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
+os.makedirs(log_dir, exist_ok=True)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),  # 输出到控制台
+        logging.FileHandler(os.path.join(log_dir, 'app.log'), encoding='utf-8')  # 输出到文件
+    ]
+)
 
 app = FastAPI(
     title="NL2MQL2SQL API",
@@ -71,6 +86,7 @@ app.include_router(settings_api.router, prefix="/api/v1/settings", tags=["系统
 app.include_router(air.router, prefix="/api/v1", tags=["AIR模块"])
 app.include_router(can.router, prefix="/api/v1", tags=["CAN模块"])
 app.include_router(big.router, prefix="/api/v1", tags=["BIG模块"])
+app.include_router(data_format.router, prefix="/api/v1/data-format", tags=["数据格式配置"])
 
 
 @app.get("/")

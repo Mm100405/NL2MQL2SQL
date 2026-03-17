@@ -195,7 +195,31 @@ class MQLValidator:
         from app.models.dimension import Dimension
         from app.models.view import View
         from app.models.field_dict import FieldDictionary
-        
+        from app.models.settings import SystemSetting
+        import json
+
+        # 获取全局时间格式配置
+        time_formats_setting = self.db_session.query(SystemSetting).filter(SystemSetting.key == "time_formats").first()
+        time_formats = []
+        if time_formats_setting:
+            val = time_formats_setting.value
+            if isinstance(val, str):
+                try:
+                    time_formats = json.loads(val)
+                except:
+                    pass
+            elif isinstance(val, list):
+                time_formats = val
+
+        if not time_formats:
+            time_formats = [
+                {"name": "YYYY-MM-DD", "label": "按日", "suffix": "day"},
+                {"name": "YYYY-MM", "label": "按月", "suffix": "month"},
+                {"name": "YYYY", "label": "按年", "suffix": "year"},
+                {"name": "YYYY-WW", "label": "按周", "suffix": "week"}
+            ]
+        valid_labels = {f["label"] for f in time_formats}
+
         if not filters:
             return True, ""
         
@@ -207,20 +231,43 @@ class MQLValidator:
             
             for field in fields:
                 actual_lookup_name = field
-                
+                label = None
+
+                # 处理时间维度后缀 (如 创建时间__按年)
+                if "__" in field:
+                    parts = field.split("__", 1)
+                    actual_lookup_name = parts[0]
+                    label = parts[1]
+
                 # 2. 验证字段是否存在（先查维度，再查视图字段）
                 found = False
-                
+                dim_obj = None
+
                 # 查维度
                 dim_obj = self.db_session.query(Dimension).filter(
                     (Dimension.display_name == actual_lookup_name) |
-                    (Dimension.name == actual_lookup_name) | 
+                    (Dimension.name == actual_lookup_name) |
                     (Dimension.physical_column == actual_lookup_name)
                 ).first()
-                
+
                 if dim_obj:
                     found = True
                     field_type = "dimension"
+
+                    # 如果有后缀标签，验证是否合法
+                    if label:
+                        if label not in valid_labels:
+                            return False, f"过滤条件中字段 '[{field}]' 的后缀标签 '{label}' 不合法。有效标签: {list(valid_labels)}"
+
+                        # 验证是否为时间维度
+                        d_type = str(dim_obj.dimension_type).lower() if dim_obj.dimension_type else ""
+                        if hasattr(dim_obj.dimension_type, 'value'):
+                            d_type = dim_obj.dimension_type.value
+                        d_data_type = str(dim_obj.data_type).lower() if dim_obj.data_type else ""
+
+                        is_time_dim = (d_type == "time") or (d_data_type in ["date", "datetime", "timestamp"])
+                        if not is_time_dim:
+                            return False, f"过滤条件中非时间维度 '[{actual_lookup_name}]' 不能使用时间格式化后缀 '{label}'。"
                 else:
                     # 尝试从视图字段中查找
                     # 获取所有视图，查找包含该字段的视图
@@ -232,9 +279,9 @@ class MQLValidator:
                                     found = True
                                     field_type = "view_field"
                                     break
-                    if found:
-                        break
-                
+                        if found:
+                            break
+
                 if not found:
                     return False, f"过滤条件中的字段 '[{field}]' 在元数据中不存在"
                 
