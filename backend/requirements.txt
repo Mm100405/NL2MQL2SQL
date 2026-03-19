@@ -26,6 +26,9 @@ passlib[bcrypt]==1.7.4
 
 # LLM Integration
 openai==1.50.0
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
 
 # MQL Parsing
 lark==1.2.2

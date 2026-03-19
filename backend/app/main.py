@@ -5,7 +5,7 @@ import logging
 
 from app.config import settings
 from app.database import engine, Base
-from app.api.v1 import query, semantic, settings as settings_api, air, can, big, views, dictionaries, data_format
+from app.api.v1 import query, semantic, settings as settings_api, air, can, big, views, dictionaries, data_format, agent
 
 # 配置日志系统
 import os
@@ -87,6 +87,7 @@ app.include_router(air.router, prefix="/api/v1", tags=["AIR模块"])
 app.include_router(can.router, prefix="/api/v1", tags=["CAN模块"])
 app.include_router(big.router, prefix="/api/v1", tags=["BIG模块"])
 app.include_router(data_format.router, prefix="/api/v1/data-format", tags=["数据格式配置"])
+app.include_router(agent.router, prefix="/api/v1/agent", tags=["Agent智能体"])
 
 
 @app.get("/")

@@ -410,12 +410,34 @@ def save_conversation_history(
 ):
     """保存完整的对话历史记录"""
     messages = request.messages
+    print(f"[History] 保存对话历史, conversation_id: {conversation_id}, 消息数: {len(messages)}")
+    
     # 查找是否已存在该对话的历史记录
     existing_history = db.query(QueryHistory).filter(
         QueryHistory.conversation_id == conversation_id
     ).first()
     
+    if not existing_history:
+        # 调试：查看数据库中最近的记录
+        recent = db.query(QueryHistory).order_by(QueryHistory.created_at.desc()).limit(3).all()
+        print(f"[History] 未找到，按conversation_id查询无结果。最近记录:")
+        for h in recent:
+            print(f"  id={h.id}, conv_id={h.conversation_id}")
+    
+    # 如果没找到，尝试按记录ID查找（兼容旧记录）
+    if not existing_history:
+        print(f"[History] 按 conversation_id 未找到，尝试按 id 查找: {conversation_id}")
+        existing_history = db.query(QueryHistory).filter(
+            QueryHistory.id == conversation_id
+        ).first()
+        # 如果找到旧记录，更新其conversation_id以保持一致性
+        if existing_history:
+            print(f"[History] 找到旧记录 {existing_history.id}，更新 conversation_id 为: {conversation_id}")
+            existing_history.conversation_id = conversation_id
+            db.commit()
+    
     if existing_history:
+        print(f"[History] 更新现有记录: {existing_history.id}")
         # 更新现有记录
         existing_history.messages = messages
         existing_history.natural_language = messages[0]["content"] if messages else "对话记录"
@@ -423,6 +445,7 @@ def save_conversation_history(
         db.refresh(existing_history)
         return {"id": existing_history.id, "updated": True}
     else:
+        print(f"[History] 创建新记录: {conversation_id}")
         # 创建新记录
         history = QueryHistory(
             conversation_id=conversation_id,
@@ -442,6 +465,16 @@ def get_conversation_history(conversation_id: str, db: Session = Depends(get_db)
     history = db.query(QueryHistory).filter(
         QueryHistory.conversation_id == conversation_id
     ).first()
+    
+    # 如果没找到，尝试按记录ID查找（兼容旧记录没有conversation_id的情况）
+    if not history:
+        history = db.query(QueryHistory).filter(
+            QueryHistory.id == conversation_id
+        ).first()
+        # 如果找到旧记录，更新其conversation_id以保持一致性
+        if history and not history.conversation_id:
+            history.conversation_id = conversation_id
+            db.commit()
     
     if not history:
         raise HTTPException(status_code=404, detail="Conversation history not found")

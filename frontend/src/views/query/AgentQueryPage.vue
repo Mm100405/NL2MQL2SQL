@@ -213,7 +213,7 @@
             class="query-input"
           />
           <div class="input-footer">
-            <span class="input-hint">服务生成的所有内容均由人工智能模型生成，请谨慎识别数据准确性。</span>
+            <span class="input-hint">Agent测试服务生成的所有内容均由人工智能模型生成，请谨慎识别数据准确性。</span>
             <a-space>
               <a-button 
                 type="outline"
@@ -777,7 +777,10 @@ async function loadConversationHistory(convId: string) {
       ];
       
       // 设置当前对话ID
-      conversationId.value = detail.conversation_id || null;
+      // 如果没有 conversation_id，使用记录ID作为对话ID（保持兼容性）
+      console.log('[History] 加载传统格式历史, detail.id:', detail.id, 'detail.conversation_id:', detail.conversation_id)
+      conversationId.value = detail.conversation_id || detail.id || null;
+      console.log('[History] 设置 conversationId.value:', conversationId.value)
       return;
     }
     
@@ -911,7 +914,10 @@ async function loadConversationHistory(convId: string) {
     }
     
     // 设置当前对话ID
-    conversationId.value = detail.conversation_id
+    // 如果没有 conversation_id，使用记录ID作为对话ID（保持兼容性）
+    console.log('[History] 加载历史记录, detail.id:', detail.id, 'detail.conversation_id:', detail.conversation_id)
+    conversationId.value = detail.conversation_id || detail.id
+    console.log('[History] 设置 conversationId.value:', conversationId.value)
     
   } catch (error) {
     console.error('Load conversation history error:', error)
@@ -1317,14 +1323,87 @@ async function generateDataFormatForQuery(queryResult: FullQueryResponse) {
   }
 }
 
+// 构建意图识别阶段的内容
+function buildPreparationContent(data: any): string {
+  let content = data.content || '意图识别完成\n'
+  
+  if (data.intent_type) {
+    content += `意图类型: ${data.intent_type}\n`
+  }
+  if (data.complexity) {
+    content += `复杂度: ${data.complexity}\n`
+  }
+  if (data.suggested_metrics && data.suggested_metrics.length > 0) {
+    content += `推荐指标: ${data.suggested_metrics.join(', ')}\n`
+  }
+  if (data.suggested_dimensions && data.suggested_dimensions.length > 0) {
+    content += `推荐维度: ${data.suggested_dimensions.join(', ')}`
+  }
+  
+  return content
+}
+
+// 构建MQL生成阶段的内容
+function buildGenerationContent(data: any): string {
+  let content = data.content || `MQL生成完成`
+  
+  if (data.mql_attempts) {
+    content += `\n尝试次数: ${data.mql_attempts}`
+  }
+  
+  if (data.mql_errors && data.mql_errors.length > 0) {
+    content += `\n验证错误: ${data.mql_errors.join('; ')}`
+  }
+  
+  return content
+}
+
+// 构建查询执行阶段的内容
+function buildExecutionContent(data: any, result: any): string {
+  let content = data.content || ''
+  
+  if (result && result.total_count !== undefined) {
+    if (content) content += '\n'
+    content += `返回 ${result.total_count} 条数据`
+  }
+  if (result && result.execution_time) {
+    content += `\n执行时间: ${result.execution_time}ms`
+  }
+  if (data.sql) {
+    content += `\nSQL: ${data.sql.substring(0, 100)}${data.sql.length > 100 ? '...' : ''}`
+  }
+  
+  return content
+}
+
+// 构建结果解释阶段的内容
+function buildInterpretationContent(data: any): string {
+  let content = data.content || '结果解释完成\n'
+  
+  if (data.insights && data.insights.length > 0) {
+    content += `\n洞察:\n`
+    data.insights.forEach((insight: string, idx: number) => {
+      content += `${idx + 1}. ${insight}\n`
+    })
+  }
+  if (data.visualization) {
+    content += `\n推荐图表: ${data.visualization}`
+  }
+  
+  return content
+}
+
 async function handleQuery() {
   if (!queryInput.value.trim() || loading.value) return
+
+  console.log('[History] handleQuery 开始, conversationId.value:', conversationId.value)
 
   // 确保有对话ID，如果没有则先创建
   if (!conversationId.value) {
     try {
       const response = await startConversation()
       conversationId.value = response.conversation_id
+      console.log('[History] 创建新对话, new conversationId:', conversationId.value)
     } catch (error) {
       console.error('Failed to create conversation ID:', error)
     }
@@ -1334,7 +1413,7 @@ async function handleQuery() {
   messages.value.push({ type: 'user', content: userQuestion })
   queryInput.value = ''
   
-  // 添加 agent 消息占位
+  // 添加 agent 消息占位 - 使用流式接口
   messages.value.push({ 
     type: 'agent', 
     loading: true,
@@ -1344,12 +1423,19 @@ async function handleQuery() {
       sql: '',
       viewType: 'table',
       steps: [
-        { title: '意图识别', content: '正在分析您的查询意图...', status: 'loading' },
-        { title: '指标检索', content: '正在检索相关指标和维度...', status: 'pending' },
-        { title: '指标查询', content: '正在生成查询并执行...', status: 'pending' }
+        { title: 'Agent初始化', content: '正在启动 Agent 流式查询...', status: 'loading' }
       ],
       result: { columns: [], data: [], total_count: 0, execution_time: 0 },
-      query_id: ''
+      query_id: '',
+      // 新增：意图识别相关字段（用于流式返回）
+      intent: null,
+      intent_type: '',
+      complexity: '',
+      suggested_metrics: [],
+      suggested_dimensions: [],
+      sql_datasources: [],
+      mql_errors: [],
+      confidence: undefined
     }
   })
   
@@ -1362,150 +1448,288 @@ async function handleQuery() {
     const res = agentMsg.queryResult
     if (!res) return
 
-    // 步骤 1: 意图识别
-    const intentRes = await analyzeIntent({ natural_language: userQuestion })
-    res.steps = intentRes.steps.map((s: any) => ({ ...s, status: 'success' }))
-    // 立即显示意图识别结果并更新界面
-    res.steps.push({ title: '指标查询', content: '正在分析元数据并生成 MQL...', status: 'loading' })
-    await nextTick()
-    scrollToBottom()
+    // 获取后端 API 地址
+    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8010/api/v1'
 
-    // 步骤 2: 生成 MQL
-    const mqlRes = await generateMQL({ 
+    // 构建请求参数
+    const requestBody: any = {
       natural_language: userQuestion,
-      context: {
-        suggested_metrics: intentRes.suggested_metrics,
-        suggested_dimensions: intentRes.suggested_dimensions,
-        quoted_mql: quotedMql.value, // 传入引用的上下文
-        data_format_config: dataFormatConfig.value // 传入数据格式配置
-      }
-    })
-    
-    res.mql = mqlRes.mql
-    quotedMql.value = null // 使用后清空
-    // 立即更新 MQL 展示
-    res.steps.pop()
-    res.steps = [...res.steps, ...mqlRes.steps.slice(2)]
-    
-    if (res.steps && res.steps.length > 0) {
-      const last = res.steps[res.steps.length - 1]
-      if (last) last.status = 'success'
+      user_id: 'anonymous',
+      conversation_id: conversationId.value || undefined
     }
-    res.steps.push({ title: '数据执行', content: '正在将 MQL 转换为 SQL 并执行查询...', status: 'loading' })
-    await nextTick()
-    scrollToBottom()
-
-    // 步骤 3: 转换 SQL
-    const sqlRes = await mql2sql(mqlRes.mql)
-    res.sql = sqlRes.sql
-    await nextTick()
-
-    // 步骤 4: 执行并展示结果
-    const queryRes = await executeSQL({ 
-      sql: sqlRes.sql, 
-      datasource_id: sqlRes.datasources[0] || ''
+    
+    // 如果有引用上下文，传递给后端
+    if (quotedMql.value) {
+      requestBody.context = {
+        quoted_mql: quotedMql.value
+      }
+    }
+    
+    // 使用 fetch API 发送 POST 请求并流式读取响应
+    const response = await fetch(`${apiBaseUrl}/agent/query/stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(requestBody)
     })
-    
-    res.result = queryRes
-    res.query_id = 'query_' + Date.now()
-    
-    res.steps.pop()
-    res.steps.push({ title: '查询完成', content: '数据已成功检索。', status: 'success' })
-    
-    messages.value[agentIndex]!.loading = false
-    Message.success('查询成功')
-    
-    // 如果配置了数据格式，生成数据格式配置
-    if (dataFormatConfig.value) {
-      try {
-        res.steps.push({ title: '生成数据格式配置', content: '正在生成数据格式配置...', status: 'loading' })
-        await nextTick()
-        scrollToBottom()
-        
-        const apiParametersStr = dataFormatConfig.value.apiParameters.join('、')
-        
-        // 构建请求数据
-        const requestData: any = {
-          natural_language: userQuestion,
-          target_format_example: dataFormatConfig.value.targetFormat,
-          api_parameters: apiParametersStr
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`)
+    }
+
+    // 创建可读流
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('无法读取响应流')
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let eventType = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      
+      if (done) {
+        break
+      }
+
+      // 解码数据块
+      buffer += decoder.decode(value, { stream: true })
+      
+      // 处理 SSE 格式的数据
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || '' // 保留不完整的行
+
+      for (const line of lines) {
+        if (line.startsWith('event:')) {
+          eventType = line.substring(6).trim()
+          continue
         }
         
-        // 只有在有结果时才传入前置数据
-        if (res.mql && Object.keys(res.mql).length > 0) {
-          requestData.existing_mql = res.mql
-        }
-        if (res.sql) {
-          requestData.existing_sql = res.sql
-        }
-        if (res.result && res.result.data && res.result.data.length > 0) {
-          // 只取前5条作为样本数据
-          requestData.existing_query_result = {
-            columns: res.result.columns || [],
-            data: (res.result.data || []).slice(0, 5),
-            total_count: res.result.total_count || 0,
-            execution_time: res.result.execution_time || 0
+        if (line.startsWith('data:')) {
+          const dataStr = line.substring(5).trim()
+          
+          try {
+            const data = JSON.parse(dataStr)
+            
+            if (eventType === 'step') {
+              console.log('Stream step:', data)
+              
+              // 将步骤添加到结果中（流式更新界面）
+              if (!res.steps) res.steps = []
+              res.steps.push({
+                title: data.skill || data.node || data.title || '处理中',
+                content: data.message || data.description || data.content || '',
+                status: 'success'
+              })
+              
+              nextTick()
+              scrollToBottom()
+            } else if (eventType === 'intermediate') {
+              // 中间结果 - 边执行边返回数据
+              console.log('Stream intermediate:', data)
+              
+              const stage = data.stage
+              
+              // 根据不同阶段更新数据
+              if (stage === 'preparation') {
+                // 意图识别阶段完成
+                res.suggested_metrics = data.suggested_metrics || []
+                res.suggested_dimensions = data.suggested_dimensions || []
+                res.intent = data.intent
+                res.intent_type = data.intent_type || ''
+                res.complexity = data.complexity || ''
+                
+                // 构建意图识别的详细信息
+                const prepContent = buildPreparationContent(data)
+                res.steps.push({
+                  title: '意图识别',
+                  content: prepContent,
+                  status: 'success',
+                  extra: {
+                    suggested_metrics: data.suggested_metrics,
+                    suggested_dimensions: data.suggested_dimensions,
+                    intent_type: data.intent_type,
+                    complexity: data.complexity
+                  }
+                })
+              } else if (stage === 'generation') {
+                // MQL 生成阶段完成
+                res.mql = data.mql || {}
+                res.mql_attempts = data.mql_attempts
+                res.mql_errors = data.mql_errors || []
+                
+                const genContent = buildGenerationContent(data)
+                res.steps.push({
+                  title: 'MQL生成',
+                  content: genContent,
+                  status: 'success',
+                  extra: {
+                    mql: data.mql,
+                    mql_attempts: data.mql_attempts,
+                    mql_errors: data.mql_errors
+                  }
+                })
+              } else if (stage === 'execution') {
+                // 查询执行阶段完成 - 关键：此时已有数据可以显示
+                res.sql = data.sql || ''
+                res.sql_datasources = data.sql_datasources || []
+                res.result = data.result || { columns: [], data: [], total_count: 0, execution_time: 0 }
+                res.query_id = data.query_id || res.query_id
+                
+                // 确保 chart_recommendation 存在
+                if (!res.result.chart_recommendation) {
+                  res.result.chart_recommendation = 'table'
+                }
+                
+                const execContent = buildExecutionContent(data, res.result)
+                res.steps.push({
+                  title: '查询执行',
+                  content: execContent,
+                  status: 'success',
+                  extra: {
+                    sql: data.sql,
+                    result: res.result
+                  }
+                })
+                
+                // 关键：此时可以显示数据了，不需要等最后
+                nextTick()
+                scrollToBottom()
+              } else if (stage === 'interpretation') {
+                // 结果解释阶段完成
+                res.interpretation = data.interpretation
+                res.insights = data.insights || []
+                res.visualization = data.visualization
+                res.visualization_suggestion = data.visualization_suggestion
+                
+                const interpContent = buildInterpretationContent(data)
+                res.steps.push({
+                  title: '结果解释',
+                  content: interpContent,
+                  status: 'success',
+                  extra: {
+                    interpretation: data.interpretation,
+                    insights: data.insights,
+                    visualization: data.visualization
+                  }
+                })
+              }
+              
+              nextTick()
+              scrollToBottom()
+            } else if (eventType === 'result') {
+              console.log('Stream result:', data)
+              
+              // 填充最终结果 - 包含所有字段
+              res.mql = data.mql || {}
+              res.sql = data.sql || ''
+              res.result = data.result || { columns: [], data: [], total_count: 0, execution_time: 0 }
+              
+              // 确保 chart_recommendation 存在
+              if (!res.result.chart_recommendation && data.visualization) {
+                res.result.chart_recommendation = data.visualization
+              } else if (!res.result.chart_recommendation) {
+                res.result.chart_recommendation = 'table'
+              }
+              
+              res.query_id = data.query_id || 'stream_' + Date.now()
+              res.interpretation = data.interpretation
+              res.insights = data.insights || []
+              
+              // 新增：意图识别相关字段（从流式结果中获取）
+              res.intent = data.intent || null
+              res.intent_type = data.intent_type || ''
+              res.complexity = data.complexity || ''
+              res.suggested_metrics = data.suggested_metrics || []
+              res.suggested_dimensions = data.suggested_dimensions || []
+              res.sql_datasources = data.sql_datasources || []
+              res.mql_errors = data.mql_errors || []
+              res.confidence = data.confidence
+              
+              messages.value[agentIndex]!.loading = false
+              
+              // 将所有loading状态的步骤改为success（左侧加载动画变为勾）
+              if (res.steps) {
+                res.steps.forEach(step => {
+                  if (step.status === 'loading') {
+                    step.status = 'success'
+                  }
+                })
+              }
+              
+              // 添加完成步骤
+              if (!res.steps) res.steps = []
+              res.steps.push({
+                title: '查询完成',
+                content: 'Agent流式查询成功完成',
+                status: 'success'
+              })
+              
+              Message.success('查询成功')
+              
+              nextTick()
+              scrollToBottom()
+            } else if (eventType === 'error') {
+              console.error('Stream error:', data)
+              
+              if (!res.steps) res.steps = []
+              res.steps.push({
+                title: '错误',
+                content: data.message || '查询过程中发生错误',
+                status: 'error'
+              })
+              
+              messages.value[agentIndex]!.loading = true
+              Message.error('查询失败')
+              
+              nextTick()
+              scrollToBottom()
+            }
+          } catch (e) {
+            console.error('Failed to parse SSE data:', e)
           }
         }
-        
-        console.log('发送数据格式配置请求:', requestData)
-        
-        const configResult = await generateDataFormatConfig(requestData)
-        
-        if (configResult.success) {
-          res.dataFormatConfigId = configResult.configId
-          res.steps.pop()
-          res.steps.push({ 
-            title: '数据格式配置', 
-            content: `数据格式配置已生成（ID: ${configResult.configId}），API端点：${configResult.apiEndpoint || '未生成'}`, 
-            status: 'success' 
-          })
-          Message.success('数据格式配置已生成')
-        } else {
-          res.steps.pop()
-          res.steps.push({ 
-            title: '数据格式配置', 
-            content: `配置生成失败：${configResult.error || '未知错误'}`, 
-            status: 'error' 
-          })
-          console.error('数据格式配置生成失败:', configResult)
-        }
-      } catch (error: any) {
-        console.error('生成数据格式配置失败:', error)
-        console.error('错误详情:', error.response?.data || error.message)
-        res.steps.pop()
-        res.steps.push({ 
-          title: '数据格式配置', 
-          content: `配置生成出错：${error.response?.data?.detail || error.message || '未知错误'}`, 
-          status: 'error' 
-        })
       }
     }
     
-    // 保存完整的对话历史
+    // 保存对话历史
     if (conversationId.value) {
       try {
-        await saveConversationHistory(conversationId.value, messages.value.map(msg => ({
+        console.log('[History] 保存对话历史, conversationId:', conversationId.value, '消息数:', messages.value.length)
+        saveConversationHistory(conversationId.value, messages.value.map(msg => ({
           type: msg.type,
           content: msg.content,
           queryResult: msg.queryResult
-        })))
+        }))).then(res => {
+          console.log('[History] 保存结果:', res)
+        })
       } catch (e) {
         console.error('保存对话历史失败:', e)
       }
+    } else {
+      console.log('[History] 未保存，conversationId 为空')
     }
-  } catch (error) {
-    console.error('Query execution error:', error)
-    const agentMsg = messages.value[agentIndex]!
-    agentMsg.loading = false
-    agentMsg.error = true
-    if (agentMsg.queryResult && agentMsg.queryResult.steps) {
-      const lastStep = agentMsg.queryResult.steps[agentMsg.queryResult.steps.length - 1]
-      if (lastStep) lastStep.status = 'error'
+  } catch (error: any) {
+    console.error('查询失败:', error)
+    
+    // 显示错误步骤
+    const agentMsg = messages.value[agentIndex]
+    if (agentMsg && agentMsg.queryResult && agentMsg.queryResult.steps) {
+      agentMsg.queryResult.steps.push({
+        title: '查询失败',
+        content: error.message || '查询过程中发生错误',
+        status: 'error'
+      })
     }
-    Message.error('查询失败，流程中断')
+    
+    Message.error(error.message || '查询失败')
   } finally {
     loading.value = false
+    // 清空引用上下文
+    quotedMql.value = null
     scrollToBottom()
   }
 }

@@ -15,6 +15,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '智能问数', icon: 'icon-search' }
       },
       {
+        path: 'agent-query',
+        name: 'AgentQuery',
+        component: () => import('@/views/query/AgentQueryPage.vue'),
+        meta: { title: 'Agent查询', icon: 'icon-thunderbolt' }
+      },
+      {
         path: 'query/history',
         name: 'QueryHistory',
         component: () => import('@/views/query/HistoryPage.vue'),
@@ -95,6 +101,12 @@ const routes: RouteRecordRaw[] = [
             name: 'QueryConfig',
             component: () => import('@/views/settings/QueryConfigPage.vue'),
             meta: { title: '问数配置' }
+          },
+          {
+            path: 'agent-test',
+            name: 'AgentTest',
+            component: () => import('@/views/agent/AgentTestPage.vue'),
+            meta: { title: 'Agent测试' }
           }
         ]
       },

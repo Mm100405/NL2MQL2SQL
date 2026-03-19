@@ -18,7 +18,7 @@
       </div>
 
       <!-- 问数页面特有侧边栏 -->
-      <template v-if="route.name === 'Query' && !appStore.sidebarCollapsed && showAgentSidebar">
+      <template v-if="(route.name === 'Query' || route.name === 'AgentQuery') && !appStore.sidebarCollapsed && showAgentSidebar">
         <div class="sidebar-header-actions">
           <a-button type="text" size="small" @click="toggleSidebarMode">
             <template #icon><icon-left /></template>
@@ -73,6 +73,10 @@
           <template #icon><icon-search /></template>
           智能问数
         </a-menu-item>
+        <a-menu-item key="AgentQuery">
+          <template #icon><icon-thunderbolt /></template>
+          Agent查询
+        </a-menu-item>
         <a-menu-item key="QueryHistory">
           <template #icon><icon-history /></template>
           查询历史
@@ -99,6 +103,7 @@
           <template #title>系统设置</template>
           <a-menu-item key="ModelConfig">模型配置</a-menu-item>
           <a-menu-item key="QueryConfig">问数配置</a-menu-item>
+          <a-menu-item key="AgentTest">Agent测试</a-menu-item>
         </a-sub-menu>
 
         <a-divider style="margin: 8px 0" />
@@ -197,7 +202,7 @@ const chatHistory = ref<QueryHistory[]>([])
 
 async function fetchHistory() {
   try {
-    const res = await getQueryHistory({ page: 1, page_size: 20 })
+    const res = await getQueryHistory({ page: 1, page_size: 10 })
     chatHistory.value = res.items
   } catch (error) {
     console.error('Failed to fetch history:', error)
@@ -207,8 +212,9 @@ async function fetchHistory() {
 async function handleHistoryClick(id: string) {
   showAgentSidebar.value = true;  // 确保显示Agent侧边栏
   
-  // 直接使用传入的ID（已经是conversation_id）
-  router.push({ name: 'Query', query: { id } });
+  // 根据当前路由决定跳转到哪个页面
+  const targetRoute = route.name === 'AgentQuery' ? 'AgentQuery' : 'Query'
+  router.push({ name: targetRoute, query: { id } });
   
   // 延迟刷新历史记录列表，确保路由变化完成
   setTimeout(async () => {
@@ -218,7 +224,10 @@ async function handleHistoryClick(id: string) {
 
 async function handleNewChat() {
   showAgentSidebar.value = true;  // 确保显示Agent侧边栏
-  router.push({ name: 'Query', query: { t: Date.now() } })
+  
+  // 根据当前路由决定跳转到哪个页面
+  const targetRoute = route.name === 'AgentQuery' ? 'AgentQuery' : 'Query'
+  router.push({ name: targetRoute, query: { t: Date.now() } })
   
   // 延迟刷新历史记录列表，确保路由变化完成
   setTimeout(async () => {
@@ -251,6 +260,7 @@ function updateOpenKeys() {
     'Lineage': 'Semantic',
     'ModelConfig': 'Settings',
     'QueryConfig': 'Settings',
+    'AgentTest': 'Settings',
     'Workbook': 'Air',
     'Integration': 'Air',
     'Consolidation': 'Air',
@@ -284,7 +294,7 @@ const breadcrumbs = computed(() => {
 
 // 菜单点击处理
 function handleMenuClick(key: string) {
-  if (key === 'Query') {
+  if (key === 'Query' || key === 'AgentQuery') {
     showAgentSidebar.value = true
   } else {
     // 如果切换到非Query页面，重置为显示普通导航菜单

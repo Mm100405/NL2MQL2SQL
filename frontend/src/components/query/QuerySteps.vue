@@ -19,20 +19,52 @@
         <div class="step-main">
           <div class="step-title">{{ step.title }}</div>
           <div class="step-body">
-            <div v-if="step.title === '指标查询' && mql" class="mql-section">
-              <div v-for="(line, lIdx) in step.content.split('\n')" :key="lIdx" class="content-line">
-                {{ line }}
+            <!-- MQL生成阶段的MQL展示 -->
+            <div v-if="step.title.includes('MQL生成') && step.extra?.mql" class="mql-section">
+              <div class="content-text">
+                <div v-for="(line, lIdx) in step.content.split('\n')" :key="lIdx" class="content-line">
+                  {{ line }}
+                </div>
               </div>
               <div class="mql-code-wrapper">
                 <div class="mql-code-header">
-                  <icon-copy class="copy-btn" @click="copyToClipboard(JSON.stringify(mql, null, 2))" />
+                  <icon-copy class="copy-btn" @click="copyToClipboard(JSON.stringify(step.extra.mql, null, 2))" />
                 </div>
-                <pre class="mql-code">{{ JSON.stringify(mql, null, 2) }}</pre>
-                <div class="mql-expand">
-                  <icon-down />
+                <pre class="mql-code">{{ JSON.stringify(step.extra.mql, null, 2) }}</pre>
+              </div>
+            </div>
+            <!-- 执行阶段的SQL展示 -->
+            <div v-else-if="step.title.includes('执行阶段') && step.extra?.sql" class="sql-section">
+              <div class="content-text">
+                <div v-for="(line, lIdx) in step.content.split('\n')" :key="lIdx" class="content-line">
+                  {{ line }}
+                </div>
+              </div>
+              <div class="sql-code-wrapper">
+                <div class="sql-code-header">
+                  <icon-copy class="copy-btn" @click="copyToClipboard(step.extra.sql)" />
+                </div>
+                <pre class="sql-code">{{ step.extra.sql }}</pre>
+              </div>
+            </div>
+            <!-- 解释阶段的洞察展示 -->
+            <div v-else-if="step.title.includes('解释阶段') && step.extra?.insights && step.extra.insights.length > 0" class="insights-section">
+              <div class="content-text">
+                <div v-for="(line, lIdx) in step.content.split('\n')" :key="lIdx" class="content-line">
+                  {{ line }}
+                </div>
+              </div>
+              <div v-if="step.extra.summary" class="content-line" style="margin-top: 12px; color: var(--color-text-1); font-weight: 500;">
+                {{ step.extra.summary }}
+              </div>
+              <div class="insights-list">
+                <div v-for="(insight, iIdx) in step.extra.insights" :key="iIdx" class="insight-item">
+                  <icon-check-circle class="insight-icon" />
+                  <span>{{ insight }}</span>
                 </div>
               </div>
             </div>
+            <!-- 默认内容展示 -->
             <div v-else class="content-text">
               <div v-for="(line, lIdx) in step.content.split('\n')" :key="lIdx" class="content-line">
                 {{ line }}
@@ -52,7 +84,6 @@ import type { AnalysisStep } from '@/api/types'
 
 const props = defineProps<{
   steps: AnalysisStep[]
-  mql?: any
 }>()
 
 const expanded = ref(true)
@@ -199,5 +230,68 @@ async function copyToClipboard(text: string) {
   border-top: 1px solid #e5e6eb;
   cursor: pointer;
   color: #165dff;
+}
+
+.sql-code-wrapper {
+  margin-top: 12px;
+  background: #f8f9fb;
+  border: 1px solid #e5e6eb;
+  border-radius: 8px;
+  position: relative;
+  max-width: 600px;
+}
+
+.sql-code-header {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px;
+}
+
+.sql-code {
+  margin: 0;
+  padding: 0 16px 16px;
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 12px;
+  color: #4e5969;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.insights-list {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.insight-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #f0f5ff;
+  border-radius: 6px;
+  color: var(--color-text-2);
+  font-size: 13px;
+}
+
+.insight-icon {
+  color: #165dff;
+  font-size: 14px;
+  margin-top: 2px;
+}
+
+.tags-section {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag-label {
+  font-size: 12px;
+  color: var(--color-text-3);
 }
 </style>

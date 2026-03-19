@@ -164,6 +164,7 @@ export interface AnalysisStep {
   title: string
   content: string
   status: 'success' | 'loading' | 'pending' | 'error'
+  extra?: any  // 额外信息：mql, sql, insights 等
 }
 
 // 查询历史
@@ -268,6 +269,27 @@ export interface FullQueryResponse {
   query_id: string
   viewType?: 'table' | 'chart'
   dataFormatConfigId?: string  // 数据格式配置ID（查询成功后生成）
+  
+  // Agent流式接口新增字段
+  interpretation?: string  // 结果解释
+  insights?: string[]  // 数据洞察
+  visualization?: string  // 可视化建议
+  visualization_suggestion?: any  // 可视化建议（详细）
+  
+  // 意图识别相关
+  intent?: any  // 意图分析结果
+  intent_type?: string  // 意图类型
+  complexity?: string  // 查询复杂度
+  suggested_metrics?: string[]  // 建议的指标列表
+  suggested_dimensions?: string[]  // 建议的维度列表
+  
+  // SQL相关信息
+  sql_datasources?: string[]  // SQL涉及的数据源列表
+  
+  // MQL验证信息
+  mql_errors?: string[]  // MQL验证错误列表
+  mql_attempts?: number  // MQL生成尝试次数
+  confidence?: number  // MQL生成置信度
 }
 
 // 数据格式配置
