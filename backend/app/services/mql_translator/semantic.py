@@ -5,7 +5,7 @@ semantic.py - 语义上下文层
 提供统一的字段查找接口，供 expression_parser 和 ast_builder 使用。
 """
 
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any, Tuple, Tuple
 from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
@@ -113,6 +113,8 @@ class SemanticContext:
         # 反向索引（用于 display_name -> name 查找）
         self._display_name_to_metric: Dict[str, str] = {}
         self._display_name_to_dimension: Dict[str, str] = {}
+        # View.columns 字段索引：display_name -> (view_id, column_info)
+        self._view_columns_index: Dict[str, Tuple[str, Dict[str, Any]]] = {}
 
         self._loaded = False
 
@@ -167,6 +169,12 @@ class SemanticContext:
                 columns=v.columns or [],
             )
             self._views[v.id] = ref
+            
+            # 建立 View.columns 的字段索引
+            for col in (v.columns or []):
+                col_display_name = col.get("display_name") or col.get("name")
+                if col_display_name:
+                    self._view_columns_index[col_display_name] = (v.id, col)
 
         # 加载数据集
         for d in self.db.query(Dataset).all():
@@ -206,7 +214,9 @@ class SemanticContext:
 
     def resolve_field(self, field_name: str) -> Optional[FieldRef]:
         """
-        解析字段引用 - 三级查找：display_name -> name -> physical_column
+        解析字段引用 - 四级查找：
+        1. Dimension 表: display_name -> name -> physical_column
+        2. View.columns: display_name -> name
 
         Args:
             field_name: 字段名，可能带后缀（如 "日期__按月"）
@@ -220,20 +230,36 @@ class SemanticContext:
         if "__" in field_name:
             actual_name, suffix = field_name.split("__", 1)
 
-        # 1. 优先按 display_name 查找
+        # 1. 优先按 display_name 查找 Dimension 表
         lookup_name = self._display_name_to_dimension.get(actual_name)
         if lookup_name:
             ref = self._dimensions.get(lookup_name)
         else:
-            # 2. 按 name 查找
+            # 2. 按 name 查找 Dimension 表
             ref = self._dimensions.get(actual_name)
 
-        # 3. 按 physical_column 查找
+        # 3. 按 physical_column 查找 Dimension 表
         if not ref:
             for dim in self._dimensions.values():
                 if dim.physical_column == actual_name:
                     ref = dim
                     break
+
+        # 4. 如果 Dimension 表中找不到，查找 View.columns
+        if not ref:
+            view_col_info = self._view_columns_index.get(actual_name)
+            if view_col_info:
+                view_id, col = view_col_info
+                # 从 View.columns 构建临时 FieldRef
+                ref = FieldRef(
+                    physical_column=col.get("name", actual_name),
+                    display_name=col.get("display_name") or col.get("name", actual_name),
+                    name=col.get("name", actual_name),
+                    data_type=col.get("type", "string"),
+                    dimension_type="normal",
+                    source_view_id=view_id,
+                    format_config=None,
+                )
 
         # 如果找到且有后缀，需要更新 ref 的 format_config
         if ref and suffix:

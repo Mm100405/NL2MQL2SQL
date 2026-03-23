@@ -729,12 +729,15 @@ class MQLASTBuilder:
 
         return from_node, join_nodes
 
-    def _build_structured_filter(self, condition: Dict[str, Any], is_where: bool = True, skip_formatting: bool = True) -> Optional[exp.Expression]:
+    def _build_structured_filter(self, condition: Dict[str, Any], is_where: bool = True, skip_formatting: bool = True, parent_operator: str = None) -> Optional[exp.Expression]:
         """将结构化 filter 条件转为 sqlglot AST
 
         支持两种节点类型：
         - 叶子条件：{"field": "字段名", "op": "=", "value": "值"}
         - 分组条件：{"operator": "AND|OR", "conditions": [...]}
+
+        关键修复：当父操作符是 OR 时，AND 子表达式需要用括号包裹，以避免优先级问题。
+        例如：(A AND B) OR (C AND D) 而不是 A AND B OR C AND D
         """
         # 叶子条件
         if "field" in condition:
@@ -783,19 +786,25 @@ class MQLASTBuilder:
 
         exprs = []
         for sub in sub_conditions:
-            sub_expr = self._build_structured_filter(sub, is_where, skip_formatting)
+            sub_expr = self._build_structured_filter(sub, is_where, skip_formatting, parent_operator=operator)
             if sub_expr:
                 exprs.append(sub_expr)
 
         if not exprs:
             return None
         if len(exprs) == 1:
-            return exprs[0]
-
-        if operator == "OR":
-            return exp.Or(expressions=exprs)
+            result = exprs[0]
+        elif operator == "OR":
+            result = exp.Or(expressions=exprs)
         else:
-            return exp.And(expressions=exprs)
+            result = exp.And(expressions=exprs)
+
+        # 关键修复：如果父操作符是 OR，且当前是 AND，需要给整个 AND 表达式加括号
+        # 确保生成的 SQL 是 (A AND B) OR (C AND D) 而不是 A AND B OR C AND D
+        if parent_operator == "OR" and operator == "AND":
+            result = exp.Paren(this=result)
+
+        return result
 
     def _build_where_clause(self, mql: Dict[str, Any]) -> Optional[exp.Expression]:
         """构建 WHERE 子句"""
