@@ -30,6 +30,13 @@ langgraph>=0.2.0
 langchain-core>=0.3.0
 langchain-openai>=0.2.0
 
+# Deep Agents
+deepagents>=0.1.0
+
+# MQL Engine V2 (sqlglot AST)
+sqlglot>=26.0.0
+ibis-framework>=9.0.0
+
 # MQL Parsing
 lark==1.2.2
 

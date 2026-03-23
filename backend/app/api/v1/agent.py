@@ -69,6 +69,8 @@ class AgentQueryResponse(BaseModel):
 
 class AgentStatusResponse(BaseModel):
     """Agent状态响应"""
+    model_config = {"protected_namespaces": ()}
+
     is_available: bool
     model_configured: bool
     model_info: Optional[dict] = None
@@ -197,7 +199,7 @@ async def agent_query_stream(
     request: AgentQueryRequest,
     db: Session = Depends(get_db)
 ):
-    """流式Agent查询（SSE）
+    """流式Agent查询（SSE）- 使用新架构
 
     返回Server-Sent Events流，实时推送查询步骤和结果。
     """
@@ -228,14 +230,32 @@ async def agent_query_stream(
             # 发送开始事件
             yield format_sse_event("start", {"query_id": query_id})
 
-            # 创建Agent
-            agent = MQLAgent(db_session=db, query_id=query_id)
+            # 使用增强版管理器（支持动态 Skills）
+            from app.agents.deep_agents.enhanced_manager import get_enhanced_deep_agents_manager
 
-            # 启动查询任务
+            manager = get_enhanced_deep_agents_manager(db_session=db)
+
+            # 初始化步骤存储
+            _query_steps_store[query_id] = []
+
+            # 定义步骤回调函数（直接推送到步骤存储）
+            def step_callback(step_info):
+                """步骤回调，推送到步骤存储"""
+                print(f"[Step Callback] Node: {step_info.get('node')}, Title: {step_info.get('title')}")
+                
+                if query_id not in _query_steps_store:
+                    _query_steps_store[query_id] = []
+                
+                _query_steps_store[query_id].append(step_info)
+
+            # 启动查询任务（使用 Skills）
             task = asyncio.create_task(
-                agent.execute_query(
+                manager.execute_stream_with_skills(
                     natural_language=request.natural_language,
-                    context=request.context or {}
+                    context=request.context or {},
+                    max_retries=3,
+                    step_callback=step_callback,
+                    use_skills=True  # 启用已加载的 Skills
                 )
             )
 
@@ -248,34 +268,42 @@ async def agent_query_stream(
 
                 if query_id in _query_steps_store:
                     current_steps = _query_steps_store[query_id]
+                    # 推送新步骤
                     while last_step_count < len(current_steps):
-                        yield format_sse_event("step", current_steps[last_step_count])
+                        step = current_steps[last_step_count]
+                        print(f"[Pushing Step] {step.get('node')}: {step.get('title')}")
+                        yield format_sse_event("step", step)
                         last_step_count += 1
 
-            # 获取结果
+            # 等待任务完成并获取结果
             result = await task
             execution_time = int((time.time() - start_time) * 1000)
 
+            # 推送剩余的步骤（如果有）
+            if query_id in _query_steps_store:
+                current_steps = _query_steps_store[query_id]
+                while last_step_count < len(current_steps):
+                    step = current_steps[last_step_count]
+                    print(f"[Pushing Remaining Step] {step.get('node')}: {step.get('title')}")
+                    yield format_sse_event("step", step)
+                    last_step_count += 1
+
             # 发送结果事件
             if result:
-                try:
-                    # 历史记录保存由前端统一调用 /conversation/{conversation_id}/save 接口管理
-                    # 不在此处创建重复记录
-                    pass
-                except Exception as e:
-                    print(f"Error: {e}")
-
                 yield format_sse_event("result", {
                     "natural_language": result.get('natural_language'),
                     "mql": result.get('mql'),
                     "sql": result.get('sql'),
                     "result": result.get('result'),
                     "interpretation": result.get('interpretation'),
-                    "insights": result.get('insights', [])
+                    "insights": result.get('insights', []),
+                    "execution_time": execution_time
                 })
 
         except Exception as e:
             print(f"[Query Stream Error] {e}")
+            import traceback
+            traceback.print_exc()
             yield format_sse_event("error", {"message": str(e)})
 
     return StreamingResponse(

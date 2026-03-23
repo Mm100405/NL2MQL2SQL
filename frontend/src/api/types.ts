@@ -110,6 +110,22 @@ export interface MetricFilter {
   value: any
 }
 
+// MQL 过滤条件 - 叶子节点
+export interface MQLFilterCondition {
+  field: string
+  op: string
+  value: any
+}
+
+// MQL 过滤条件 - 分组节点
+export interface MQLFilterGroup {
+  operator: 'AND' | 'OR'
+  conditions: Array<MQLFilterCondition | MQLFilterGroup>
+}
+
+// MQL filters 类型：可以是结构化分组或空对象
+export type MQLFilters = MQLFilterGroup | Record<string, never>
+
 // 维度类型
 export type DimensionType = 'time' | 'geo' | 'normal' | 'categorical' | 'numerical' | 'user_defined'
 
@@ -267,6 +283,7 @@ export interface FullQueryResponse {
   result: QueryExecuteResponse
   steps: AnalysisStep[]
   query_id: string
+  view_id?: string  // 绑定到这次查询的视图ID
   viewType?: 'table' | 'chart'
   dataFormatConfigId?: string  // 数据格式配置ID（查询成功后生成）
   
@@ -327,7 +344,7 @@ export interface GeneratedApi {
     metrics: any[]
     metricDefinitions: Record<string, any>
     dimensions: any[]
-    filters: string[]
+    filters: MQLFilters
     timeConstraint: string
     limit: number
     queryResultType: string

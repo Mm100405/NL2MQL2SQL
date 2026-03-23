@@ -25,6 +25,10 @@
         </a-button>
 
 
+        <a-button v-if="isEdit" @click="handleSetDefault" :loading="settingDefault">
+          <template #icon><icon-star /></template>
+          设为默认
+        </a-button>
         <a-button type="primary" @click="handleSave" :loading="saving">
           <template #icon><icon-save /></template>
           保存
@@ -195,6 +199,16 @@
                 </a-form-item>
                 <a-form-item label="显示名称">
                   <a-input v-model="formData.display_name" placeholder="请输入显示名称" />
+                </a-form-item>
+                <a-form-item label="分类">
+                  <a-select v-model="formData.category_id" placeholder="选择分类" allow-clear style="width: 100%">
+                    <a-option v-for="cat in categories" :key="cat.category_id" :value="cat.category_id">
+                      {{ cat.category_name }}
+                    </a-option>
+                  </a-select>
+                </a-form-item>
+                <a-form-item label="分类名称（可选）">
+                  <a-input v-model="formData.category_name" placeholder="请输入新分类名称" allow-clear />
                 </a-form-item>
                 <a-form-item label="描述">
                   <a-textarea v-model="formData.description" placeholder="请输入描述" :auto-size="{ minRows: 3 }" />
@@ -419,14 +433,15 @@ import {
   IconCaretDown,
   IconCaretUp,
   IconSearch,
-  IconStorage
+  IconStorage,
+  IconStar
 } from '@arco-design/web-vue/es/icon'
 import TableNode from '@/components/semantic/TableNode.vue'
 import ColumnSelectDialog from '@/components/semantic/ColumnSelectDialog.vue'
 import JoinConfigPanel from '@/components/semantic/JoinConfigPanel.vue'
 import type { JoinConfig } from '@/components/semantic/JoinConfigPanel.vue'
 import { getDataSources, getDatasets } from '@/api/semantic'
-import { getView, createView, updateView, previewView, generateViewSQL } from '@/api/views'
+import { getView, createView, updateView, previewView, generateViewSQL, getCategoryStats, getCategories, setDefaultView } from '@/api/views'
 import { getDictionaries } from '@/api/dictionaries'
 import type { Dataset, DataSource } from '@/api/types'
 import { parseSQL } from '@/utils/sqlParser'
@@ -448,12 +463,14 @@ const { project, fitView } = vueFlowInstance
 // 状态
 const saving = ref(false)
 const previewing = ref(false)
+const settingDefault = ref(false)
 const showTablePanel = ref(true)
 const showPropertyPanel = ref(true)
 const showPreviewPanel = ref(true)
 const previewPanelRef = ref<HTMLElement | null>(null)
 const datasources = ref<DataSource[]>([])
 const selectedDatasource = ref('')
+const categories = ref<Array<{ category_id: string | null; category_name: string; view_count?: number }>>([])
 const tables = ref<Dataset[]>([])
 const tableSearchKeyword = ref('')
 const viewType = ref<'joined' | 'sql'>('joined')
@@ -499,6 +516,8 @@ const pendingTableData = ref<any>(null)
 const formData = ref({
   name: '',
   display_name: '',
+  category_id: null as string | null,
+  category_name: '',
   description: ''
 })
 
@@ -730,6 +749,38 @@ async function loadDatasources() {
   }
 }
 
+// 加载分类
+async function loadCategories() {
+  try {
+    // 获取定义的分类列表
+    const categoryList = await getCategories()
+
+    // 转换为 a-select 需要的格式
+    categories.value = categoryList.map(cat => ({
+      category_id: cat.id,
+      category_name: cat.name,
+      view_count: undefined
+    }))
+
+    // 可选：添加统计信息（如果需要显示视图数量）
+    const stats = await getCategoryStats(selectedDatasource.value)
+    const statsMap = new Map(
+      stats.categories
+        .filter(c => c.category_id)
+        .map(c => [c.category_id, c.view_count])
+    )
+
+    // 合并统计信息
+    categories.value.forEach(cat => {
+      if (cat.category_id && statsMap.has(cat.category_id)) {
+        cat.view_count = statsMap.get(cat.category_id)
+      }
+    })
+  } catch (e) {
+    console.error('Failed to load categories:', e)
+  }
+}
+
 // 加载表列表
 async function loadTables() {
   if (!selectedDatasource.value) return
@@ -744,6 +795,7 @@ async function loadTables() {
 // 监听数据源变化
 watch(selectedDatasource, () => {
   loadTables()
+  loadCategories()
 })
 
 // 加载视图详情
@@ -1513,12 +1565,21 @@ async function handleSave() {
   
   saving.value = true
   try {
+    // 获取分类名称
+    let categoryName = formData.value.category_name
+    if (formData.value.category_id && !categoryName) {
+      const selectedCategory = categories.value.find(c => c.category_id === formData.value.category_id)
+      categoryName = selectedCategory?.category_name || ''
+    }
+
     const data: any = {
       name: formData.value.name,
       display_name: formData.value.display_name,
       description: formData.value.description,
       datasource_id: selectedDatasource.value,
       view_type: viewType.value,
+      category_id: formData.value.category_id,
+      category_name: categoryName,
       columns: viewColumns.value.filter(c => c.selected).map(c => {
         const config = columnConfigs.value.find(cc => cc.name === c.name)
         const colData: any = {
@@ -1575,6 +1636,24 @@ async function handleSave() {
     Message.error(e.message || '保存失败')
   } finally {
     saving.value = false
+  }
+}
+
+// 设为默认视图
+async function handleSetDefault() {
+  if (!isEdit.value || !viewId.value) {
+    Message.warning('请先保存视图')
+    return
+  }
+  
+  settingDefault.value = true
+  try {
+    await setDefaultView(viewId.value)
+    Message.success('已设置为默认视图')
+  } catch (e: any) {
+    Message.error(e.message || '设置默认视图失败')
+  } finally {
+    settingDefault.value = false
   }
 }
 

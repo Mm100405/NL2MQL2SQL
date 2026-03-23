@@ -3,6 +3,7 @@
 """
 from typing import Dict, Any, List, Optional, Union
 from sqlalchemy.orm import Session
+import re
 
 
 def filter_api_parameters(
@@ -40,6 +41,11 @@ def filter_api_parameters(
         for col in columns:
             # 只包含可过滤的字段
             if col.get("filterable", True):
+                # 判断是否为时间字段
+                field_type = col.get("type", "").lower()
+                time_keywords = ["date", "time", "datetime", "timestamp"]
+                is_time_field = any(kw in field_type for kw in time_keywords)
+                
                 all_filterable_fields.append({
                     "view_id": view.id,
                     "view_name": view.name,
@@ -49,7 +55,8 @@ def filter_api_parameters(
                     "type": col.get("type", "string"),
                     "source_column": col.get("source_column"),
                     "dict_id": col.get("dictionary_id"),
-                    "value_config": col.get("value_config", {})
+                    "value_config": col.get("value_config", {}),
+                    "is_time_field": is_time_field
                 })
 
     # 3. 筛选API参数
@@ -59,6 +66,71 @@ def filter_api_parameters(
     matched_fields = []
 
     for param_name in api_params:
+        # 检查是否是时间范围参数（xxx_开始, xxx_结束 或 xxx_start, xxx_end）
+        time_range_pattern = r'^(.+?)[_]?(开始|结束|start|end|from|to)$'
+        match = re.match(time_range_pattern, param_name, re.IGNORECASE)
+        
+        if match:
+            # 时间范围参数处理
+            base_name = match.group(1)
+            suffix = match.group(2).lower()
+            range_type = None
+            if suffix in ['开始', 'start', 'from']:
+                range_type = 'start'
+            elif suffix in ['结束', 'end', 'to']:
+                range_type = 'end'
+            
+            # 查找对应的基础时间字段
+            matched_field = None
+            for field in all_filterable_fields:
+                if field["is_time_field"] and (
+                    field["display_name"] == base_name or 
+                    field["field_name"] == base_name or
+                    base_name in field["display_name"] or
+                    base_name in (field.get("field_name") or "")
+                ):
+                    matched_field = field
+                    break
+            
+            if matched_field and range_type:
+                # 获取字典值（如果有）
+                dict_values = None
+                if matched_field.get("dict_id"):
+                    field_dict = db.query(FieldDictionary).filter(
+                        FieldDictionary.id == matched_field["dict_id"]
+                    ).first()
+                    if field_dict:
+                        dict_values = field_dict.values
+
+                param_entry = {
+                    "name": param_name,
+                    "field_name": matched_field["field_name"],
+                    "display_name": f"{matched_field['display_name']}_{'开始' if range_type == 'start' else '结束'}",
+                    "type": matched_field["type"],
+                    "source_field": matched_field["source_column"],
+                    "dict_id": matched_field.get("dict_id"),
+                    "dict_values": dict_values,
+                    "required": False,  # 时间范围参数默认可选
+                    "view_id": matched_field["view_id"],
+                    "view_name": matched_field["view_name"],
+                    "is_time_range": True,
+                    "range_type": range_type,
+                    "base_field_name": matched_field["field_name"]
+                }
+                valid_params.append(param_entry)
+
+                parameter_mappings[param_name] = {
+                    "source_field": matched_field["source_column"],
+                    "field_type": matched_field["type"],
+                    "field_name": matched_field["field_name"],
+                    "view_id": matched_field["view_id"],
+                    "is_time_range": True,
+                    "range_type": range_type
+                }
+                matched_fields.append(matched_field)
+                continue
+        
+        # 非时间范围参数处理
         # 精确匹配
         matched_field = None
         for field in all_filterable_fields:
@@ -76,6 +148,73 @@ def filter_api_parameters(
                     break
 
         if matched_field:
+            # 检查是否匹配到时间字段，如果是，需要拆分为开始和结束两个参数
+            if matched_field["is_time_field"]:
+                # 添加开始参数
+                start_param_name = f"{param_name}_开始"
+                dict_values = None
+                if matched_field.get("dict_id"):
+                    field_dict = db.query(FieldDictionary).filter(
+                        FieldDictionary.id == matched_field["dict_id"]
+                    ).first()
+                    if field_dict:
+                        dict_values = field_dict.values
+
+                start_param_entry = {
+                    "name": start_param_name,
+                    "field_name": matched_field["field_name"],
+                    "display_name": f"{matched_field['display_name']}_开始",
+                    "type": matched_field["type"],
+                    "source_field": matched_field["source_column"],
+                    "dict_id": matched_field.get("dict_id"),
+                    "dict_values": dict_values,
+                    "required": False,
+                    "view_id": matched_field["view_id"],
+                    "view_name": matched_field["view_name"],
+                    "is_time_range": True,
+                    "range_type": "start",
+                    "base_field_name": matched_field["field_name"]
+                }
+                valid_params.append(start_param_entry)
+                parameter_mappings[start_param_name] = {
+                    "source_field": matched_field["source_column"],
+                    "field_type": matched_field["type"],
+                    "field_name": matched_field["field_name"],
+                    "view_id": matched_field["view_id"],
+                    "is_time_range": True,
+                    "range_type": "start"
+                }
+
+                # 添加结束参数
+                end_param_name = f"{param_name}_结束"
+                end_param_entry = {
+                    "name": end_param_name,
+                    "field_name": matched_field["field_name"],
+                    "display_name": f"{matched_field['display_name']}_结束",
+                    "type": matched_field["type"],
+                    "source_field": matched_field["source_column"],
+                    "dict_id": matched_field.get("dict_id"),
+                    "dict_values": dict_values,
+                    "required": False,
+                    "view_id": matched_field["view_id"],
+                    "view_name": matched_field["view_name"],
+                    "is_time_range": True,
+                    "range_type": "end",
+                    "base_field_name": matched_field["field_name"]
+                }
+                valid_params.append(end_param_entry)
+                parameter_mappings[end_param_name] = {
+                    "source_field": matched_field["source_column"],
+                    "field_type": matched_field["type"],
+                    "field_name": matched_field["field_name"],
+                    "view_id": matched_field["view_id"],
+                    "is_time_range": True,
+                    "range_type": "end"
+                }
+                matched_fields.append(matched_field)
+                continue
+
+            # 普通参数处理
             # 获取字典值（如果有）
             dict_values = None
             if matched_field.get("dict_id"):
@@ -201,6 +340,10 @@ def generate_api_info(
         # 获取原始参数名（用户输入的参数名）
         param_name = mapping.get("param_name", field_name)
         field_type = mapping.get("field_type", "string")
+        
+        # 检查是否是时间范围参数
+        is_time_range = mapping.get("is_time_range", False)
+        
         # 转换为JSON Schema类型
         json_type = "string"
         if field_type in ["int", "integer", "number", "float"]:
@@ -208,11 +351,20 @@ def generate_api_info(
         elif field_type == "boolean":
             json_type = "boolean"
 
+        # 构建描述信息，对于时间范围参数添加额外说明
+        description = f"API参数: {param_name}"
+        if is_time_range:
+            range_type = mapping.get("range_type", "")
+            display_name = mapping.get("display_name", param_name)
+            description = f"时间范围参数: {display_name}"
+
         properties[param_name] = {
             "type": json_type,
-            "description": f"API参数: {param_name}"
+            "description": description
         }
-        required.append(param_name)
+        # 时间范围参数默认可选，其他参数根据required字段决定
+        if not is_time_range or mapping.get("required", False):
+            required.append(param_name)
 
     api_info = {
         "endpoint": f"/api/v1/data-format/custom/{config_id}",
@@ -222,8 +374,15 @@ def generate_api_info(
             {
                 "name": mapping.get("param_name", field_name),
                 "sourceField": mapping.get("source_field"),
+                "fieldName": mapping.get("field_name"),
                 "type": mapping.get("field_type", "string"),
-                "required": True
+                "displayName": mapping.get("display_name", name),
+                "required": mapping.get("required", True),
+                "isTimeRange": mapping.get("is_time_range", False),
+                "rangeType": mapping.get("range_type"),
+                "baseFieldName": mapping.get("base_field_name"),
+                "dictValues": mapping.get("dict_values"),
+                "viewName": mapping.get("view_name")
             }
             for field_name, mapping in parameter_mappings.items()
         ],
@@ -237,7 +396,11 @@ def generate_api_info(
                 "viewName": mapping.get("view_name"),
                 "required": mapping.get("required", True),
                 # 添加paramName字段，用于前端请求时作为参数key
-                "paramName": mapping.get("param_name", name)
+                "paramName": mapping.get("param_name", name),
+                # 添加时间范围相关字段
+                "isTimeRange": mapping.get("is_time_range", False),
+                "rangeType": mapping.get("range_type"),
+                "baseFieldName": mapping.get("base_field_name")
             }
             for name, mapping in parameter_mappings.items()
         },
@@ -253,7 +416,9 @@ def generate_api_info(
         "mqlTemplate": mql_template,
         "example": {
             "request": {
-                mapping.get("param_name", field_name): "示例值"
+                mapping.get("param_name", field_name): (
+                    "2023-01-01" if mapping.get("is_time_range") else "示例值"
+                )
                 for field_name, mapping in parameter_mappings.items()
             },
             "response": {

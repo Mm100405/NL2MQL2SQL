@@ -101,12 +101,6 @@ const routes: RouteRecordRaw[] = [
             name: 'QueryConfig',
             component: () => import('@/views/settings/QueryConfigPage.vue'),
             meta: { title: '问数配置' }
-          },
-          {
-            path: 'agent-test',
-            name: 'AgentTest',
-            component: () => import('@/views/agent/AgentTestPage.vue'),
-            meta: { title: 'Agent测试' }
           }
         ]
       },

@@ -41,11 +41,18 @@ async def execute_query(
     datasource = db.query(DataSource).filter(DataSource.id == datasource_id).first()
     
     if not datasource:
-        # Return demo data if no datasource
-        return get_demo_result()
+        # Return error if no datasource
+        print(f"[QueryExecutor] 数据源不存在: {datasource_id}")
+        return {
+            "error": f"数据源不存在: {datasource_id}",
+            "success": False
+        }
     
     # Build connection string
     connection_string = build_connection_string(datasource)
+    
+    print(f"[QueryExecutor] 执行查询: {sql}")
+    print(f"[QueryExecutor] 数据源: {datasource.name} ({datasource.type})")
     
     try:
         # Execute query
@@ -55,9 +62,13 @@ async def execute_query(
             if "LIMIT" not in sql.upper():
                 sql = f"{sql} LIMIT {limit}"
 
+            print(f"[QueryExecutor] 连接成功，执行 SQL...")
             result = conn.execute(text(sql))
             columns = list(result.keys())
             data = [list(row) for row in result.fetchall()]
+
+            print(f"[QueryExecutor] 查询成功，返回 {len(data)} 行数据")
+            print(f"[QueryExecutor] 列名: {columns}")
 
             # 转换Decimal类型为float，便于JSON序列化
             data = convert_decimal(data)
@@ -66,12 +77,18 @@ async def execute_query(
                 "columns": columns,
                 "data": data,
                 "total_count": len(data),
-                "chart_recommendation": recommend_chart_type(columns, data)
+                "chart_recommendation": recommend_chart_type(columns, data),
+                "success": True
             }
     except Exception as e:
-        # Return demo data on error
-        print(f"Query execution error: {e}")
-        return get_demo_result()
+        # Return error on exception
+        print(f"[QueryExecutor] 查询执行错误: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "error": f"查询执行失败: {str(e)}",
+            "success": False
+        }
 
 
 def build_connection_string(datasource: DataSource) -> str:

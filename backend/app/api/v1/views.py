@@ -6,11 +6,25 @@ from pydantic import BaseModel
 
 from app.database import get_db
 from app.models.view import View, ViewType
+from app.models.view_category import ViewCategory
 from app.models.dataset import Dataset
 from app.models.datasource import DataSource
 from app.services.query_executor import execute_query
 
 router = APIRouter()
+
+
+# ============ 分类 Schemas ============
+class CategoryCreate(BaseModel):
+    name: str
+    description: Optional[str] = None
+    parent_id: Optional[str] = None
+
+
+class CategoryUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    parent_id: Optional[str] = None
 
 
 # ============ Schemas ============
@@ -51,6 +65,8 @@ class ViewCreate(BaseModel):
     name: str
     display_name: Optional[str] = None
     datasource_id: str
+    category_id: Optional[str] = None
+    category_name: Optional[str] = None
     view_type: str = ViewType.SINGLE_TABLE
     base_table_id: Optional[str] = None
     join_config: Optional[dict] = None
@@ -63,6 +79,8 @@ class ViewCreate(BaseModel):
 class ViewUpdate(BaseModel):
     name: Optional[str] = None
     display_name: Optional[str] = None
+    category_id: Optional[str] = None
+    category_name: Optional[str] = None
     view_type: Optional[str] = None
     base_table_id: Optional[str] = None
     join_config: Optional[dict] = None
@@ -79,14 +97,223 @@ class PreviewRequest(BaseModel):
 
 
 # ============ Routes ============
-@router.get("")
-def get_views(datasource_id: Optional[str] = None, db: Session = Depends(get_db)):
-    """获取视图列表"""
+# ============ 分类路由（必须在视图路由之前）============
+
+@router.get("/categories/stats")
+def get_category_stats(datasource_id: Optional[str] = None, db: Session = Depends(get_db)):
+    """
+    获取视图分类统计
+
+    返回格式：
+    {
+        "categories": [
+            {"category_id": "xxx", "category_name": "xxx", "view_count": 10},
+            {"category_id": None, "category_name": "未分类", "view_count": 5}
+        ]
+    }
+    """
     query = db.query(View)
     if datasource_id:
         query = query.filter(View.datasource_id == datasource_id)
+
+    # 按分类分组统计
+    from sqlalchemy import func
+    category_stats = db.query(
+        View.category_id,
+        View.category_name,
+        func.count(View.id).label("count")
+    ).filter(
+        View.datasource_id == datasource_id if datasource_id else True
+    ).group_by(View.category_id, View.category_name).all()
+
+    # 转换为响应格式
+    categories = []
+    for category_id, category_name, count in category_stats:
+        cat_name = category_name or "未分类"
+        categories.append({
+            "category_id": category_id,
+            "category_name": cat_name,
+            "view_count": count
+        })
+
+    # 按视图数量降序排序
+    categories.sort(key=lambda x: x["view_count"], reverse=True)
+
+    return {"categories": categories}
+
+
+# ============ 分类管理接口 ============
+@router.get("/categories")
+def get_categories(db: Session = Depends(get_db)):
+    """获取所有分类"""
+    categories = db.query(ViewCategory).order_by(ViewCategory.name).all()
+    return [cat.to_dict() for cat in categories]
+
+
+@router.get("/categories/tree")
+def get_category_tree(db: Session = Depends(get_db)):
+    """获取分类树结构"""
+    categories = db.query(ViewCategory).all()
+
+    # 构建分类映射，转换为前端 a-tree 组件需要的格式
+    cat_map = {cat.id: {
+        "key": cat.id,
+        "title": cat.name,
+        "description": cat.description,
+        "parent_id": cat.parent_id,
+        "created_at": cat.created_at.isoformat() if cat.created_at else None,
+        "updated_at": cat.updated_at.isoformat() if cat.updated_at else None,
+        "children": []
+    } for cat in categories}
+
+    # 构建树结构
+    tree = []
+    for cat_id, cat_data in cat_map.items():
+        parent_id = cat_data["parent_id"]
+        if parent_id and parent_id in cat_map:
+            cat_map[parent_id]["children"].append(cat_data)
+        else:
+            tree.append(cat_data)
+
+    return tree
+
+
+@router.get("/categories/{id}")
+def get_category(id: str, db: Session = Depends(get_db)):
+    """获取单个分类详情"""
+    category = db.query(ViewCategory).filter(ViewCategory.id == id).first()
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+    return category.to_dict()
+
+
+@router.post("/categories")
+def create_category(data: CategoryCreate, db: Session = Depends(get_db)):
+    """创建新分类"""
+    # 检查名称是否重复
+    existing = db.query(ViewCategory).filter(ViewCategory.name == data.name).first()
+    if existing:
+        raise HTTPException(status_code=400, detail=f"Category name '{data.name}' already exists")
+    
+    # 如果有父分类，验证父分类存在
+    if data.parent_id:
+        parent = db.query(ViewCategory).filter(ViewCategory.id == data.parent_id).first()
+        if not parent:
+            raise HTTPException(status_code=404, detail="Parent category not found")
+    
+    category = ViewCategory(
+        name=data.name,
+        description=data.description,
+        parent_id=data.parent_id
+    )
+    db.add(category)
+    db.commit()
+    db.refresh(category)
+    return category.to_dict()
+
+
+@router.put("/categories/{id}")
+def update_category(id: str, data: CategoryUpdate, db: Session = Depends(get_db)):
+    """更新分类"""
+    category = db.query(ViewCategory).filter(ViewCategory.id == id).first()
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+    
+    # 检查名称是否重复
+    if data.name and data.name != category.name:
+        existing = db.query(ViewCategory).filter(ViewCategory.name == data.name).first()
+        if existing:
+            raise HTTPException(status_code=400, detail=f"Category name '{data.name}' already exists")
+    
+    # 验证父分类存在且不是自己
+    if data.parent_id is not None:
+        if data.parent_id == id:
+            raise HTTPException(status_code=400, detail="Cannot set category as its own parent")
+        parent = db.query(ViewCategory).filter(ViewCategory.id == data.parent_id).first()
+        if not parent:
+            raise HTTPException(status_code=404, detail="Parent category not found")
+    
+    update_data = data.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(category, key, value)
+    
+    db.commit()
+    db.refresh(category)
+    return category.to_dict()
+
+
+@router.delete("/categories/{id}")
+def delete_category(id: str, db: Session = Depends(get_db)):
+    """删除分类"""
+    category = db.query(ViewCategory).filter(ViewCategory.id == id).first()
+    if not category:
+        raise HTTPException(status_code=404, detail="Category not found")
+    
+    # 检查是否有视图使用此分类
+    view_count = db.query(View).filter(View.category_id == id).count()
+    if view_count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete category: {view_count} views are using this category"
+        )
+    
+    # 检查是否有子分类
+    child_count = db.query(ViewCategory).filter(ViewCategory.parent_id == id).count()
+    if child_count > 0:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Cannot delete category: {child_count} child categories exist"
+        )
+    
+    db.delete(category)
+    db.commit()
+    return {"message": "Deleted successfully"}
+
+
+# ============ 视图路由 ============
+@router.get("")
+def get_views(
+    datasource_id: Optional[str] = None,
+    category_id: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """获取视图列表（支持按数据源和分类筛选）"""
+    query = db.query(View)
+    if datasource_id:
+        query = query.filter(View.datasource_id == datasource_id)
+    if category_id:
+        query = query.filter(View.category_id == category_id)
     views = query.order_by(View.created_at.desc()).all()
     return [v.to_dict() for v in views]
+
+
+@router.get("/default")
+def get_default_view(db: Session = Depends(get_db)):
+    """获取默认视图"""
+    view = db.query(View).filter(View.is_default == True).first()
+    if not view:
+        # 如果没有默认视图，返回第一个视图
+        view = db.query(View).first()
+    if not view:
+        return None
+    return view.to_dict()
+
+
+@router.put("/{id}/default")
+def set_default_view(id: str, db: Session = Depends(get_db)):
+    """设置默认视图"""
+    view = db.query(View).filter(View.id == id).first()
+    if not view:
+        raise HTTPException(status_code=404, detail="View not found")
+    
+    # 清除其他视图的默认标记
+    db.query(View).filter(View.is_default == True).update({"is_default": False})
+    
+    # 设置当前视图为默认
+    view.is_default = True
+    db.commit()
+    db.refresh(view)
+    return view.to_dict()
 
 
 @router.get("/{id}")
@@ -129,6 +356,8 @@ def create_view(data: ViewCreate, db: Session = Depends(get_db)):
         name=data.name,
         display_name=data.display_name,
         datasource_id=data.datasource_id,
+        category_id=data.category_id,
+        category_name=data.category_name,
         view_type=data.view_type,
         base_table_id=data.base_table_id,
         join_config=data.join_config,
@@ -421,11 +650,16 @@ def get_filterable_fields(id: str, db: Session = Depends(get_db)):
     from app.models.field_dict import FieldDictionary
     
     filterable_fields = []
+    time_type_keywords = ["date", "time", "datetime", "timestamp"]
     
     # 获取视图的列配置
     if view.columns:
         for col in view.columns:
             if col.get("filterable", True):  # 默认可过滤
+                field_type = col.get("type", "").lower()
+                # 判断是否为时间字段
+                is_time_field = any(keyword in field_type for keyword in time_type_keywords)
+                
                 field_info = {
                     "name": col.get("name"),
                     "display_name": col.get("display_name") or col.get("name"),
@@ -433,7 +667,8 @@ def get_filterable_fields(id: str, db: Session = Depends(get_db)):
                     "type": col.get("type"),
                     "value_config": col.get("value_config", {"type": "none"}),
                     "filter_operators": col.get("filter_operators", ["=", "!=", "IN", "NOT IN"]),
-                    "synonyms": col.get("synonyms", [])
+                    "synonyms": col.get("synonyms", []),
+                    "is_time_field": is_time_field  # 标记是否为时间字段
                 }
                 
                 # 如果有字典，获取字典信息
@@ -741,3 +976,5 @@ async def get_column_values(
             return {"type": "sampled", "values": values, "total": len(values)}
         except Exception as e:
             return {"type": "sampled", "values": [], "error": str(e)}
+
+

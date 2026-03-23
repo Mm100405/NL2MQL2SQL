@@ -123,29 +123,33 @@ async def call_llm(
     model_name: str,
     api_key: Optional[str] = None,
     api_base: Optional[str] = None,
-    config_params: Optional[dict] = None
+    config_params: Optional[dict] = None,
+    timeout: Optional[float] = None
 ) -> str:
     """Call LLM and return response"""
     config = config_params or {}
     temperature = config.get("temperature", 0.7)
     max_tokens = config.get("max_tokens", 4096)
+    # 默认超时：优先使用传入的 timeout，其次使用 config_params 中的，最后使用默认值
+    timeout = timeout or config.get("timeout", 120.0)
     
     if provider == "openai":
-        return await _call_openai(prompt, api_key, api_base, model_name, temperature, max_tokens)
+        return await _call_openai(prompt, api_key, api_base, model_name, temperature, max_tokens, timeout)
     elif provider == "ollama":
-        return await _call_ollama(prompt, api_base or "http://localhost:11434", model_name, temperature, max_tokens)
+        return await _call_ollama(prompt, api_base or "http://localhost:11434", model_name, temperature, max_tokens, timeout)
     elif provider == "azure":
-        return await _call_azure(prompt, api_key, api_base, model_name, temperature, max_tokens)
+        return await _call_azure(prompt, api_key, api_base, model_name, temperature, max_tokens, timeout)
     elif provider == "custom":
-        return await _call_custom(prompt, api_key, api_base, model_name, temperature, max_tokens)
+        return await _call_custom(prompt, api_key, api_base, model_name, temperature, max_tokens, timeout)
     else:
         raise ValueError(f"Unknown provider: {provider}")
 
 
-async def _call_openai(prompt: str, api_key: str, api_base: Optional[str], model_name: str, temperature: float, max_tokens: int) -> str:
+async def _call_openai(prompt: str, api_key: str, api_base: Optional[str], model_name: str, temperature: float, max_tokens: int, timeout: float) -> str:
     client = openai.AsyncOpenAI(
         api_key=api_key,
-        base_url=api_base if api_base else None
+        base_url=api_base if api_base else None,
+        timeout=timeout
     )
     
     response = await client.chat.completions.create(
@@ -158,7 +162,7 @@ async def _call_openai(prompt: str, api_key: str, api_base: Optional[str], model
     return response.choices[0].message.content
 
 
-async def _call_ollama(prompt: str, api_base: str, model_name: str, temperature: float, max_tokens: int) -> str:
+async def _call_ollama(prompt: str, api_base: str, model_name: str, temperature: float, max_tokens: int, timeout: float) -> str:
     async with httpx.AsyncClient() as client:
         response = await client.post(
             f"{api_base}/api/generate",
@@ -171,16 +175,17 @@ async def _call_ollama(prompt: str, api_base: str, model_name: str, temperature:
                     "num_predict": max_tokens
                 }
             },
-            timeout=60.0
+            timeout=timeout
         )
         return response.json().get("response", "")
 
 
-async def _call_azure(prompt: str, api_key: str, api_base: str, model_name: str, temperature: float, max_tokens: int) -> str:
+async def _call_azure(prompt: str, api_key: str, api_base: str, model_name: str, temperature: float, max_tokens: int, timeout: float) -> str:
     client = openai.AsyncAzureOpenAI(
         api_key=api_key,
         azure_endpoint=api_base,
-        api_version="2024-02-15-preview"
+        api_version="2024-02-15-preview",
+        timeout=timeout
     )
     
     response = await client.chat.completions.create(
@@ -193,7 +198,7 @@ async def _call_azure(prompt: str, api_key: str, api_base: str, model_name: str,
     return response.choices[0].message.content
 
 
-async def _call_custom(prompt: str, api_key: Optional[str], api_base: str, model_name: str, temperature: float, max_tokens: int) -> str:
+async def _call_custom(prompt: str, api_key: Optional[str], api_base: str, model_name: str, temperature: float, max_tokens: int, timeout: float) -> str:
     async with httpx.AsyncClient() as client:
         headers = {"Content-Type": "application/json"}
         if api_key:
@@ -209,12 +214,12 @@ async def _call_custom(prompt: str, api_key: Optional[str], api_base: str, model
                     "temperature": temperature,
                     "max_tokens": max_tokens
                 },
-                timeout=30.0
+                timeout=timeout
             )
             response.raise_for_status()
             data = response.json()
             return data.get("choices", [{}])[0].get("message", {}).get("content", "")
         except httpx.TimeoutException:
-            raise Exception("LLM request timed out after 30 seconds")
+            raise Exception(f"LLM request timed out after {timeout} seconds")
         except Exception as e:
             raise Exception(f"LLM request failed: {str(e)}")

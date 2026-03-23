@@ -51,7 +51,10 @@
 
         <div class="user-info">
           <a-avatar :size="24">云轩</a-avatar>
-          <span>向云轩</span>
+          <span class="user-name">向云轩</span>
+          <a-button type="text" size="small" class="settings-btn" @click="openSettings">
+            <template #icon><icon-settings /></template>
+          </a-button>
         </div>
       </template>
 
@@ -182,6 +185,372 @@
       </a-layout-content>
     </a-layout>
   </a-layout>
+
+  <!-- 设置弹窗 -->
+  <a-modal
+    v-model:visible="settingsVisible"
+    title="设置"
+    :width="1100"
+    :footer="false"
+    @cancel="closeSettings"
+    class="settings-modal"
+  >
+    <div class="settings-content">
+      <!-- 左侧：通用设置 -->
+      <div class="settings-left">
+        <div class="user-profile">
+          <a-avatar :size="80">云轩</a-avatar>
+          <h3 class="profile-name">向云轩</h3>
+          <p class="profile-role">数据分析专家</p>
+        </div>
+
+        <a-divider style="margin: 16px 0;" />
+
+        <div class="profile-settings">
+          <a-form layout="vertical">
+            <a-form-item label="头像">
+              <a-input v-model="userProfile.avatar" placeholder="输入头像URL" />
+            </a-form-item>
+            <a-form-item label="用户名">
+              <a-input v-model="userProfile.name" placeholder="输入用户名" />
+            </a-form-item>
+          </a-form>
+        </div>
+      </div>
+
+      <!-- 右侧：分标签设置 -->
+      <div class="settings-right">
+        <a-tabs v-model:active-key="activeTab" type="line">
+          <!-- 智能体状态 -->
+          <a-tab-pane key="status" title="智能体状态">
+            <div class="status-panel">
+              <a-descriptions :column="2" bordered>
+                <a-descriptions-item label="Agent状态">
+                  <a-tag :color="agentStatus.color">{{ agentStatus.text }}</a-tag>
+                </a-descriptions-item>
+                <a-descriptions-item label="当前模型">
+                  {{ agentStatus.currentModel || '未配置' }}
+                </a-descriptions-item>
+                <a-descriptions-item label="已加载Skills">
+                  {{ agentStatus.loadedSkills || 0 }} 个
+                </a-descriptions-item>
+                <a-descriptions-item label="核心工具">
+                  {{ agentStatus.coreTools || 8 }} 个
+                </a-descriptions-item>
+              </a-descriptions>
+
+              <a-divider style="margin: 24px 0;" />
+
+              <!-- Agent 信息 -->
+              <h4>Agent 信息</h4>
+              <a-descriptions :column="1" bordered size="small">
+                <a-descriptions-item label="工具总数">
+                  {{ agentInfo.totalTools || 0 }} 个
+                </a-descriptions-item>
+                <a-descriptions-item label="工具路径">
+                  <a-tag color="blue" size="small">
+                    {{ agentInfo.skillPaths?.length || 0 }} 个路径
+                  </a-tag>
+                </a-descriptions-item>
+                <a-descriptions-item label="启用技能">
+                  {{ agentInfo.enabledSkills || 0 }} 个
+                </a-descriptions-item>
+                <a-descriptions-item label="健康状态">
+                  <a-tag :color="agentInfo.healthy ? 'green' : 'red'">
+                    {{ agentInfo.healthy ? '正常' : '异常' }}
+                  </a-tag>
+                </a-descriptions-item>
+              </a-descriptions>
+
+              <a-divider style="margin: 24px 0;" />
+
+              <h4>模型配置</h4>
+              <a-form layout="vertical">
+                <a-row :gutter="16">
+                  <a-col :span="12">
+                    <a-form-item label="LLM模型">
+                      <a-select v-model="modelConfig.llmModel" placeholder="选择模型">
+                        <a-option value="gpt-4">GPT-4</a-option>
+                        <a-option value="gpt-3.5-turbo">GPT-3.5 Turbo</a-option>
+                        <a-option value="claude-3">Claude-3</a-option>
+                      </a-select>
+                    </a-form-item>
+                  </a-col>
+                  <a-col :span="12">
+                    <a-form-item label="温度">
+                      <a-slider v-model="modelConfig.temperature" :min="0" :max="1" :step="0.1" />
+                    </a-form-item>
+                  </a-col>
+                </a-row>
+                <a-row :gutter="16">
+                  <a-col :span="12">
+                    <a-form-item label="最大重试次数">
+                      <a-input-number v-model="modelConfig.maxRetries" :min="1" :max="10" />
+                    </a-form-item>
+                  </a-col>
+                  <a-col :span="12">
+                    <a-form-item label="超时时间（秒）">
+                      <a-input-number v-model="modelConfig.timeout" :min="10" :max="300" />
+                    </a-form-item>
+                  </a-col>
+                </a-row>
+              </a-form>
+
+              <div style="text-align: right; margin-top: 16px;">
+                <a-button type="primary" @click="saveModelConfig">
+                  保存配置
+                </a-button>
+              </div>
+            </div>
+          </a-tab-pane>
+
+          <!-- 技能管理 -->
+          <a-tab-pane key="skills" title="技能管理">
+            <div class="skills-panel">
+              <a-tabs v-model:active-key="skillsTab" type="card-gutter">
+                <!-- 核心技能 -->
+                <a-tab-pane key="core" title="核心技能">
+                  <div class="skills-list">
+                    <a-alert
+                      type="info"
+                      content="核心技能是系统内置的基础工具，不可关闭或删除"
+                      style="margin-bottom: 16px;"
+                    />
+                    <a-list :data="coreSkills" size="small">
+                      <template #item="{ item }">
+                        <a-list-item>
+                          <a-list-item-meta :title="item.name" :description="item.description">
+                            <template #avatar>
+                              <icon-tool :size="24" style="color: rgb(var(--primary-6))" />
+                            </template>
+                          </a-list-item-meta>
+                          <template #actions>
+                            <a-tag color="arcoblue">核心</a-tag>
+                          </template>
+                        </a-list-item>
+                      </template>
+                    </a-list>
+                  </div>
+                </a-tab-pane>
+
+                <!-- 外部技能 -->
+                <a-tab-pane key="external" title="外部技能">
+                  <div class="external-skills-section">
+                    <!-- 操作栏 -->
+                    <div class="skills-toolbar">
+                      <a-space>
+                        <a-button type="primary" @click="openLoadSkillModal">
+                          <template #icon>
+                            <icon-plus />
+                          </template>
+                          加载技能
+                        </a-button>
+                        <a-button @click="refreshSkillsList">
+                          <template #icon>
+                            <icon-refresh />
+                          </template>
+                          刷新
+                        </a-button>
+                        <a-button status="danger" @click="unloadAllSkills" :disabled="externalSkills.length === 0">
+                          <template #icon>
+                            <icon-delete />
+                          </template>
+                          卸载全部
+                        </a-button>
+                        <a-input-search
+                          v-model="skillSearch"
+                          placeholder="搜索技能"
+                          style="width: 200px;"
+                          @search="filterSkills"
+                        />
+                      </a-space>
+                      <a-space>
+                        <span class="skills-count">
+                          已加载: {{ externalSkills.length }} 个
+                        </span>
+                      </a-space>
+                    </div>
+
+                    <!-- 技能列表 -->
+                    <a-spin :loading="skillsLoading">
+                      <div v-if="externalSkills.length === 0" class="empty-skills">
+                        <a-empty description="暂无外部技能，请点击加载技能添加">
+                          <template #image>
+                            <icon-file :size="64" style="color: #c9cdd4;" />
+                          </template>
+                        </a-empty>
+                      </div>
+                      <a-list v-else :data="filteredExternalSkills" size="small" class="skills-list">
+                        <template #item="{ item }">
+                          <a-list-item @click="showSkillDetail(item)" style="cursor: pointer;">
+                            <a-list-item-meta
+                              :title="item.name || item.skill_id"
+                              :description="item.description || item.skill_id"
+                            >
+                              <template #avatar>
+                                <icon-apps :size="24" :style="{ color: item.enabled ? 'rgb(var(--success-6))' : '#c9cdd4' }" />
+                              </template>
+                            </a-list-item-meta>
+                            <template #actions>
+                              <a-switch
+                                v-model="item.enabled"
+                                :loading="item.switching"
+                                @click.stop="toggleSkill(item)"
+                              />
+                              <a-button
+                                type="text"
+                                status="danger"
+                                size="small"
+                                @click.stop="unloadSkill(item.skill_id)"
+                              >
+                                <template #icon>
+                                  <icon-delete />
+                                </template>
+                              </a-button>
+                            </template>
+                          </a-list-item>
+                        </template>
+                      </a-list>
+                    </a-spin>
+                  </div>
+                </a-tab-pane>
+              </a-tabs>
+            </div>
+          </a-tab-pane>
+
+          <!-- 关于我们 -->
+          <a-tab-pane key="about" title="关于我们">
+            <div class="about-panel">
+              <div class="about-header">
+                <h3>智能问数系统</h3>
+                <p class="version">版本: v1.0.0</p>
+              </div>
+
+              <a-divider />
+
+              <div class="about-content">
+                <h4>系统简介</h4>
+                <p>
+                  智能问数系统是一个基于 LangChain Deep Agents 的数据分析平台，
+                  支持自然语言查询、动态技能加载和流式结果展示。
+                </p>
+
+                <h4>核心功能</h4>
+                <ul>
+                  <li>自然语言查询：用日常语言提问，系统自动转换为查询</li>
+                  <li>流式输出：实时展示查询步骤和结果</li>
+                  <li>动态技能：运行时加载、卸载外部技能</li>
+                  <li>多数据源支持：支持多种数据库和数据源</li>
+                </ul>
+
+                <h4>技术栈</h4>
+                <a-space wrap>
+                  <a-tag color="arcoblue">Vue 3</a-tag>
+                  <a-tag color="arcoblue">TypeScript</a-tag>
+                  <a-tag color="arcoblue">Arco Design</a-tag>
+                  <a-tag color="green">Python</a-tag>
+                  <a-tag color="green">FastAPI</a-tag>
+                  <a-tag color="orange">LangChain</a-tag>
+                  <a-tag color="orange">Deep Agents</a-tag>
+                </a-space>
+              </div>
+
+              <a-divider />
+
+              <div class="about-footer">
+                <p>© 2026 Qoder. All rights reserved.</p>
+              </div>
+            </div>
+          </a-tab-pane>
+        </a-tabs>
+      </div>
+    </div>
+  </a-modal>
+
+  <!-- 加载技能弹窗 -->
+  <a-modal
+    v-model:visible="loadSkillModalVisible"
+    title="加载外部技能"
+    :width="600"
+    @ok="handleLoadSkill"
+    @cancel="closeLoadSkillModal"
+  >
+    <a-form layout="vertical">
+      <a-form-item label="加载方式">
+        <a-radio-group v-model="loadSkillMethod">
+          <a-radio value="directory">从目录加载</a-radio>
+          <a-radio value="url">从URL加载</a-radio>
+        </a-radio-group>
+      </a-form-item>
+
+      <a-form-item v-if="loadSkillMethod === 'directory'" label="目录路径">
+        <a-input
+          v-model="loadSkillForm.directory"
+          placeholder="例如: backend/app/agents/external_skills"
+        />
+      </a-form-item>
+
+      <a-form-item v-if="loadSkillMethod === 'url'" label="技能ID">
+        <a-input v-model="loadSkillForm.skill_id" placeholder="例如: web-search" />
+      </a-form-item>
+
+      <a-form-item v-if="loadSkillMethod === 'url'" label="URL">
+        <a-input
+          v-model="loadSkillForm.url"
+          placeholder="https://example.com/skill/SKILL.md"
+        />
+      </a-form-item>
+
+      <a-form-item>
+        <a-checkbox v-model="loadSkillForm.force_reload">
+          强制重新加载（如果已存在）
+        </a-checkbox>
+      </a-form-item>
+    </a-form>
+  </a-modal>
+
+  <!-- 技能详情弹窗 -->
+  <a-modal
+    v-model:visible="skillDetailVisible"
+    :title="`技能详情 - ${currentSkill?.name || currentSkill?.skill_id}`"
+    :width="800"
+    :footer="false"
+    @cancel="skillDetailVisible = false"
+  >
+    <div v-if="currentSkill" class="skill-detail">
+      <a-descriptions :column="2" bordered>
+        <a-descriptions-item label="技能ID">
+          {{ currentSkill.skill_id }}
+        </a-descriptions-item>
+        <a-descriptions-item label="名称">
+          {{ currentSkill.name }}
+        </a-descriptions-item>
+        <a-descriptions-item label="来源" span="2">
+          <a-tag :color="currentSkill.source === 'url' ? 'blue' : 'green'">
+            {{ currentSkill.source === 'url' ? 'URL加载' : '本地加载' }}
+          </a-tag>
+        </a-descriptions-item>
+        <a-descriptions-item label="描述" span="2">
+          {{ currentSkill.description || '暂无描述' }}
+        </a-descriptions-item>
+        <a-descriptions-item label="加载时间">
+          {{ currentSkill.loaded_at || '未知' }}
+        </a-descriptions-item>
+        <a-descriptions-item label="状态">
+          <a-tag :color="currentSkill.enabled ? 'green' : 'red'">
+            {{ currentSkill.enabled ? '已启用' : '已禁用' }}
+          </a-tag>
+        </a-descriptions-item>
+      </a-descriptions>
+
+      <a-divider />
+
+      <h4>元数据</h4>
+      <a-card size="small" style="background: #f7f8fa;">
+        <pre style="white-space: pre-wrap; word-break: break-all;">{{ JSON.stringify(currentSkill.metadata || {}, null, 2) }}</pre>
+      </a-card>
+    </div>
+  </a-modal>
 </template>
 
 <script setup lang="ts">
@@ -191,6 +560,17 @@ import { useAppStore } from '@/stores/app'
 import { useSettingsStore } from '@/stores/settings'
 import { getQueryHistory } from '@/api/query'
 import type { QueryHistory } from '@/api/types'
+import { Message, Modal } from '@arco-design/web-vue'
+import {
+  IconSettings,
+  IconTool,
+  IconApps,
+  IconPlus,
+  IconRefresh,
+  IconDelete,
+  IconFile,
+  IconCheckCircle
+} from '@arco-design/web-vue/es/icon'
 
 const route = useRoute()
 const router = useRouter()
@@ -199,6 +579,97 @@ const settingsStore = useSettingsStore()
 
 const showAgentSidebar = ref(true)
 const chatHistory = ref<QueryHistory[]>([])
+
+// ===== 设置相关 =====
+const settingsVisible = ref(false)
+const activeTab = ref('status')
+const userProfile = ref({
+  name: '向云轩',
+  avatar: ''
+})
+
+// ===== 智能体状态 =====
+const agentStatus = ref({
+  color: 'green',
+  text: '运行中',
+  currentModel: 'gpt-3.5-turbo',
+  loadedSkills: 0,
+  coreTools: 8
+})
+
+const agentInfo = ref({
+  totalTools: 0,
+  skillPaths: [],
+  enabledSkills: 0,
+  healthy: false
+})
+
+const modelConfig = ref({
+  llmModel: 'gpt-3.5-turbo',
+  temperature: 0.7,
+  maxRetries: 3,
+  timeout: 60
+})
+
+// ===== 技能管理 =====
+const skillsTab = ref('external')
+const skillsLoading = ref(false)
+const externalSkills = ref<any[]>([])
+const skillSearch = ref('')
+const coreSkills = ref([
+  { name: '意图分析', description: '分析用户查询的意图和需求' },
+  { name: '元数据检索', description: '检索数据源的元数据信息' },
+  { name: 'MQL生成', description: '将自然语言转换为MQL查询' },
+  { name: 'MQL验证', description: '验证生成的MQL是否正确' },
+  { name: 'MQL修正', description: '自动修正有误的MQL' },
+  { name: 'SQL转换', description: '将MQL转换为可执行的SQL' },
+  { name: '查询执行', description: '执行SQL查询并返回结果' },
+  { name: '结果分析', description: '分析查询结果并提供洞察' }
+])
+
+// ===== 加载技能弹窗 =====
+const loadSkillModalVisible = ref(false)
+const loadSkillMethod = ref('directory')
+const loadSkillForm = ref({
+  directory: 'backend/app/agents/external_skills',
+  skill_id: '',
+  url: '',
+  force_reload: false
+})
+
+// ===== 技能详情弹窗 =====
+const skillDetailVisible = ref(false)
+const currentSkill = ref<any>(null)
+
+async function showSkillDetail(skill: any) {
+  try {
+    const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'}`
+    const response = await fetch(`${API_BASE}/skills/info/${skill.skill_id}`)
+    const data = await response.json()
+    if (data.success) {
+      currentSkill.value = data.skill_info
+      skillDetailVisible.value = true
+    } else {
+      Message.error(`获取技能详情失败: ${data.message}`)
+    }
+  } catch (error: any) {
+    Message.error(`获取技能详情失败: ${error.message}`)
+  }
+}
+
+// ===== 计算属性 =====
+const filteredExternalSkills = computed(() => {
+  if (!skillSearch.value) {
+    return externalSkills.value
+  }
+  const keyword = skillSearch.value.toLowerCase()
+  return externalSkills.value.filter(
+    (skill) =>
+      skill.skill_id.toLowerCase().includes(keyword) ||
+      (skill.name && skill.name.toLowerCase().includes(keyword)) ||
+      (skill.description && skill.description.toLowerCase().includes(keyword))
+  )
+})
 
 async function fetchHistory() {
   try {
@@ -306,6 +777,266 @@ function handleMenuClick(key: string) {
 // 跳转到模型配置页面
 function goToModelConfig() {
   router.push({ name: 'ModelConfig' })
+}
+
+// ===== 设置相关 =====
+function openSettings() {
+  settingsVisible.value = true
+  refreshSkillsList()
+  loadAgentStatus()
+  loadAgentInfo()
+  checkAgentHealth()
+}
+
+function closeSettings() {
+  settingsVisible.value = false
+}
+
+async function loadAgentStatus() {
+  try {
+    const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'}`
+    const response = await fetch(`${API_BASE}/skills/stats`)
+    const data = await response.json()
+    if (data.success) {
+      agentStatus.value.loadedSkills = data.data?.total || 0
+      agentInfo.value.enabledSkills = data.data?.total || 0
+    }
+  } catch (error) {
+    console.error('Failed to load agent status:', error)
+  }
+}
+
+async function loadAgentInfo() {
+  try {
+    const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'}`
+    const response = await fetch(`${API_BASE}/skills/agent/info`)
+    const data = await response.json()
+    if (data.success) {
+      agentInfo.value = {
+        totalTools: data.info?.total_tools || 0,
+        skillPaths: data.info?.skill_paths || [],
+        enabledSkills: data.info?.enabled_skills || 0,
+        healthy: data.info?.healthy || false
+      }
+    }
+  } catch (error) {
+    console.error('Failed to load agent info:', error)
+  }
+}
+
+async function checkAgentHealth() {
+  try {
+    const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'}`
+    const response = await fetch(`${API_BASE}/skills/health`)
+    const data = await response.json()
+    if (data.success) {
+      agentInfo.value.healthy = true
+    } else {
+      agentInfo.value.healthy = false
+      console.warn('Agent health check failed:', data.message)
+    }
+  } catch (error) {
+    agentInfo.value.healthy = false
+    console.error('Agent health check error:', error)
+  }
+}
+
+async function saveModelConfig() {
+  try {
+    // TODO: 调用API保存模型配置
+    Message.success('配置已保存')
+  } catch (error: any) {
+    Message.error(`保存失败: ${error.message}`)
+  }
+}
+
+// ===== 技能管理相关 =====
+async function refreshSkillsList() {
+  skillsLoading.value = true
+  try {
+    const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'}`
+    const response = await fetch(`${API_BASE}/skills/list`)
+    const data = await response.json()
+    if (data.success && data.data) {
+      externalSkills.value = data.data.map((skill: any) => ({
+        ...skill,
+        enabled: skill.enabled !== false
+      }))
+      agentStatus.value.loadedSkills = externalSkills.value.length
+    }
+  } catch (error: any) {
+    Message.error(`加载技能列表失败: ${error.message}`)
+  } finally {
+    skillsLoading.value = false
+  }
+}
+
+function openLoadSkillModal() {
+  loadSkillModalVisible.value = true
+}
+
+function closeLoadSkillModal() {
+  loadSkillModalVisible.value = false
+  loadSkillForm.value = {
+    directory: 'backend/app/agents/external_skills',
+    skill_id: '',
+    url: '',
+    force_reload: false
+  }
+}
+
+async function handleLoadSkill() {
+  if (loadSkillMethod.value === 'directory' && !loadSkillForm.value.directory) {
+    Message.warning('请输入目录路径')
+    return
+  }
+
+  if (loadSkillMethod.value === 'url' && (!loadSkillForm.value.skill_id || !loadSkillForm.value.url)) {
+    Message.warning('请填写技能ID和URL')
+    return
+  }
+
+  skillsLoading.value = true
+  try {
+    const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'}`
+    let url = ''
+    let body: any = {}
+
+    if (loadSkillMethod.value === 'directory') {
+      url = `${API_BASE}/skills/load/directory`
+      body = {
+        directory: loadSkillForm.value.directory,
+        force_reload: loadSkillForm.value.force_reload
+      }
+    } else {
+      url = `${API_BASE}/skills/load/url`
+      body = {
+        skill_id: loadSkillForm.value.skill_id,
+        url: loadSkillForm.value.url,
+        force_reload: loadSkillForm.value.force_reload
+      }
+    }
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body)
+    })
+
+    const data = await response.json()
+    if (data.success) {
+      Message.success('技能加载成功')
+      closeLoadSkillModal()
+      await refreshSkillsList()
+    } else {
+      Message.error(`加载失败: ${data.message || '未知错误'}`)
+    }
+  } catch (error: any) {
+    Message.error(`加载失败: ${error.message}`)
+  } finally {
+    skillsLoading.value = false
+  }
+}
+
+async function toggleSkill(skill: any) {
+  skill.switching = true
+  try {
+    const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'}`
+    const response = await fetch(`${API_BASE}/agent/skills/toggle`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        skill_name: skill.name || skill.skill_id,
+        enabled: skill.enabled
+      })
+    })
+
+    const data = await response.json()
+    if (data.success) {
+      Message.success(`${skill.name || skill.skill_id} 已${skill.enabled ? '启用' : '禁用'}`)
+      await loadAgentStatus()
+    } else {
+      // 如果后端API调用失败，回滚状态
+      skill.enabled = !skill.enabled
+      Message.error(`操作失败: ${data.message || '未知错误'}`)
+    }
+
+    // 如果禁用，可以提示用户是否要卸载技能
+    if (!skill.enabled) {
+      Modal.confirm({
+        title: '提示',
+        content: '技能已禁用。是否要完全卸载该技能？',
+        okText: '卸载',
+        cancelText: '保留',
+        onOk: async () => {
+          await unloadSkill(skill.skill_id)
+        }
+      })
+    }
+  } catch (error: any) {
+    // 发生错误时回滚状态
+    skill.enabled = !skill.enabled
+    Message.error(`操作失败: ${error.message}`)
+  } finally {
+    skill.switching = false
+  }
+}
+
+async function unloadSkill(skillId: string) {
+  try {
+    const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'}`
+    const response = await fetch(`${API_BASE}/skills/unload/${skillId}`, {
+      method: 'DELETE'
+    })
+
+    const data = await response.json()
+    if (data.success) {
+      Message.success('技能已卸载')
+      await refreshSkillsList()
+    } else {
+      Message.error(`卸载失败: ${data.message || '未知错误'}`)
+    }
+  } catch (error: any) {
+    Message.error(`卸载失败: ${error.message}`)
+  }
+}
+
+async function unloadAllSkills() {
+  if (externalSkills.value.length === 0) {
+    Message.warning('没有可卸载的技能')
+    return
+  }
+
+  Modal.confirm({
+    title: '确认卸载',
+    content: `确定要卸载所有 ${externalSkills.value.length} 个技能吗？`,
+    okText: '确定',
+    cancelText: '取消',
+    onOk: async () => {
+      try {
+        const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'}`
+        const response = await fetch(`${API_BASE}/skills/unload/all`, {
+          method: 'DELETE'
+        })
+
+        const data = await response.json()
+        if (data.success) {
+          Message.success(`已卸载 ${data.unloaded?.length || 0} 个技能`)
+          await refreshSkillsList()
+        } else {
+          Message.error(`卸载失败: ${data.message || '未知错误'}`)
+        }
+      } catch (error: any) {
+        Message.error(`批量卸载失败: ${error.message}`)
+      }
+    }
+  })
+}
+
+function filterSkills() {
+  // 搜索已在 computed 中处理
 }
 
 // 初始化时检查模型配置状态
@@ -435,6 +1166,18 @@ watch(() => route.path, async (newPath, oldPath) => {
   color: #4e5969;
 }
 
+.user-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-btn {
+  padding: 4px 8px;
+  margin-left: auto;
+}
+
 .main-layout {
   height: 100vh;
 }
@@ -486,5 +1229,148 @@ watch(() => route.path, async (newPath, oldPath) => {
 :deep(.arco-menu) {
   height: calc(100vh - 64px);
   overflow: auto;
+}
+
+/* ===== 设置弹窗样式 ===== */
+.settings-modal :deep(.arco-modal-body) {
+  max-height: calc(100vh - 200px);
+  overflow-y: auto;
+}
+
+.settings-content {
+  display: flex;
+  gap: 24px;
+  min-height: 500px;
+}
+
+/* 左侧通用设置 */
+.settings-left {
+  width: 280px;
+  padding: 24px;
+  background: #f7f8fa;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.user-profile {
+  text-align: center;
+}
+
+.profile-name {
+  margin: 16px 0 8px 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: #1d2129;
+}
+
+.profile-role {
+  margin: 0;
+  color: #86909c;
+  font-size: 13px;
+}
+
+.profile-settings :deep(.arco-form-item-label-col) {
+  padding-bottom: 4px;
+}
+
+/* 右侧标签页 */
+.settings-right {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-right :deep(.arco-tabs-content) {
+  padding-top: 16px;
+}
+
+/* 智能体状态 */
+.status-panel h4 {
+  margin: 0 0 16px 0;
+  font-size: 14px;
+  color: #1d2129;
+}
+
+/* 技能管理 */
+.skills-panel {
+  height: 100%;
+}
+
+.skills-list {
+  max-height: 400px;
+  overflow-y: auto;
+}
+
+.skills-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e5e6eb;
+}
+
+.skills-count {
+  color: #86909c;
+  font-size: 13px;
+}
+
+.external-skills-section {
+  min-height: 400px;
+}
+
+.empty-skills {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 300px;
+  color: #c9cdd4;
+}
+
+/* 关于我们 */
+.about-panel {
+  padding: 16px;
+}
+
+.about-header {
+  text-align: center;
+  padding: 24px 0;
+}
+
+.about-header h3 {
+  margin: 0 0 8px 0;
+  font-size: 20px;
+  color: #1d2129;
+}
+
+.version {
+  margin: 0;
+  color: #86909c;
+  font-size: 13px;
+}
+
+.about-content h4 {
+  margin: 16px 0 8px 0;
+  font-size: 14px;
+  color: #1d2129;
+}
+
+.about-content p {
+  margin: 8px 0;
+  color: #4e5969;
+  line-height: 1.6;
+}
+
+.about-content ul {
+  margin: 8px 0;
+  padding-left: 20px;
+  color: #4e5969;
+  line-height: 1.8;
+}
+
+.about-footer {
+  text-align: center;
+  margin-top: 24px;
+  color: #86909c;
+  font-size: 13px;
 }
 </style>

@@ -39,6 +39,9 @@ export interface View {
   name: string
   display_name?: string
   datasource_id: string
+  category_id?: string
+  category_name?: string
+  is_default?: boolean
   view_type: 'single_table' | 'joined' | 'sql'
   base_table_id?: string
   join_config?: ViewJoinConfig
@@ -54,6 +57,8 @@ export interface ViewCreate {
   name: string
   display_name?: string
   datasource_id: string
+  category_id?: string
+  category_name?: string
   view_type: 'single_table' | 'joined' | 'sql'
   base_table_id?: string
   join_config?: ViewJoinConfig
@@ -66,6 +71,8 @@ export interface ViewCreate {
 export interface ViewUpdate {
   name?: string
   display_name?: string
+  category_id?: string
+  category_name?: string
   view_type?: string
   base_table_id?: string
   join_config?: ViewJoinConfig
@@ -166,6 +173,91 @@ export function generateViewSQL(id: string): Promise<{ sql: string; view_type: s
 
 export function getViewTables(id: string): Promise<any[]> {
   return request.get(`/views/${id}/tables`)
+}
+
+// 可过滤字段接口
+export interface FilterableField {
+  name: string
+  display_name: string
+  description?: string
+  type?: string
+  value_config?: {
+    type: string
+    values?: string[]
+  }
+  filter_operators?: string[]
+  synonyms?: string[]
+  is_time_field?: boolean  // 是否为时间字段
+}
+
+export interface FilterableFieldsResponse {
+  view_id: string
+  view_name: string
+  view_display_name?: string
+  fields: FilterableField[]
+}
+
+// 获取视图可过滤字段列表
+export function getFilterableFields(viewId: string): Promise<FilterableFieldsResponse> {
+  return request.get(`/views/${viewId}/filterable-fields`)
+}
+
+export function getCategoryStats(datasourceId?: string): Promise<{ categories: Array<{ category_id: string | null; category_name: string; view_count: number }> }> {
+  return request.get('/views/categories/stats', { params: { datasource_id: datasourceId } })
+}
+
+// ============ 视图分类 API ============
+export interface ViewCategory {
+  id: string
+  name: string
+  description?: string
+  parent_id?: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface CategoryCreate {
+  name: string
+  description?: string
+  parent_id?: string | null
+}
+
+export interface CategoryUpdate {
+  name?: string
+  description?: string
+  parent_id?: string | null
+}
+
+export function getCategories(): Promise<ViewCategory[]> {
+  return request.get('/views/categories')
+}
+
+export function getCategory(id: string): Promise<ViewCategory> {
+  return request.get(`/views/categories/${id}`)
+}
+
+export function createCategory(data: CategoryCreate): Promise<ViewCategory> {
+  return request.post('/views/categories', data)
+}
+
+export function updateCategory(id: string, data: CategoryUpdate): Promise<ViewCategory> {
+  return request.put(`/views/categories/${id}`, data)
+}
+
+export function deleteCategory(id: string): Promise<{ message: string }> {
+  return request.delete(`/views/categories/${id}`)
+}
+
+export function getCategoryTree(): Promise<any[]> {
+  return request.get('/views/categories/tree')
+}
+
+export function getDefaultView(): Promise<View | null> {
+  return request.get('/views/default')
+}
+
+export function setDefaultView(id: string): Promise<View> {
+  return request.put(`/views/${id}/default`)
 }
 
 // ============ 字典 API ============

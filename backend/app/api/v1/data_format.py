@@ -231,28 +231,28 @@ async def generate_format_config(
         parameter_mappings = filter_result.get("parameter_mappings", {})
         valid_params = filter_result.get("valid_parameters", [])
 
-        # 构建包含完整field信息的parameterMappings（使用实际field名称作为key）
+        # 构建包含完整field信息的parameterMappings（使用参数名作为key，支持时间范围参数）
         full_parameter_mappings = {}
-        param_info_map = {
-            param["name"]: param
-            for param in valid_params
-        }
-        for name, mapping in parameter_mappings.items():
-            param_info = param_info_map.get(name, {})
-            # 使用实际的field名称作为key
-            field_name = param_info.get("field_name", name)
-            full_parameter_mappings[field_name] = {
+        for param in valid_params:
+            name = param["name"]  # 使用参数名作为key（可能是 create_time_开始 或 create_time_结束）
+            mapping = parameter_mappings.get(name, {})
+            field_name = mapping.get("field_name", name)
+            
+            full_parameter_mappings[name] = {
                 "source_field": mapping.get("source_field"),
                 "field_type": mapping.get("field_type"),
-                "field_name": mapping.get("field_name"),
+                "field_name": field_name,
                 "view_id": mapping.get("view_id"),
-                # 添加完整的field信息
-                "display_name": param_info.get("display_name", name),
-                "dict_values": param_info.get("dict_values"),
-                "view_name": param_info.get("view_name"),
-                "required": param_info.get("required", True),
+                "display_name": param.get("display_name", name),
+                "dict_values": param.get("dict_values"),
+                "view_name": param.get("view_name"),
+                "required": param.get("required", True),
                 # 保留原始参数名
-                "param_name": name
+                "param_name": name,
+                # 保留时间范围相关字段
+                "is_time_range": mapping.get("is_time_range", False),
+                "range_type": mapping.get("range_type"),
+                "base_field_name": param.get("base_field_name")
             }
 
         config = save_format_config(
@@ -396,28 +396,28 @@ async def regenerate_config(
         parameter_mappings = filter_result.get("parameter_mappings", {})
         valid_params = filter_result.get("valid_parameters", [])
 
-        # 构建包含完整field信息的parameterMappings（使用实际field名称作为key）
+        # 构建包含完整field信息的parameterMappings（使用参数名作为key，支持时间范围参数）
         full_parameter_mappings = {}
-        param_info_map = {
-            param["name"]: param
-            for param in valid_params
-        }
-        for name, mapping in parameter_mappings.items():
-            param_info = param_info_map.get(name, {})
-            # 使用实际的field名称作为key
-            field_name = param_info.get("field_name", name)
-            full_parameter_mappings[field_name] = {
+        for param in valid_params:
+            name = param["name"]  # 使用参数名作为key（可能是 create_time_开始 或 create_time_结束）
+            mapping = parameter_mappings.get(name, {})
+            field_name = mapping.get("field_name", name)
+            
+            full_parameter_mappings[name] = {
                 "source_field": mapping.get("source_field"),
                 "field_type": mapping.get("field_type"),
-                "field_name": mapping.get("field_name"),
+                "field_name": field_name,
                 "view_id": mapping.get("view_id"),
-                # 添加完整的field信息
-                "display_name": param_info.get("display_name", name),
-                "dict_values": param_info.get("dict_values"),
-                "view_name": param_info.get("view_name"),
-                "required": param_info.get("required", True),
+                "display_name": param.get("display_name", name),
+                "dict_values": param.get("dict_values"),
+                "view_name": param.get("view_name"),
+                "required": param.get("required", True),
                 # 保留原始参数名
-                "param_name": name
+                "param_name": name,
+                # 保留时间范围相关字段
+                "is_time_range": mapping.get("is_time_range", False),
+                "range_type": mapping.get("range_type"),
+                "base_field_name": param.get("base_field_name")
             }
 
         old_config.transform_script = result["transformScript"]
@@ -579,27 +579,91 @@ async def call_custom_api(
 
     # 使用parameter_mappings生成动态过滤条件
     parameter_mappings = config.parameter_mappings or {}
+    import re
+    
     if parameter_mappings and isinstance(parameter_mappings, dict):
+        # 先收集所有时间范围参数，按base_field_name分组
+        time_range_params = {}
+        regular_params = []
+        
         for field_name, param_info in parameter_mappings.items():
-            # 获取原始参数名（用户输入的参数名）
+            param_name = param_info.get("param_name")
+            is_time_range = param_info.get("is_time_range", False)
+            
+            # 兼容性检查：如果is_time_range不存在，通过参数名判断
+            if not is_time_range and param_name:
+                time_range_pattern = r'^(.+?)[_]?(开始|结束|start|end|from|to)$'
+                match = re.match(time_range_pattern, param_name, re.IGNORECASE)
+                is_time_range = match is not None
+            
+            if is_time_range:
+                base_field_name = param_info.get("base_field_name")
+                range_type = param_info.get("range_type")
+                
+                # 如果没有显式的base_field_name和range_type，从param_name解析
+                if param_name and (not base_field_name or not range_type):
+                    time_range_pattern = r'^(.+?)[_]?(开始|结束|start|end|from|to)$'
+                    match = re.match(time_range_pattern, param_name, re.IGNORECASE)
+                    if match:
+                        base_field_name = base_field_name or match.group(1)
+                        suffix = match.group(2).lower()
+                        range_type = range_type or ('start' if suffix in ['开始', 'start', 'from'] else 'end')
+                
+                if base_field_name not in time_range_params:
+                    time_range_params[base_field_name] = {"start": None, "end": None, "source_field": param_info.get("source_field") or param_info.get("field_name", field_name)}
+                
+                if param_name and param_name in request and request[param_name]:
+                    time_range_params[base_field_name][range_type] = request[param_name]
+                    source_field = param_info.get("source_field") or param_info.get("field_name", field_name)
+                    time_range_params[base_field_name]["source_field"] = source_field
+            else:
+                # 普通参数
+                regular_params.append((field_name, param_info))
+        
+        # 处理时间范围参数（同时处理开始和结束）
+        for base_field_name, time_range in time_range_params.items():
+            # 使用base_field_name作为实际字段名（如create_time，不包含_开始/结束后缀）
+            source_field = time_range["source_field"] or base_field_name
+            start_value = time_range["start"]
+            end_value = time_range["end"]
+            
+            if start_value and end_value:
+                # 都有值：分别使用 >= 和 <=
+                filter_start = f"[{source_field}] >= '{start_value}'"
+                filter_end = f"[{source_field}] <= '{end_value}'"
+                mql["filters"].append(filter_start)
+                mql["filters"].append(filter_end)
+            elif start_value:
+                # 只有开始时间
+                filter_condition = f"[{source_field}] >= '{start_value}'"
+                mql["filters"].append(filter_condition)
+            elif end_value:
+                # 只有结束时间
+                filter_condition = f"[{source_field}] <= '{end_value}'"
+                mql["filters"].append(filter_condition)
+        
+        # 处理普通参数
+        for field_name, param_info in regular_params:
             param_name = param_info.get("param_name")
             if param_name and param_name in request:
-                if field_name:
-                    # 根据field类型生成不同的过滤条件
-                    field_type = param_info.get("field_type", "string")
-                    param_value = request[param_name]
-
-                    if field_type in ["number", "int", "integer", "float"]:
-                        # 数字类型不加引号
-                        filter_condition = f"[{field_name}] = {param_value}"
-                    else:
-                        # 字符类型加引号
-                        filter_condition = f"[{field_name}] = '{param_value}'"
-                    print(filter_condition)
-                    mql["filters"].append(filter_condition)
+                field_type = param_info.get("field_type", "string")
+                param_value = request[param_name]
+                
+                if not param_value:
+                    continue
+                
+                # 优先使用field_name，如果source_field为None则回退到field_name
+                source_field = param_info.get("source_field") or param_info.get("field_name", field_name)
+                
+                if field_type in ["number", "int", "integer", "float"]:
+                    # 数字类型不加引号
+                    filter_condition = f"[{source_field}] = {param_value}"
+                else:
+                    # 字符类型加引号
+                    filter_condition = f"[{source_field}] = '{param_value}'"
+                mql["filters"].append(filter_condition)
 
     # 3. 执行MQL查询
-    print(mql)
     try:
         sql_result = await mql_to_sql(mql, db)
         sql = sql_result.get("sql", "")

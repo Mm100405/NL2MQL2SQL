@@ -88,3 +88,6 @@ coverage.xml
 # pycache
 __pycache__/
 *.pyc
+
+#codebuddy
+/.codebuddy/

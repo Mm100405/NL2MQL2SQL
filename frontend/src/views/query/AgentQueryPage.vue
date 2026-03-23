@@ -3,9 +3,26 @@
     <ModelNotConfigured v-if="!settingsStore.isModelAvailable" />
 
     <template v-else>
-      <!-- 顶部问数标题 -->
+      <!-- 顶部标题栏 + 视图选择 -->
       <div class="query-header">
         <span class="query-title">{{ currentQueryTitle }}</span>
+        <div class="view-selector">
+          <a-radio-group v-model="activeViewId" type="button" size="small">
+            <a-radio v-for="tab in viewTabs" :key="tab.key" :value="tab.viewId">
+              {{ tab.viewName }}
+              <icon-close v-if="tab.closable" class="tab-close-icon" @click.stop="handleCloseViewTab(tab.viewId)" />
+            </a-radio>
+          </a-radio-group>
+          <a-dropdown trigger="click" @select="handleViewDropdown">
+            <a-button type="text" size="small" class="add-view-trigger">
+              <template #icon><icon-plus /></template>
+            </a-button>
+            <template #content>
+              <a-doption value="add"><icon-plus /> 新建视图</a-doption>
+              <a-doption value="manage"><icon-apps /> 管理视图</a-doption>
+            </template>
+          </a-dropdown>
+        </div>
       </div>
 
       <!-- 消息列表 -->
@@ -31,7 +48,7 @@
                   </div>
                   <div class="result-actions">
                     <a-space>
-                      <a-button type="text" size="small" @click="handleQuote(msg.queryResult.mql)">
+                      <a-button type="text" size="small" @click="handleQuote(msg.queryResult.mql, msg.queryResult.view_id)">
                         <template #icon><icon-share-alt /></template>
                         引用
                       </a-button>
@@ -109,10 +126,8 @@
                       </a-popover>
                     </a-space>
                   </span>
-                  <span v-if="msg.queryResult.mql.filters?.length">过滤条件: 
-                    <a-tag v-for="f in msg.queryResult.mql.filters" :key="f" size="small" style="margin-right: 4px;" color="orange">
-                      {{ formatFilterDisplay(f) }}
-                    </a-tag>
+                  <span v-if="hasFilters(msg.queryResult.mql.filters)" class="filter-display">过滤条件:
+                    <FilterTree :node="normalizeFilters(msg.queryResult.mql.filters)" :format-field="formatDimensionName" />
                   </span>
                 </div>
 
@@ -244,33 +259,16 @@
       <a-form :model="adjustmentForm" layout="vertical">
         <a-form-item label="已选指标">
           <a-select v-model="adjustmentForm.metrics" multiple placeholder="请选择指标">
-            <a-option v-for="m in allMetrics" :key="m.id" :value="m.name">{{ m.display_name || m.name }}</a-option>
+            <a-option v-for="m in adjustmentMetadata.metrics" :key="m.id" :value="m.name">{{ m.display_name || m.name }}</a-option>
           </a-select>
         </a-form-item>
         <a-form-item label="分析维度">
           <a-select v-model="adjustmentForm.dimensions" multiple placeholder="请选择分析维度">
-            <a-option v-for="d in allDimensions" :key="d.id" :value="d.physical_column">{{ d.display_name || d.name }}</a-option>
+            <a-option v-for="d in adjustmentMetadata.dimensions" :key="d.id" :value="d.physical_column">{{ d.display_name || d.name }}</a-option>
           </a-select>
         </a-form-item>
         <a-form-item label="过滤条件">
-          <a-space direction="vertical" fill>
-            <div v-for="(f, i) in adjustmentForm.filters" :key="i" style="display: flex; gap: 8px">
-              <a-select v-model="f.field" style="width: 150px">
-                <a-option v-for="d in allDimensions" :key="d.id" :value="d.physical_column">{{ d.display_name || d.name }}</a-option>
-              </a-select>
-              <a-select v-model="f.op" style="width: 80px">
-                <a-option value="=">=</a-option>
-                <a-option value=">">></a-option>
-                <a-option value="<"><</a-option>
-                <a-option value="IN">IN</a-option>
-              </a-select>
-              <a-input v-model="f.value" placeholder="值" style="flex: 1" />
-              <a-button type="text" status="danger" @click="adjustmentForm.filters.splice(i, 1)"><icon-delete /></a-button>
-            </div>
-            <a-button type="outline" size="small" @click="adjustmentForm.filters.push({ field: '', op: '=', value: '' })">
-              <template #icon><icon-plus /></template>添加条件
-            </a-button>
-          </a-space>
+          <FilterEditor ref="filterEditorRef" v-model="adjustmentForm.filterGroups" :dimensions="adjustmentMetadata.dimensions" />
         </a-form-item>
       </a-form>
     </a-modal>
@@ -332,6 +330,7 @@
     <DataFormatConfigModal
       v-model:visible="dataFormatConfigVisible"
       :initial-config="dataFormatConfig"
+      :filterable-fields="apiFilterableFields"
       @save="handleDataFormatSave"
     />
 
@@ -340,6 +339,28 @@
       v-model:visible="apiDebugVisible"
       :config-id="apiDebugConfigId"
     />
+
+    <!-- 视图选择弹窗 -->
+    <a-modal 
+      v-model:visible="showViewSelectModal"
+      title="选择视图"
+      @cancel="showViewSelectModal = false"
+      :footer="false"
+      width="500px"
+    >
+      <div class="view-select-list">
+        <a-list :bordered="false">
+          <a-list-item 
+            v-for="view in allViews" 
+            :key="view.id"
+            class="view-select-item"
+            @click="handleViewSelect(view)"
+          >
+            <a-list-item-meta :title="view.display_name || view.name" :description="view.description || '暂无描述'" />
+          </a-list-item>
+        </a-list>
+      </div>
+    </a-modal>
   </div>
 </template>
 
@@ -363,7 +384,8 @@ import {
   IconFilter,
   IconThunderbolt,
   IconFile,
-  IconCode
+  IconCode,
+  IconApps
 } from '@arco-design/web-vue/es/icon'
 import { useSettingsStore } from '@/stores/settings'
 import ModelNotConfigured from '@/components/query/ModelNotConfigured.vue'
@@ -376,7 +398,13 @@ import { analyzeIntent, generateMQL, mql2sql, executeSQL, getQueryHistoryDetail,
 import { getMetrics, getDimensions, getMetricsAllowedDimensions } from '@/api/semantic'
 import { getSystemSetting } from '@/api/settings'
 import { generateDataFormatConfig } from '@/api/data_format'
+import { getViews, getDefaultView, getFilterableFields } from '@/api/views'
 import type { Metric, Dimension } from '@/api/types'
+import type { MQLFilterCondition, MQLFilterGroup } from '@/api/types'
+import FilterTree from '@/components/FilterTree.vue'
+import FilterEditor from '@/components/FilterEditor.vue'
+import type { FeGroup, FeCondition, FeSubGroup } from '@/components/FilterEditor.vue'
+import type { View, FilterableField } from '@/api/views'
 
 const settingsStore = useSettingsStore()
 const route = useRoute()
@@ -411,11 +439,48 @@ const messages = ref<MessageItem[]>([])
 const allMetrics = ref<Metric[]>([])
 const allDimensions = ref<Dimension[]>([])
 const allowedDimensions = ref<Dimension[]>([])  // 当前查询允许的维度
+
+// 视图标签页相关
+interface ViewTab {
+  key: string
+  viewId: string
+  viewName: string
+  baseTableId?: string
+  closable: boolean
+}
+
+const viewTabs = ref<ViewTab[]>([])
+const activeViewId = ref<string>('')
+const allViews = ref<View[]>([])
+const showViewSelectModal = ref(false)
 const timeFormats = ref<any[]>([])
 const quotedMql = ref<any>(null)
+const quotedViewId = ref<string | null>(null)  // 引用时绑定的视图ID
 const selectedRecord = ref<any>(null)
 const activeQueryResult = ref<FullQueryResponse | null>(null)
 const selectedRowKey = ref<string | null>(null) // 当前选中的行 key (全局唯一)
+
+// 视图元数据缓存
+const viewMetadataCache = ref<Record<string, { metrics: Metric[], dimensions: Dimension[] }>>({})
+
+// 获取视图的元数据（优先使用缓存）
+async function getViewMetadata(viewId: string): Promise<{ metrics: Metric[], dimensions: Dimension[] }> {
+  if (viewMetadataCache.value[viewId]) {
+    return viewMetadataCache.value[viewId]
+  }
+  
+  const viewTab = viewTabs.value.find(t => t.viewId === viewId)
+  const baseTableId = viewTab?.baseTableId
+  
+  const [metrics, dimensions] = await Promise.all([
+    getMetrics(baseTableId ? { dataset_id: baseTableId } : {}),
+    getDimensions(baseTableId ? { dataset_id: baseTableId } : (viewId ? { view_id: viewId } : {}))
+  ])
+  
+  const result = { metrics, dimensions }
+  viewMetadataCache.value[viewId] = result
+  return result
+}
 
 const drillDownVisible = ref(false)
 const addDimensionVisible = ref(false)
@@ -427,15 +492,49 @@ const addDimensionForm = reactive({
 })
 
 const adjustmentVisible = ref(false)
+const filterEditorRef = ref<{ getRootOperator: () => string } | null>(null)
 const adjustmentForm = ref<{
   metrics: string[],
   dimensions: string[],
-  filters: { field: string, op: string, value: string }[]
+  filters: FeCondition[]
+  filterGroups: FeGroup[]
 }>({
   metrics: [],
   dimensions: [],
-  filters: []
+  filters: [],
+  filterGroups: [{ operator: 'AND' as const, items: [{ type: 'condition' as const, field: '', op: '=', value: '' }] }]
 })
+
+// 调整弹窗专用的元数据（使用结果绑定的视图）
+const adjustmentMetadata = ref<{
+  metrics: Metric[],
+  dimensions: Dimension[]
+}>({ metrics: [], dimensions: [] })
+
+// 生成API弹窗的可过滤字段（使用结果绑定的视图的维度）
+const apiFilterableFields = computed(() => {
+  if (!activeQueryResult.value) return []
+  const viewId = activeQueryResult.value.view_id || activeViewId.value
+  if (!viewId) return []
+  return filterableFieldsCache.value[viewId] || []
+})
+
+// 可过滤字段缓存
+const filterableFieldsCache = ref<Record<string, FilterableField[]>>({})
+
+// 加载视图可过滤字段
+async function loadFilterableFields(viewId: string) {
+  if (filterableFieldsCache.value[viewId]) {
+    return
+  }
+  try {
+    const response = await getFilterableFields(viewId)
+    filterableFieldsCache.value[viewId] = response.fields || []
+  } catch (e) {
+    console.error('Failed to load filterable fields:', e)
+    filterableFieldsCache.value[viewId] = []
+  }
+}
 
 const addDimensionAvailableDimensions = computed(() => {
   if (!activeQueryResult.value) return []
@@ -550,6 +649,58 @@ function formatFilterDisplay(filterStr: string) {
   return filterStr
 }
 
+// 判断 filters 是否有内容
+function hasFilters(filters: any): boolean {
+  if (!filters) return false
+  if (Array.isArray(filters)) return filters.length > 0
+  if (typeof filters === 'object') return (filters as MQLFilterGroup).conditions?.length > 0
+  return false
+}
+
+// 将结构化 filters 扁平化为叶子条件数组
+function flattenFilters(filters: any): MQLFilterCondition[] {
+  if (!filters) return []
+  if (Array.isArray(filters)) {
+    return filters.map((f: string) => {
+      const parts = f.split(' ')
+      return { field: parts[0]?.replace(/[\[\]]/g, '') || '', op: parts[1] || '=', value: parts[2]?.replace(/'/g, '') || '' }
+    })
+  }
+  const result: MQLFilterCondition[] = []
+  function walk(node: any) {
+    if (node.field !== undefined) {
+      result.push({ field: node.field, op: node.op || '=', value: node.value })
+    } else if (node.conditions) {
+      node.conditions.forEach(walk)
+    }
+  }
+  walk(filters)
+  return result
+}
+
+// 格式化单个叶子条件展示
+function formatFilterConditionDisplay(cond: MQLFilterCondition): string {
+  if (!cond || !cond.field) return ''
+  return `${formatDimensionName(cond.field)} ${cond.op} ${cond.value}`
+}
+
+// 将 filters 标准化为 MQLFilterGroup，兼容旧字符串数组格式
+function normalizeFilters(filters: any): MQLFilterGroup {
+  if (!filters) return { operator: 'AND', conditions: [] }
+  if (typeof filters === 'object' && filters.conditions) return filters as MQLFilterGroup
+  if (Array.isArray(filters)) {
+    return {
+      operator: 'AND',
+      conditions: filters.map((f: any) =>
+        typeof f === 'string'
+          ? { field: f.split(/[\s=<>!]+/)[0]?.replace(/[\[\]]/g, '') || '', op: '=', value: f.replace(/.*?[<>!=]+\s*/, '').replace(/'/g, '') || '' }
+          : f
+      )
+    }
+  }
+  return { operator: 'AND', conditions: [] }
+}
+
 function getSelectedRowValues() {
   if (!selectedRecord.value || !activeQueryResult.value) return ''
   const dims = activeQueryResult.value.mql?.dimensions || []
@@ -645,23 +796,24 @@ async function handleDrillDown() {
   const record = toRaw(selectedRecord.value)
   const drillDims = [...drillDownForm.dimensions]
   
-  if (!mql.filters) mql.filters = []
+  if (!mql.filters || (typeof mql.filters === 'object' && !Array.isArray(mql.filters) && !(mql.filters as MQLFilterGroup).conditions)) {
+    mql.filters = { operator: 'AND', conditions: [] }
+  }
 
   // --- 下钻分析核心逻辑：维度替换 + 过滤锁定 ---
   // 获取当前查询的所有维度
   const currentDims = [...(mql.dimensions || [])]
   
+  const conditions = (mql.filters as MQLFilterGroup).conditions || []
   currentDims.forEach((dim: string) => {
     // 获取该维度在行数据中的值
     const val = record[dim]
     
     if (val !== undefined && val !== null && val !== '') {
-      // 构造过滤条件。如果是衍生维度（如：日期__按月），后端 process_mql_expression 能够识别 [展示名__后缀]
-      const filterStr = `[${dim}] = '${val}'`
-      
       // 避免重复添加相同的过滤条件
-      if (!mql.filters.includes(filterStr)) {
-        mql.filters.push(filterStr)
+      const exists = conditions.some((c: any) => c.field === dim && c.value === String(val))
+      if (!exists) {
+        conditions.push({ field: dim, op: '=', value: String(val) })
       }
     }
   })
@@ -931,8 +1083,9 @@ async function loadConversationHistory(convId: string) {
 }
 
 // 引用功能：将 MQL 作为上下文
-function handleQuote(mql: any) {
+function handleQuote(mql: any, viewId?: string) {
   quotedMql.value = JSON.parse(JSON.stringify(mql))
+  quotedViewId.value = viewId || null
   queryInput.value = '' // 清空输入框，引导用户输入增量指令
   Message.success('已加载引用上下文，请输入您的调整或分析要求')
   
@@ -940,6 +1093,99 @@ function handleQuote(mql: any) {
     const input = document.querySelector('.query-input textarea') as HTMLTextAreaElement
     if (input) input.focus()
   })
+}
+
+// 初始化视图标签
+async function initViews() {
+  try {
+    allViews.value = await getViews()
+    const defaultView = await getDefaultView()
+    
+    if (defaultView) {
+      viewTabs.value.push({
+        key: defaultView.id,
+        viewId: defaultView.id,
+        viewName: defaultView.display_name || defaultView.name,
+        baseTableId: defaultView.base_table_id,
+        closable: false
+      })
+      activeViewId.value = defaultView.id
+    } else if (allViews.value.length > 0) {
+      const firstView = allViews.value[0]
+      if (firstView) {
+        viewTabs.value.push({
+          key: firstView.id,
+          viewId: firstView.id,
+          viewName: firstView.display_name || firstView.name,
+          baseTableId: firstView.base_table_id,
+          closable: false
+        })
+        activeViewId.value = firstView.id
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load views:', e)
+    Message.error('加载视图列表失败')
+  }
+}
+
+// 添加视图标签
+function handleAddViewTab() {
+  showViewSelectModal.value = true
+}
+
+// 处理视图下拉菜单
+function handleViewDropdown(key: string) {
+  if (key === 'add') {
+    showViewSelectModal.value = true
+  } else if (key === 'manage') {
+    router.push('/semantic/views')
+  }
+}
+
+// 选择视图后添加标签
+function handleViewSelect(view: View) {
+  // 检查是否已存在
+  if (viewTabs.value.some(t => t.viewId === view.id)) {
+    activeViewId.value = view.id
+    showViewSelectModal.value = false
+    return
+  }
+  
+  // 添加新标签
+  viewTabs.value.push({
+    key: view.id,
+    viewId: view.id,
+    viewName: view.display_name || view.name,
+    baseTableId: view.base_table_id,
+    closable: true
+  })
+  activeViewId.value = view.id
+  showViewSelectModal.value = false
+}
+
+// 关闭标签
+function handleCloseViewTab(key: string) {
+  const index = viewTabs.value.findIndex(t => t.key === key)
+  if (index === -1) return
+  
+  const closedViewId = viewTabs.value[index]?.viewId
+  viewTabs.value.splice(index, 1)
+  
+  // 如果关闭的是当前活动标签，切换到相邻标签
+  if (activeViewId.value === closedViewId) {
+    const nextTab = viewTabs.value[Math.min(index, viewTabs.value.length - 1)]
+    if (nextTab) {
+      activeViewId.value = nextTab.viewId
+    } else {
+      activeViewId.value = ''
+    }
+  }
+}
+
+// 切换标签
+function handleViewTabChange(key: string) {
+  activeViewId.value = key
 }
 
 function getMetricsFromMql(mql: any) {
@@ -1049,6 +1295,9 @@ async function loadHistorySession(id: string) {
 }
 
 onMounted(async () => {
+  // 初始化视图标签
+  await initViews()
+  
   // 初始化对话
   if (route.query.id) {
     // 加载历史对话
@@ -1061,9 +1310,17 @@ onMounted(async () => {
     await startNewConversation()
   }
   
-  // 加载元数据用于调整查询和下钻
+  // 加载元数据用于调整查询和下钻（使用当前选中的视图过滤）
   try {
-    const [m, d] = await Promise.all([getMetrics(), getDimensions()])
+    // 获取当前视图的 base_table_id（关联到 dataset）
+    const currentTab = viewTabs.value.find(t => t.viewId === activeViewId.value)
+    const baseTableId = currentTab?.baseTableId
+    const viewId = activeViewId.value
+    
+    const [m, d] = await Promise.all([
+      getMetrics(baseTableId ? { dataset_id: baseTableId } : {}),
+      getDimensions(baseTableId ? { dataset_id: baseTableId } : (viewId ? { view_id: viewId } : {}))
+    ])
     allMetrics.value = m
     allDimensions.value = d
     
@@ -1137,7 +1394,12 @@ function handleEnter(e: KeyboardEvent) {
 }
 
 // 显示数据格式配置弹窗
-function showDataFormatConfig() {
+async function showDataFormatConfig() {
+  // 加载当前结果绑定的视图的可过滤字段
+  const viewId = activeQueryResult.value?.view_id || activeViewId.value
+  if (viewId) {
+    await loadFilterableFields(viewId)
+  }
   dataFormatConfigVisible.value = true
 }
 
@@ -1413,6 +1675,9 @@ async function handleQuery() {
   messages.value.push({ type: 'user', content: userQuestion })
   queryInput.value = ''
   
+  // 保存当前选中的视图ID，用于绑定到这次查询
+  const currentViewId = activeViewId.value
+  
   // 添加 agent 消息占位 - 使用流式接口
   messages.value.push({ 
     type: 'agent', 
@@ -1422,6 +1687,7 @@ async function handleQuery() {
       mql: {},
       sql: '',
       viewType: 'table',
+      view_id: currentViewId,  // 绑定视图ID
       steps: [
         { title: 'Agent初始化', content: '正在启动 Agent 流式查询...', status: 'loading' }
       ],
@@ -1449,19 +1715,21 @@ async function handleQuery() {
     if (!res) return
 
     // 获取后端 API 地址
-    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8010/api/v1'
+    const apiBaseUrl = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'
 
     // 构建请求参数
     const requestBody: any = {
       natural_language: userQuestion,
       user_id: 'anonymous',
-      conversation_id: conversationId.value || undefined
+      conversation_id: conversationId.value || undefined,
+      view_id: activeViewId.value || undefined
     }
     
-    // 如果有引用上下文，传递给后端
+    // 如果有引用上下文，传递给后端（使用引用时绑定的视图ID）
     if (quotedMql.value) {
       requestBody.context = {
-        quoted_mql: quotedMql.value
+        quoted_mql: quotedMql.value,
+        view_id: quotedViewId.value || activeViewId.value
       }
     }
     
@@ -1730,6 +1998,7 @@ async function handleQuery() {
     loading.value = false
     // 清空引用上下文
     quotedMql.value = null
+    quotedViewId.value = null
     scrollToBottom()
   }
 }
@@ -1946,7 +2215,15 @@ function formatTimeRange(mql: any) {
 
   // 2. Check filters for additional time constraints
   let filterParts: string[] = []
-  if (mql.filters && mql.filters.length > 0) {
+  if (mql.filters && typeof mql.filters === 'object' && (mql.filters as MQLFilterGroup).conditions) {
+    const flatFilters = flattenFilters(mql.filters)
+    flatFilters.forEach(f => {
+      if (f.field && f.value) {
+        const colName = formatDimensionName(f.field)
+        filterParts.push(`${colName} ${f.op} ${f.value}`)
+      }
+    })
+  } else if (Array.isArray(mql.filters)) {
     mql.filters.forEach((f: string) => {
       if (f === 'true' || f === '1=1') return
       
@@ -1989,7 +2266,7 @@ function showDrillDown(result: FullQueryResponse) {
   showGlobalAddDimension(result)
 }
 
-function showAdjustment(result: FullQueryResponse) {
+async function showAdjustment(result: FullQueryResponse) {
   activeQueryResult.value = result
   adjustmentVisible.value = true
   
@@ -1997,11 +2274,63 @@ function showAdjustment(result: FullQueryResponse) {
   adjustmentForm.value.metrics = result.mql?.metrics || []
   adjustmentForm.value.dimensions = result.mql?.dimensions || []
   
-  // 简单解析现有过滤条件
-  adjustmentForm.value.filters = (result.mql?.filters || []).map((f: string) => {
-    const parts = f.split(' ')
-    return { field: parts[0] || '', op: parts[1] || '=', value: parts[2]?.replace(/'/g, '') || '' }
-  })
+  // 简单解析现有过滤条件（保留兼容旧格式）
+  adjustmentForm.value.filters = flattenFilters(result.mql?.filters).map(f => ({ type: 'condition' as const, ...f }))
+
+  // 递归将 MQLFilterGroup 条件节点转为 FeItem
+  function toFeItem(node: MQLFilterCondition | MQLFilterGroup): FeCondition | FeSubGroup {
+    if ('field' in node) {
+      return { type: 'condition', field: (node as MQLFilterCondition).field, op: (node as MQLFilterCondition).op || '=', value: (node as MQLFilterCondition).value }
+    }
+    const sg = node as MQLFilterGroup
+    const items: Array<FeCondition | FeSubGroup> = (sg.conditions || []).map(c => toFeItem(c))
+    return { type: 'subgroup', operator: sg.operator || 'AND', items }
+  }
+
+  // 将结构化 filters 转为 filterGroups 供编辑器使用
+  const raw = result.mql?.filters
+  if (raw && typeof raw === 'object' && (raw as MQLFilterGroup).conditions) {
+    const group = raw as MQLFilterGroup
+    if (group.operator === 'OR') {
+      adjustmentForm.value.filterGroups = group.conditions.map(sub => ({
+        operator: 'AND' as const,
+        items: [toFeItem(sub)]
+      }))
+    } else {
+      adjustmentForm.value.filterGroups = [{
+        operator: 'AND',
+        items: (group.conditions || []).map(c => toFeItem(c))
+      }]
+    }
+  } else if (raw && Array.isArray(raw) && raw.length > 0) {
+    adjustmentForm.value.filterGroups = [{
+      operator: 'AND',
+      items: flattenFilters(raw).map(f => ({ type: 'condition' as const, field: f.field, op: f.op, value: f.value }))
+    }]
+  } else {
+    adjustmentForm.value.filterGroups = [{ operator: 'AND', items: [{ type: 'condition' as const, field: '', op: '=', value: '' }] }]
+  }
+  
+  // 使用结果绑定的视图的元数据加载下拉选项
+  const viewId = result.view_id || activeViewId.value
+  if (viewId) {
+    try {
+      const metadata = await getViewMetadata(viewId)
+      adjustmentMetadata.value = metadata
+    } catch (e) {
+      console.error('Failed to load view metadata:', e)
+      // 降级使用全局元数据
+      adjustmentMetadata.value = {
+        metrics: allMetrics.value,
+        dimensions: allDimensions.value
+      }
+    }
+  } else {
+    adjustmentMetadata.value = {
+      metrics: allMetrics.value,
+      dimensions: allDimensions.value
+    }
+  }
 }
 
 async function handleAdjust() {
@@ -2022,9 +2351,40 @@ async function handleAdjust() {
   // 确保结构完整
   newMql.metrics = adjustmentForm.value.metrics
   newMql.dimensions = adjustmentForm.value.dimensions
-  newMql.filters = adjustmentForm.value.filters
-    .filter(f => f.field && f.value)
-    .map(f => `${f.field} ${f.op} '${f.value}'`)
+  // 构建结构化 filters
+  const rootOp = (filterEditorRef.value?.getRootOperator() || 'AND') as 'AND' | 'OR'
+
+  function buildConditions(items: any[]) {
+    return items
+      .filter(item => item.type === 'condition' && item.field && item.value)
+      .map(item => ({ field: item.field, op: item.op, value: item.value }))
+  }
+
+  function buildGroups(groups: any[]) {
+    return groups
+      .filter(g => g.items.some((i: any) => (i.type === 'condition' && i.field && i.value) || i.type === 'subgroup'))
+      .map(g => {
+        const leafConds = buildConditions(g.items)
+        const subGroups = (g.items || [])
+          .filter((i: any) => i.type === 'subgroup')
+          .map((sg: any) => ({
+            operator: sg.operator,
+            conditions: buildConditions(sg.items || [])
+          }))
+        const allConds = [...leafConds, ...subGroups]
+        return { operator: g.operator, conditions: allConds }
+      })
+  }
+
+  const validGroups = buildGroups(adjustmentForm.value.filterGroups)
+
+  if (validGroups.length === 0) {
+    newMql.filters = {}
+  } else if (validGroups.length === 1 && validGroups[0]) {
+    newMql.filters = { operator: validGroups[0].operator, conditions: validGroups[0].conditions }
+  } else {
+    newMql.filters = { operator: rootOp, conditions: validGroups }
+  }
   
   if (!newMql.metricDefinitions) newMql.metricDefinitions = {}
   
@@ -2104,12 +2464,76 @@ async function handleAdjust() {
 }
 
 .query-header {
-  height: 48px;
+  height: 56px;
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: space-between;
+  padding: 0 24px;
   border-bottom: 1px solid #f2f3f5;
   flex-shrink: 0;
+  background: #fff;
+}
+
+.query-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: #1d2129;
+}
+
+.view-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.view-selector :deep(.arco-radio-group-button) {
+  background: #f2f3f5;
+  border-radius: 6px;
+  padding: 2px;
+}
+
+.view-selector :deep(.arco-radio-button) {
+  border: none;
+  border-radius: 4px !important;
+  padding: 4px 12px;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.view-selector :deep(.arco-radio-button:hover) {
+  background: #e5e6eb;
+}
+
+.view-selector :deep(.arco-radio-button-checked) {
+  background: #165dff;
+  color: #fff;
+  box-shadow: none;
+}
+
+.view-selector :deep(.arco-radio-button-checked:hover) {
+  background: #4080ff;
+}
+
+.tab-close-icon {
+  margin-left: 4px;
+  font-size: 10px;
+  opacity: 0.6;
+  transition: opacity 0.2s;
+}
+
+.tab-close-icon:hover {
+  opacity: 1;
+}
+
+.add-view-trigger {
+  color: #86909c;
+  padding: 4px;
+}
+
+.add-view-trigger:hover {
+  color: #165dff;
+  background: #f2f3f5;
+  border-radius: 4px;
 }
 
 .query-title {

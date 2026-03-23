@@ -109,10 +109,8 @@
                       </a-popover>
                     </a-space>
                   </span>
-                  <span v-if="msg.queryResult.mql.filters?.length">过滤条件: 
-                    <a-tag v-for="f in msg.queryResult.mql.filters" :key="f" size="small" style="margin-right: 4px;" color="orange">
-                      {{ formatFilterDisplay(f) }}
-                    </a-tag>
+                  <span v-if="hasFilters(msg.queryResult.mql.filters)" class="filter-display">过滤条件:
+                    <FilterTree :node="normalizeFilters(msg.queryResult.mql.filters)" :format-field="formatDimensionName" />
                   </span>
                 </div>
 
@@ -253,24 +251,7 @@
           </a-select>
         </a-form-item>
         <a-form-item label="过滤条件">
-          <a-space direction="vertical" fill>
-            <div v-for="(f, i) in adjustmentForm.filters" :key="i" style="display: flex; gap: 8px">
-              <a-select v-model="f.field" style="width: 150px">
-                <a-option v-for="d in allDimensions" :key="d.id" :value="d.physical_column">{{ d.display_name || d.name }}</a-option>
-              </a-select>
-              <a-select v-model="f.op" style="width: 80px">
-                <a-option value="=">=</a-option>
-                <a-option value=">">></a-option>
-                <a-option value="<"><</a-option>
-                <a-option value="IN">IN</a-option>
-              </a-select>
-              <a-input v-model="f.value" placeholder="值" style="flex: 1" />
-              <a-button type="text" status="danger" @click="adjustmentForm.filters.splice(i, 1)"><icon-delete /></a-button>
-            </div>
-            <a-button type="outline" size="small" @click="adjustmentForm.filters.push({ field: '', op: '=', value: '' })">
-              <template #icon><icon-plus /></template>添加条件
-            </a-button>
-          </a-space>
+          <FilterEditor ref="filterEditorRef" v-model="adjustmentForm.filterGroups" :dimensions="allDimensions" />
         </a-form-item>
       </a-form>
     </a-modal>
@@ -377,6 +358,10 @@ import { getMetrics, getDimensions, getMetricsAllowedDimensions } from '@/api/se
 import { getSystemSetting } from '@/api/settings'
 import { generateDataFormatConfig } from '@/api/data_format'
 import type { Metric, Dimension } from '@/api/types'
+import type { MQLFilterCondition, MQLFilterGroup } from '@/api/types'
+import FilterTree from '@/components/FilterTree.vue'
+import FilterEditor from '@/components/FilterEditor.vue'
+import type { FeGroup, FeCondition } from '@/components/FilterEditor.vue'
 
 const settingsStore = useSettingsStore()
 const route = useRoute()
@@ -427,14 +412,17 @@ const addDimensionForm = reactive({
 })
 
 const adjustmentVisible = ref(false)
+const filterEditorRef = ref<{ getRootOperator: () => string } | null>(null)
 const adjustmentForm = ref<{
   metrics: string[],
   dimensions: string[],
-  filters: { field: string, op: string, value: string }[]
+  filters: FeCondition[]
+  filterGroups: FeGroup[]
 }>({
   metrics: [],
   dimensions: [],
-  filters: []
+  filters: [],
+  filterGroups: [{ operator: 'AND' as const, items: [{ type: 'condition' as const, field: '', op: '=', value: '' }] }]
 })
 
 const addDimensionAvailableDimensions = computed(() => {
@@ -550,6 +538,58 @@ function formatFilterDisplay(filterStr: string) {
   return filterStr
 }
 
+// 判断 filters 是否有内容
+function hasFilters(filters: any): boolean {
+  if (!filters) return false
+  if (Array.isArray(filters)) return filters.length > 0
+  if (typeof filters === 'object') return (filters as MQLFilterGroup).conditions?.length > 0
+  return false
+}
+
+// 将结构化 filters 扁平化为叶子条件数组
+function flattenFilters(filters: any): MQLFilterCondition[] {
+  if (!filters) return []
+  if (Array.isArray(filters)) {
+    return filters.map((f: string) => {
+      const parts = f.split(' ')
+      return { field: parts[0]?.replace(/[\[\]]/g, '') || '', op: parts[1] || '=', value: parts[2]?.replace(/'/g, '') || '' }
+    })
+  }
+  const result: MQLFilterCondition[] = []
+  function walk(node: any) {
+    if (node.field !== undefined) {
+      result.push({ field: node.field, op: node.op || '=', value: node.value })
+    } else if (node.conditions) {
+      node.conditions.forEach(walk)
+    }
+  }
+  walk(filters)
+  return result
+}
+
+// 格式化单个叶子条件展示
+function formatFilterConditionDisplay(cond: MQLFilterCondition): string {
+  if (!cond || !cond.field) return ''
+  return `${formatDimensionName(cond.field)} ${cond.op} ${cond.value}`
+}
+
+// 将 filters 标准化为 MQLFilterGroup，兼容旧字符串数组格式
+function normalizeFilters(filters: any): MQLFilterGroup {
+  if (!filters) return { operator: 'AND', conditions: [] }
+  if (typeof filters === 'object' && filters.conditions) return filters as MQLFilterGroup
+  if (Array.isArray(filters)) {
+    return {
+      operator: 'AND',
+      conditions: filters.map((f: any) =>
+        typeof f === 'string'
+          ? { field: f.split(/[\s=<>!]+/)[0]?.replace(/[\[\]]/g, '') || '', op: '=', value: f.replace(/.*?[<>!=]+\s*/, '').replace(/'/g, '') || '' }
+          : f
+      )
+    }
+  }
+  return { operator: 'AND', conditions: [] }
+}
+
 function getSelectedRowValues() {
   if (!selectedRecord.value || !activeQueryResult.value) return ''
   const dims = activeQueryResult.value.mql?.dimensions || []
@@ -645,23 +685,24 @@ async function handleDrillDown() {
   const record = toRaw(selectedRecord.value)
   const drillDims = [...drillDownForm.dimensions]
   
-  if (!mql.filters) mql.filters = []
+  if (!mql.filters || (typeof mql.filters === 'object' && !Array.isArray(mql.filters) && !(mql.filters as MQLFilterGroup).conditions)) {
+    mql.filters = { operator: 'AND', conditions: [] }
+  }
 
   // --- 下钻分析核心逻辑：维度替换 + 过滤锁定 ---
   // 获取当前查询的所有维度
   const currentDims = [...(mql.dimensions || [])]
   
+  const conditions = (mql.filters as MQLFilterGroup).conditions || []
   currentDims.forEach((dim: string) => {
     // 获取该维度在行数据中的值
     const val = record[dim]
     
     if (val !== undefined && val !== null && val !== '') {
-      // 构造过滤条件。如果是衍生维度（如：日期__按月），后端 process_mql_expression 能够识别 [展示名__后缀]
-      const filterStr = `[${dim}] = '${val}'`
-      
       // 避免重复添加相同的过滤条件
-      if (!mql.filters.includes(filterStr)) {
-        mql.filters.push(filterStr)
+      const exists = conditions.some((c: any) => c.field === dim && c.value === String(val))
+      if (!exists) {
+        conditions.push({ field: dim, op: '=', value: String(val) })
       }
     }
   })
@@ -1722,7 +1763,15 @@ function formatTimeRange(mql: any) {
 
   // 2. Check filters for additional time constraints
   let filterParts: string[] = []
-  if (mql.filters && mql.filters.length > 0) {
+  if (mql.filters && typeof mql.filters === 'object' && (mql.filters as MQLFilterGroup).conditions) {
+    const flatFilters = flattenFilters(mql.filters)
+    flatFilters.forEach(f => {
+      if (f.field && f.value) {
+        const colName = formatDimensionName(f.field)
+        filterParts.push(`${colName} ${f.op} ${f.value}`)
+      }
+    })
+  } else if (Array.isArray(mql.filters)) {
     mql.filters.forEach((f: string) => {
       if (f === 'true' || f === '1=1') return
       
@@ -1773,11 +1822,46 @@ function showAdjustment(result: FullQueryResponse) {
   adjustmentForm.value.metrics = result.mql?.metrics || []
   adjustmentForm.value.dimensions = result.mql?.dimensions || []
   
-  // 简单解析现有过滤条件
-  adjustmentForm.value.filters = (result.mql?.filters || []).map((f: string) => {
-    const parts = f.split(' ')
-    return { field: parts[0] || '', op: parts[1] || '=', value: parts[2]?.replace(/'/g, '') || '' }
-  })
+  // 简单解析现有过滤条件（保留兼容旧格式）
+  adjustmentForm.value.filters = flattenFilters(result.mql?.filters).map(f => ({ type: 'condition' as const, ...f }))
+
+  // 递归将 MQLFilterGroup 条件节点转为 FeItem
+  function toFeItem(node: MQLFilterCondition | MQLFilterGroup): FeCondition | FeSubGroup {
+    if ('field' in node) {
+      return { type: 'condition', field: (node as MQLFilterCondition).field, op: (node as MQLFilterCondition).op || '=', value: (node as MQLFilterCondition).value }
+    }
+    // 子组
+    const sg = node as MQLFilterGroup
+    const items: Array<FeCondition | FeSubGroup> = (sg.conditions || []).map(c => toFeItem(c))
+    return { type: 'subgroup', operator: sg.operator || 'AND', items }
+  }
+
+  // 将结构化 filters 转为 filterGroups 供编辑器使用
+  const raw = result.mql?.filters
+  if (raw && typeof raw === 'object' && (raw as MQLFilterGroup).conditions) {
+    const group = raw as MQLFilterGroup
+    if (group.operator === 'OR') {
+      // OR 顶层：每个叶子/子组变成一个独立顶层组
+      adjustmentForm.value.filterGroups = group.conditions.map(sub => ({
+        operator: 'AND' as const,
+        items: [toFeItem(sub)]
+      }))
+    } else {
+      // AND 顶层：合并为一个顶层组，内部保持嵌套结构
+      adjustmentForm.value.filterGroups = [{
+        operator: 'AND',
+        items: (group.conditions || []).map(c => toFeItem(c))
+      }]
+    }
+  } else if (raw && Array.isArray(raw) && raw.length > 0) {
+    // 旧格式字符串数组
+    adjustmentForm.value.filterGroups = [{
+      operator: 'AND',
+      items: flattenFilters(raw).map(f => ({ type: 'condition' as const, field: f.field, op: f.op, value: f.value }))
+    }]
+  } else {
+    adjustmentForm.value.filterGroups = [{ operator: 'AND', items: [{ type: 'condition' as const, field: '', op: '=', value: '' }] }]
+  }
 }
 
 async function handleAdjust() {
@@ -1798,9 +1882,40 @@ async function handleAdjust() {
   // 确保结构完整
   newMql.metrics = adjustmentForm.value.metrics
   newMql.dimensions = adjustmentForm.value.dimensions
-  newMql.filters = adjustmentForm.value.filters
-    .filter(f => f.field && f.value)
-    .map(f => `${f.field} ${f.op} '${f.value}'`)
+  // 构建结构化 filters
+  const rootOp = (filterEditorRef.value?.getRootOperator() || 'AND') as 'AND' | 'OR'
+
+  function buildConditions(items: any[]) {
+    return items
+      .filter(item => item.type === 'condition' && item.field && item.value)
+      .map(item => ({ field: item.field, op: item.op, value: item.value }))
+  }
+
+  function buildGroups(groups: any[]) {
+    return groups
+      .filter(g => g.items.some((i: any) => (i.type === 'condition' && i.field && i.value) || i.type === 'subgroup'))
+      .map(g => {
+        const leafConds = buildConditions(g.items)
+        const subGroups = (g.items || [])
+          .filter((i: any) => i.type === 'subgroup')
+          .map((sg: any) => ({
+            operator: sg.operator,
+            conditions: buildConditions(sg.items || [])
+          }))
+        const allConds = [...leafConds, ...subGroups]
+        return { operator: g.operator, conditions: allConds }
+      })
+  }
+
+  const validGroups = buildGroups(adjustmentForm.value.filterGroups)
+
+  if (validGroups.length === 0) {
+    newMql.filters = {}
+  } else if (validGroups.length === 1) {
+    newMql.filters = { operator: validGroups[0].operator, conditions: validGroups[0].conditions }
+  } else {
+    newMql.filters = { operator: rootOp, conditions: validGroups }
+  }
   
   if (!newMql.metricDefinitions) newMql.metricDefinitions = {}
   

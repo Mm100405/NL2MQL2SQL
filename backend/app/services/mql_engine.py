@@ -106,14 +106,36 @@ def get_view_datasource_id(
 
 
 async def mql_to_sql(mql: Dict[str, Any], db: Session) -> Dict[str, Any]:
-    """Convert MQL to SQL"""
-    from app.utils.mql_validator import MQLValidator
-    
-    # 1. Strong Validation
-    validator = MQLValidator(db)
-    is_valid, msg = validator.validate_mql(mql)
-    if not is_valid:
-        raise ValueError(f"MQL Validation Failed: {msg}")
+    """Convert MQL to SQL
+
+    如果 MQL_ENGINE_V2=True（默认），使用新的 sqlglot AST 引擎。
+    否则使用旧的字符串拼接引擎。
+    """
+    from app.config import settings
+    from app.utils.mql_validator import MQLCompositeValidator
+
+    # 尝试使用新引擎（默认启用）
+    if settings.MQL_ENGINE_V2:
+        from app.services.mql_translator import MQLTranslator
+        translator = MQLTranslator(db, use_optimizer=settings.MQL_OPTIMIZER_ENABLED)
+        result = translator.translate(mql)
+        return {
+            "sql": result["sql"],
+            "datasources": [result["datasource_id"]] if result.get("datasource_id") else [],
+            "dialect": result.get("dialect", "mysql"),
+            "mql": mql,
+            "lineage": {
+                "metrics": list(result.get("mql", {}).get("metricDefinitions", {}).keys()),
+                "dimensions": list(result.get("mql", {}).get("dimensions", [])),
+            },
+        }
+
+    # 1. Strong Validation (使用新的模块化验证器)
+    validator = MQLCompositeValidator(db)
+    validation_result = validator.validate(mql)
+    if not validation_result.is_valid:
+        error_msgs = [e.message for e in validation_result.errors]
+        raise ValueError(f"MQL Validation Failed: {'; '.join(error_msgs)}")
     
     # 2. Dimension constraint validation
     await validate_dimensions_constraints(mql, db)
@@ -362,12 +384,23 @@ def process_mql_expression(
                 elif suffix and suffix in time_formats:
                     fmt = time_formats[suffix]
                 
-                # 关键修复：如果在 WHERE 子句中 (is_where=True)，我们通常跳过格式化以避免嵌套。
-                # 但如果它是直接的等值过滤（下钻分析产生），且没有被 DateTrunc 包装，则必须应用格式化。
-                is_wrapped_by_func = is_where and f"DateTrunc([{ref_field}]" in processed
-                if fmt and found_obj.dimension_type == "time":
-                    if not is_wrapped_by_func:
+                # 调试日志
+                print(f"[MQL] ref_field={ref_field}, actual_lookup_name={actual_lookup_name}, suffix={suffix}, "
+                      f"dimension_type={found_obj.dimension_type}, physical_column={found_obj.physical_column}, "
+                      f"col_expr_after_view={col_expr}, fmt={fmt}, is_where={is_where}")
+                
+                # 关键修复：区分两种场景
+                # 1. [create_time] - 没有后缀，原始字段引用，在 WHERE 子句中不格式化
+                # 2. [创建时间__按年] - 有后缀，维度引用，在 WHERE 子句中也需要格式化
+                if is_where:
+                    # WHERE 子句中：有后缀才格式化，没后缀不格式化
+                    if fmt and suffix and found_obj.dimension_type == "time":
                         col_expr = get_date_format_expr(col_expr, fmt, dialect)
+                        print(f"[MQL] Applied format in WHERE: {col_expr}")
+                elif fmt and found_obj.dimension_type == "time":
+                    # SELECT/GROUP BY 子句中，总是格式化时间维度
+                    col_expr = get_date_format_expr(col_expr, fmt, dialect)
+                    print(f"[MQL] Applied format in SELECT/GROUP BY: {col_expr}")
                 
                 processed = processed.replace(f"[{ref_field}]", col_expr)
             else: # Metric

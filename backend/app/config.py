@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     QUERY_TIMEOUT: int = 30  # seconds
     MAX_RESULT_ROWS: int = 10000
     
+    # MQL Engine V2
+    MQL_ENGINE_V2: bool = True  # True=sqlglot AST引擎, False=旧字符串拼接引擎
+    MQL_CACHE_ENABLED: bool = True
+    MQL_CACHE_MAX_SIZE: int = 256
+    MQL_CACHE_TTL: int = 300  # seconds
+    MQL_OPTIMIZER_ENABLED: bool = True
+    
     class Config:
         env_file = ".env"
         case_sensitive = True

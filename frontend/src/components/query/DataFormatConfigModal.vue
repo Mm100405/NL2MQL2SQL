@@ -46,12 +46,15 @@
       <div class="form-section">
         <div class="section-header">
           <span class="section-title">API所需参数</span>
-          <span class="section-hint">输入参数名称后点击添加，多个参数将从视图的可过滤字段中自动筛选</span>
+          <span class="section-hint">从可过滤字段中选择或输入自定义参数名称</span>
         </div>
         <div class="param-input-row">
-          <a-input
+          <a-select
             v-model="currentParam"
-            placeholder="输入参数名称，如：问题大类"
+            placeholder="从可过滤字段中选择"
+            allow-create
+            filterable
+            :options="filterableFields.map(f => ({ label: f.display_name || f.name, value: f.name }))"
             @press-enter="addParam"
           />
           <a-button type="primary" @click="addParam">
@@ -68,7 +71,7 @@
         </div>
         <div class="param-empty" v-else>
           <a-icon type="info-circle" />
-          暂无参数，请在上方输入参数名称后点击添加
+          暂无参数，请从可过滤字段中选择后点击添加
         </div>
       </div>
     </div>
@@ -88,12 +91,19 @@
 import { ref, watch, computed } from 'vue'
 import { Message } from '@arco-design/web-vue'
 
+interface FilterableField {
+  name: string
+  display_name?: string
+  physical_column?: string
+}
+
 const props = defineProps<{
   visible: boolean
   initialConfig?: {
     targetFormat: any
     apiParameters: string[]
   }
+  filterableFields?: FilterableField[]
 }>()
 
 const emit = defineEmits<{
@@ -110,7 +120,7 @@ const visible = computed({
 // 表单数据
 const targetFormat = ref('')
 const apiParameters = ref<string[]>([])
-const currentParam = ref('')
+const currentParam = ref<string | undefined>(undefined)
 
 // 格式校验
 const formatError = ref<string | null>(null)
@@ -154,7 +164,7 @@ watch(() => props.visible, (val) => {
     }
     formatError.value = null
     isFormatValid.value = false
-    currentParam.value = ''
+    currentParam.value = undefined
     // 如果已有内容，立即进行验证
     if (targetFormat.value.trim()) {
       validateFormat()
@@ -164,9 +174,9 @@ watch(() => props.visible, (val) => {
 
 // 添加参数
 function addParam() {
-  const param = currentParam.value.trim()
+  const param = currentParam.value?.trim()
   if (!param) {
-    Message.warning('请输入参数名称')
+    Message.warning('请选择或输入参数名称')
     return
   }
   if (apiParameters.value.includes(param)) {
@@ -174,7 +184,7 @@ function addParam() {
     return
   }
   apiParameters.value.push(param)
-  currentParam.value = ''
+  currentParam.value = undefined
 }
 
 // 删除参数

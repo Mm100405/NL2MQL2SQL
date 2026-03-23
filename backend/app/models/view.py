@@ -1,5 +1,5 @@
 """View Model - Virtual views for multi-table aggregation"""
-from sqlalchemy import Column, String, Text, JSON, DateTime, ForeignKey
+from sqlalchemy import Column, String, Text, JSON, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import uuid
@@ -26,7 +26,14 @@ class View(Base):
     name = Column(String(255), nullable=False, unique=True)
     display_name = Column(String(255), nullable=True)
     datasource_id = Column(String(36), ForeignKey("datasources.id"), nullable=False)
-    
+
+    # 分类管理
+    category_id = Column(String(36), nullable=True, index=True)
+    category_name = Column(String(255), nullable=True)
+
+    # 是否为默认视图
+    is_default = Column(Boolean, default=False, index=True)
+
     # 视图类型：single_table | joined | sql
     view_type = Column(String(20), nullable=False, default=ViewType.SINGLE_TABLE)
     
@@ -72,6 +79,9 @@ class View(Base):
             "name": self.name,
             "display_name": self.display_name,
             "datasource_id": self.datasource_id,
+            "category_id": self.category_id,
+            "category_name": self.category_name,
+            "is_default": self.is_default or False,
             "view_type": self.view_type,
             "base_table_id": self.base_table_id,
             "join_config": self.join_config,
