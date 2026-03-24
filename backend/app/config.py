@@ -12,7 +12,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "mysql+pymysql://root:123456@localhost:3306/nlqdb"
     
     # CORS
-    CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://127.0.0.1:5173", "http://192.168.42.208:5173", "http://0.0.0.0:5173", "*"]
+    # 注意：应用启动时会自动添加当前内网 IP 到允许列表
+    CORS_ORIGINS: List[str] = ["http://localhost:5173", "http://127.0.0.1:5173", "*"]
     
     # Security
     SECRET_KEY: str = "your-secret-key-change-in-production"

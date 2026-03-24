@@ -1,0 +1,56 @@
+# ================================================
+# Docker Compose 开发环境配置
+# ================================================
+
+version: '3.8'
+
+services:
+  # MySQL 数据库
+  db:
+    image: mysql:8.0
+    container_name: nl2mql2sql-dev-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_DATABASE: nlqdb
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    command: --default-authentication-plugin=mysql_native_password --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+
+  # 后端服务
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: nl2mql2sql-dev-backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: mysql+pymysql://root:123456@db:3306/nlqdb?charset=utf8mb4
+      DEBUG: True
+    ports:
+      - "8011:8011"
+    volumes:
+      - ./backend:/app  # 代码热重载
+      - /app/__pycache__
+    depends_on:
+      - db
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8011 --reload
+
+  # 前端服务（开发模式）
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev  # 开发环境 Dockerfile
+    container_name: nl2mql2sql-dev-frontend
+    restart: unless-stopped
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: npm run dev
+
+volumes:
+  mysql_data:

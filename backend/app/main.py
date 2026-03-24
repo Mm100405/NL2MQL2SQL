@@ -2,10 +2,44 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import logging
+import socket
 
 from app.config import settings
 from app.database import engine, Base
 from app.api.v1 import query, semantic, settings as settings_api, air, can, big, views, dictionaries, data_format, agent, skills
+
+
+def get_local_ip():
+    """获取本机局域网 IP 地址"""
+    try:
+        # 创建一个 UDP socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        # 尝试连接到一个外部地址（不会实际发送数据）
+        s.connect(('8.8.8.8', 80))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        # 备用方案：获取主机名并解析
+        hostname = socket.gethostname()
+        try:
+            ip = socket.gethostbyname(hostname)
+            return ip
+        except Exception:
+            return None
+
+
+def get_cors_origins():
+    """获取 CORS 允许的源地址列表（动态添加当前内网 IP）"""
+    origins = settings.CORS_ORIGINS.copy()
+    
+    # 动态添加当前内网 IP
+    local_ip = get_local_ip()
+    if local_ip and local_ip not in origins:
+        origins.append(f"http://{local_ip}:5173")
+        print(f"[CORS] 动态添加内网 IP: http://{local_ip}:5173")
+    
+    return origins
 
 # 配置日志系统
 import os
@@ -44,7 +78,17 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.on_event("startup")
 def startup_event():
+    print("=" * 60)
     print("Application startup initiated")
+    print("=" * 60)
+    
+    # 显示 CORS 配置
+    cors_origins = get_cors_origins()
+    print(f"[CORS] 允许的源地址：")
+    for origin in cors_origins:
+        print(f"  - {origin}")
+    print()
+    
     # 同步执行数据库迁移，但添加详细的进度日志
     from alembic.config import Config
     from alembic import command
@@ -65,13 +109,16 @@ def startup_event():
         # 即使迁移失败也不影响应用启动
         pass
     
+    print()
+    print("=" * 60)
     print("Application startup completed - ready to serve requests")
+    print("=" * 60)
 
 
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.CORS_ORIGINS,
+    allow_origins=get_cors_origins(),  # 动态获取允许的源地址
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
