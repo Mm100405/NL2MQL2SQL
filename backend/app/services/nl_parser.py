@@ -78,6 +78,16 @@ MQL V2 JSON结构及字段规范：
 
 ⚠️ 关键规则：
 
+11. **UNION 查询特殊规则**：
+   - 当使用 union 字段时，与 union 同一级的 json 字段（dimensions、metrics、filters、having 等）会被完全忽略
+   - 所有查询逻辑（维度、指标、过滤、排序等）都必须在 union.queries 的每个子查询中独立定义
+   - UNION 可以作为主查询，也可以作为 CTE 子查询使用
+   - 如果 UNION 作为 CTE 子查询，主查询仍然可以使用 dimensions、metrics、filters 等字段
+   - UNION 子查询中的 limit 会被自动移除，LIMIT 会在 UNION 的最外层应用
+   - 示例1（UNION 作为主查询）：{{"union": {{"type": "ALL", "queries": [子查询1, 子查询2]}}, "queryResultType": "DATA"}}
+   - 示例2（UNION 作为 CTE 子查询）：
+     {{"cte": [{{"name": "union_data", "query": {{"union": {{"type": "ALL", "queries": [...]}}}}}}], "from_cte": "union_data", "dimensions": [...], "metrics": [...]}}
+
 1. **timeConstraint vs filters 区分**：
    - `timeConstraint`：仅用于时间/日期相关的过滤（如"2025年4月"、"最近7天"、"本月"）
    - `filters`：用于所有非时间维度的过滤（如"线上渠道"、"已完成订单"）
@@ -139,8 +149,14 @@ MQL V2 JSON结构及字段规范：
    - 当主查询需要从 CTE 读取数据时使用（如 CTE 做了过滤/排名后，主查询查 CTE 结果）
    - 简单引用：`"from_cte": "CTE_名称"` → FROM CTE_名称
    - 多 CTE 关联：`"from_cte": {{"table": "CTE_A", "joins": [{{"table": "CTE_B", "type": "INNER", "on": "CTE_A.id = CTE_B.id"}}]}}`
-   - 使用 from_cte 时，主查询的 dimensions 和 metrics 直接使用 CTE 中已定义的列名（展示名）
+   - **⚠️ 重要约束：主查询只能使用 CTE 返回的字段！**
+     - 可用字段：CTE 中定义的 dimensions、metrics、windowFunctions 的别名、constants
+     - 禁止使用：CTE 中未返回的原表字段、原表维度、原表时间字段
+     - 例如：CTE 返回了 `街道`、`上报数`、`排名`（窗口函数），主查询只能使用这三个字段
+     - 禁止：主查询的 filters 引用原表的 `创建时间`（CTE 已完成时间过滤）
+     - 禁止：主查询的 dimensions 使用原表的其他维度（CTE 未返回）
    - 主查询不再需要 metricDefinitions（CTE 已完成聚合）
+   - 窗口函数列（如 `排名`）虽然可以用于 GROUP BY，但不必要（CTE 已计算好）
    - 例如："前三街道各小类" → CTE 做街道排名过滤，主查询 from_cte 引用 CTE 补充小类维度
 
 重要说明：
@@ -382,14 +398,14 @@ MQL：
 用户："近三年各街道上报数，取前三街道"
 MQL：
 {{
-  "dimensions": ["街道", "上报数"],
-  "timeConstraint": "[创建时间] >= DATE_SUB(CURDATE(), INTERVAL 3 YEAR)",
-  "metrics": ["上报数"],
+  "dimensions": ["街道", "上报数", "rn"],
+  "timeConstraint": "true",
+  "metrics": [],
   "filters": {{}},
-  "having": [],
-  "orderBy": [],
+  "having": ["[rn] <= 3"],
+  "orderBy": [{{"field": "rn", "direction": "ASC"}}],
   "distinct": false,
-  "limit": 3,
+  "limit": 1000,
   "windowFunctions": [],
   "union": null,
   "cte": [{{"name": "CTE_街道上报", "query": {{"dimensions": ["街道"], "metricDefinitions": {{ "上报数": {{ "refMetric": "reportNum", "aggregation": "SUM" }} }}, "timeConstraint": "[创建时间] >= DATE_SUB(CURDATE(), INTERVAL 3 YEAR)", "metrics": ["上报数"], "filters": {{}}, "having": [], "orderBy": [{{"field": "上报数", "direction": "DESC"}}], "distinct": false, "limit": 1000, "windowFunctions": [{{"alias": "rn", "func": "ROW_NUMBER", "field": "上报数", "partition": [], "orderBy": [{{"field": "上报数", "direction": "DESC"}}]}}], "union": null, "cte": null}}}}],
@@ -401,16 +417,6 @@ MQL：
 用户："分别查询线上和线下渠道2025年4月的销售额，合并为一个结果集"
 MQL：
 {{
-  "dimensions": [],
-  "metricDefinitions": {{ "销售额": {{ "refMetric": "gmv" }} }},
-  "timeConstraint": "DateTrunc([日期], 'MONTH') = '2025-04-01'",
-  "metrics": ["销售额"],
-  "filters": {{}},
-  "having": [],
-  "orderBy": [],
-  "distinct": false,
-  "limit": 1000,
-  "windowFunctions": [],
   "union": {{"type": "ALL", "queries": [
     {{"dimensions": ["渠道"], "metricDefinitions": {{ "销售额": {{ "refMetric": "gmv" }} }}, "timeConstraint": "DateTrunc([日期], 'MONTH') = '2025-04-01'", "metrics": ["销售额"], "filters": {{"operator": "AND", "conditions": [{{"field": "渠道", "op": "=", "value": "线上"}}]}}, "having": [], "orderBy": [], "distinct": false, "limit": 1000, "windowFunctions": [], "cte": null}},
     {{"dimensions": ["渠道"], "metricDefinitions": {{ "销售额": {{ "refMetric": "gmv" }} }}, "timeConstraint": "DateTrunc([日期], 'MONTH') = '2025-04-01'", "metrics": ["销售额"], "filters": {{"operator": "AND", "conditions": [{{"field": "渠道", "op": "=", "value": "线下"}}]}}, "having": [], "orderBy": [], "distinct": false, "limit": 1000, "windowFunctions": [], "cte": null}}
@@ -418,6 +424,8 @@ MQL：
   "cte": null,
   "queryResultType": "DATA"
 }}
+
+注意：使用 union 时，主查询的 dimensions、metrics、filters 等字段会被忽略。所有查询逻辑都应该在 union.queries 的每个子查询中定义。
 
 示例10（复杂 OR 条件 - 多组 AND 条件用 OR 连接）：
 用户："查询event_type_id为'1'且main_type_name包含'市容'或'宣传'或'施工'或'街面'或'其他'的所有记录"
@@ -446,6 +454,76 @@ MQL：
   "cte": null,
   "queryResultType": "DATA"
 }}
+
+示例11（UNION + 常量列 - 在结果中返回固定的分类代码和单位）：
+用户："统计市容环境、宣传广告等不同问题大类的案件数，返回分类代码（01, 02...）、分类名称和单位（件）"
+MQL：
+{{
+  "union": {{
+    "type": "ALL",
+    "queries": [
+      {{
+        "constants": [
+          {{"name": "code", "value": "01", "type": "string"}},
+          {{"name": "category", "value": "市容环境", "type": "string"}},
+          {{"name": "unit", "value": "件", "type": "string"}}
+        ],
+        "dimensions": [],
+        "metricDefinitions": {{ "案件数": {{ "refMetric": "案件数" }} }},
+        "timeConstraint": "true",
+        "metrics": ["案件数"],
+        "filters": {{
+          "operator": "AND",
+          "conditions": [
+            {{"field": "event_type_id", "op": "=", "value": "1"}},
+            {{"field": "main_type_name", "op": "LIKE", "value": "%市容%"}}
+          ]
+        }},
+        "having": [],
+        "orderBy": [],
+        "distinct": false,
+        "limit": 1000,
+        "windowFunctions": [],
+        "cte": null
+      }},
+      {{
+        "constants": [
+          {{"name": "code", "value": "02", "type": "string"}},
+          {{"name": "category", "value": "宣传广告", "type": "string"}},
+          {{"name": "unit", "value": "件", "type": "string"}}
+        ],
+        "dimensions": [],
+        "metricDefinitions": {{ "案件数": {{ "refMetric": "案件数" }} }},
+        "timeConstraint": "true",
+        "metrics": ["案件数"],
+        "filters": {{
+          "operator": "AND",
+          "conditions": [
+            {{"field": "event_type_id", "op": "=", "value": "1"}},
+            {{"field": "main_type_name", "op": "LIKE", "value": "%宣传%"}}
+          ]
+        }},
+        "having": [],
+        "orderBy": [],
+        "distinct": false,
+        "limit": 1000,
+        "windowFunctions": [],
+        "cte": null
+      }}
+    ]
+  }},
+  "cte": null,
+  "queryResultType": "DATA"
+}}
+
+常量列（Constants）使用说明：
+- 当查询需要在结果中返回固定值（如分类代码、单位、标签等）时，使用 constants 字段
+- constants 是一个数组，每个常量定义包含三个字段：
+  - name: 常量列的别名（如 "code", "category", "unit"）
+  - value: 常量值（如 "01", "市容环境", "件"）
+  - type: 常量类型（"string" 或 "number"），默认 "string"
+- 常量列通常用于 UNION 查询，为每个子查询添加固定的分类信息
+- 常量列不参与 GROUP BY，直接放在 SELECT 子句中
 
 请将以下自然语言转换为 MQL JSON。
 注意：如果这是修复尝试，请参考下方的"错误信息"进行修正。

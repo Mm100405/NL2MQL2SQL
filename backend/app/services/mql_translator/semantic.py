@@ -116,6 +116,13 @@ class SemanticContext:
         # View.columns 字段索引：display_name -> (view_id, column_info)
         self._view_columns_index: Dict[str, Tuple[str, Dict[str, Any]]] = {}
 
+        # CTE元数据存储（支持from_cte时引用CTE列）
+        self._cte_columns: Dict[str, List[str]] = {}  # {cte_name: [column_names]}
+        self._cte_metrics: Dict[str, set] = {}  # {cte_name: {metric_names}}
+        self._cte_dimensions: Dict[str, set] = {}  # {cte_name: {dimension_names}}
+        self._cte_constants: Dict[str, List[Dict]] = {}  # {cte_name: [{name, value, type}]}
+        self._cte_window_functions: Dict[str, set] = {}  # {cte_name: {window_function_names}}
+
         self._loaded = False
 
     def load(self) -> "SemanticContext":
@@ -444,3 +451,35 @@ class SemanticContext:
     @property
     def datasources(self) -> Dict[str, DataSource]:
         return self._datasources
+
+    def register_cte_columns(self, cte_name: str, metrics: List[str], dimensions: List[str], constants: List[Dict], window_functions: Optional[List[str]] = None) -> None:
+        """
+        注册CTE的列信息
+
+        Args:
+            cte_name: CTE名称
+            metrics: 指标列表
+            dimensions: 维度列表
+            constants: 常量列列表
+            window_functions: 窗口函数别名列表（可选）
+        """
+        # 收集所有列名（用于检查列是否存在）
+        all_columns = list(set(metrics + dimensions + [c.get("name") for c in constants]))
+        if window_functions:
+            all_columns.extend(window_functions)
+            all_columns = list(set(all_columns))
+
+        self._cte_columns[cte_name] = all_columns
+        self._cte_metrics[cte_name] = set(metrics)
+        self._cte_dimensions[cte_name] = set(dimensions)
+        self._cte_constants[cte_name] = constants
+        # 新增：存储窗口函数列（用于区分）
+        self._cte_window_functions[cte_name] = set(window_functions) if window_functions else set()
+
+    def is_cte_column(self, cte_name: str, column_name: str) -> bool:
+        """检查列是否属于指定CTE"""
+        return cte_name in self._cte_columns and column_name in self._cte_columns[cte_name]
+
+    def get_cte_constants(self, cte_name: str) -> List[Dict]:
+        """获取CTE的常量列定义"""
+        return self._cte_constants.get(cte_name, [])

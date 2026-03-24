@@ -648,8 +648,425 @@ MQL Engine V2 (升级)
 - ✅ 预期收益高（2-5倍性能提升）
 - ✅ 实施周期短（2-3周）
 
+## 十一、MQL SQL语法限制与改进方案
+
+### 11.1 当前MQL不支持的SQL语法
+
+#### 限制1: CTE子查询不能嵌套CTE
+**问题描述**:
+- 当前实现中,CTE子查询不能再包含CTE定义
+- 代码限制: `_build_without_cte` 方法用于构建CTE子查询,该方法不支持CTE嵌套
+
+**不支持场景**:
+```sql
+WITH cte1 AS (
+    WITH cte2 AS (SELECT ... FROM table)
+    SELECT ... FROM cte2  -- ❌ 不支持CTE嵌套
+)
+SELECT ... FROM cte1
+```
+
+**改进方案**:
+- 在`_build_without_cte`中增加CTE嵌套支持
+- 允许CTE子查询包含自己的CTE定义
+- 预期实施周期: 1-2周
+
 ---
 
-**文档版本**: v3.0 (增强版)
-**最后更新**: 2026-03-23
+#### 限制2: CTE作为数据源时主查询字段处理不完整
+**问题描述**:
+- 当使用`from_cte`时,主查询的`dimensions`和`metrics`应直接引用CTE已聚合的列
+- 当前实现在`_build_metric_expression`中只是简单返回列名,无法正确处理所有CTE返回的列
+
+**代码位置**: `ast_builder.py` 第460-461行
+```python
+if self._is_cte_source:
+    return exp.column(metric_alias).as_(metric_alias)
+```
+
+**问题**:
+- 只处理了指标,未处理维度
+- 无法支持CTE返回的计算列或别名列
+- CTE中的常量列(constants)无法被主查询引用
+
+**改进方案**:
+1. ✅ 在`SemanticContext`中增加CTE元数据存储
+2. ✅ 当使用`from_cte`时,从CTE定义中提取列结构
+3. ✅ 主查询的`dimensions`和`metrics`直接映射到CTE的列名,不再查找语义层
+4. ✅ 在SELECT子句中支持CTE的常量列引用
+
+**实施情况**:
+- ✅ 已完成（2026-03-24）
+- ✅ 采用方案A（SemanticContext）
+- ✅ 在SemanticContext中添加CTE元数据存储方法
+- ✅ 在ASTBuilder._build_with_cte中收集CTE列信息
+- ✅ 修改_build_metric_expression支持CTE列引用
+- ✅ 修改_build_dimension_expression支持CTE列引用
+- ✅ 在_build_select_clause中支持CTE常量列引用
+
+---
+
+#### 限制3: UNION字段忽略机制未完全实现
+**问题描述**:
+- Prompt规则11说明:"当使用union字段时,与union同级的json字段会被完全忽略"
+- 但代码中并未实现这个忽略逻辑
+
+**代码位置**: `ast_builder.py` 第74-75行
+```python
+# === 构建（支持 UNION 和基础 SELECT，但不支持 CTE） ===
+return self._build_without_cte(mql)
+```
+
+**问题**:
+- 如果主查询MQL同时包含`union`和其他字段(dimensions、metrics等),这些字段可能会被错误处理
+- 应该在检测到`union`时,忽略同级其他字段
+
+**改进方案**:
+1. ✅ 在`_build_without_cte`中增加字段忽略逻辑
+2. ✅ 检测到`union`时,只处理`union`、`limit`、`queryResultType`等字段
+3. ✅ 自动跳过其他字段校验
+
+**实施情况**:
+- ✅ 已完成（2026-03-24）
+- ✅ 在_build_without_cte中添加UNION检测和字段过滤逻辑
+- ✅ 创建_build_union_query_or_select辅助方法
+- ✅ 当使用UNION时只处理允许的字段
+
+---
+
+#### 限制4: 不支持CTE之间的相互引用
+**问题描述**:
+- 虽然支持`from_cte`引用单个CTE或多个CTE的JOIN
+- 但不支持CTE之间相互引用(CTE A引用CTE B)
+
+**不支持场景**:
+```sql
+WITH cte_a AS (SELECT ... FROM table),
+     cte_b AS (SELECT ... FROM cte_a)  -- ❌ 不支持CTE引用另一个CTE
+SELECT * FROM cte_b
+```
+
+**改进方案**:
+1. 修改`_build_with_cte`逻辑,允许CTE按依赖顺序构建
+2. 增加CTE依赖分析,确定构建顺序
+3. 在CTE子查询中也支持`from_cte`引用其他已定义的CTE
+4. 预期实施周期: 2-3周
+
+---
+
+#### 限制5: 窗口函数不支持在CTE中使用
+**问题描述**:
+- 当前`_build_base_select`会构建窗口函数(第126-128行)
+- CTE子查询使用`_build_without_cte`,后者调用`_build_base_select`
+- 但CTE中使用窗口函数可能导致语义混乱(CTE已计算窗口函数,主查询又使用)
+
+**代码位置**: `ast_builder.py` 第126-128行
+```python
+# 1.5 窗口函数（追加到 SELECT 子句）
+window_expressions = self._build_window_function_expressions(mql)
+```
+
+**改进方案**:
+1. 增加配置参数控制是否在CTE中构建窗口函数
+2. 默认情况下CTE子查询禁用窗口函数
+3. 如果需要在CTE中使用窗口函数,可通过明确配置启用
+4. 预期实施周期: 1周
+
+---
+
+#### 限制6: 只支持UNION子查询,不支持通用子查询
+**问题描述**:
+- 当前只支持`union`字段定义的UNION子查询
+- 不支持WHERE子句中的子查询、FROM子句中的子查询(CTE除外)
+
+**不支持场景**:
+```sql
+-- WHERE子查询
+SELECT * FROM orders WHERE amount > (SELECT AVG(amount) FROM orders)  -- ❌ 不支持
+
+-- FROM子查询(非CTE)
+SELECT * FROM (SELECT ... FROM table) AS sub  -- ❌ 不支持
+```
+
+**改进方案**:
+1. 在MQL中增加`subquery`字段,支持在WHERE、FROM中使用子查询
+2. 增加子查询语法解析能力
+3. 实施难度高,建议优先级低
+4. 预期实施周期: 4-6周
+
+---
+
+#### 限制7: 不支持CASE表达式
+**问题描述**:
+- 当前MQL不支持CASE WHEN THEN ELSE END语法
+- 无法实现条件逻辑和计算列
+
+**不支持场景**:
+```sql
+SELECT
+    CASE
+        WHEN amount > 1000 THEN '高'
+        WHEN amount > 500 THEN '中'
+        ELSE '低'
+    END AS amount_level
+FROM orders
+```
+
+**改进方案**:
+1. 在`ExpressionParser`中增加CASE表达式解析
+2. 在指标定义或维度定义中增加`caseWhen`字段
+3. 示例:
+```json
+{
+  "dimensions": ["amount_level"],
+  "dimensionConfigs": {
+    "amount_level": {
+      "type": "case_when",
+      "cases": [
+        {"condition": "[amount] > 1000", "value": "高"},
+        {"condition": "[amount] > 500", "value": "中"}
+      ],
+      "else": "低"
+    }
+  }
+}
+```
+4. 预期实施周期: 2-3周
+
+---
+
+#### 限制8: 不支持复杂的聚合函数计算
+**问题描述**:
+- 当前只支持基础聚合函数(SUM、COUNT、AVG、MAX、MIN)
+- 不支持标准差、方差、百分位等统计函数
+- 不支持聚合函数的复杂计算(如SUM(A)/SUM(B))
+
+**不支持场景**:
+```sql
+SELECT
+    STDDEV(amount) AS std_amount,  -- ❌ 不支持标准差
+    SUM(amount) / COUNT(*) AS avg_amount,  -- ❌ 不支持聚合函数计算
+    PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY amount) AS median  -- ❌ 不支持百分位
+FROM orders
+```
+
+**改进方案**:
+1. 扩展`_get_agg_func`支持的聚合函数
+2. 在`ExpressionParser`中支持聚合函数的复合表达式
+3. 增加统计函数(STDDEV、VARIANCE、PERCENTILE等)
+4. 预期实施周期: 2-3周
+
+---
+
+#### 限制9: 不支持INTERSECT和EXCEPT
+**问题描述**:
+- 当前只支持UNION和UNION ALL
+- 不支持INTERSECT(交集)和EXCEPT(差集)
+
+**不支持场景**:
+```sql
+-- 交集
+SELECT id FROM orders_2024
+INTERSECT
+SELECT id FROM orders_2025  -- ❌ 不支持
+
+-- 差集
+SELECT id FROM orders_2024
+EXCEPT
+SELECT id FROM orders_2025  -- ❌ 不支持
+```
+
+**改进方案**:
+1. 在`_build_without_cte`中增加INTERSECT和EXCEPT支持
+2. MQL语法: `{"type": "INTERSECT"|"EXCEPT", "queries": [...]}`
+3. 实施难度低,建议优先级中
+4. 预期实施周期: 1-2周
+
+---
+
+#### 限制10: 不支持PIVOT和UNPIVOT
+**问题描述**:
+- 不支持行转列(PIVOT)和列转行(UNPIVOT)
+- 无法实现数据透视和透视撤销
+
+**不支持场景**:
+```sql
+-- 行转列
+SELECT * FROM
+(SELECT product, month, amount FROM sales)
+PIVOT (SUM(amount) FOR month IN ('1月', '2月', '3月'))  -- ❌ 不支持
+
+-- 列转行
+SELECT * FROM sales
+UNPIVOT (amount FOR month IN (amount_1, amount_2, amount_3))  -- ❌ 不支持
+```
+
+**改进方案**:
+1. 实施复杂度高,建议优先级低
+2. 可通过CTE+CASE WHEN模拟
+3. 预期实施周期: 6-8周
+
+---
+
+#### 限制11: CTE/子查询不支持未定义View的原始表或自定义SQL
+**问题描述**:
+- 当前CTE子查询必须通过`fromView`引用已定义的View
+- 无法直接查询数据库中未定义View的原始表
+- 无法使用自定义SQL语句作为CTE数据源
+
+**不支持场景**:
+```sql
+-- 查询原始表（未定义View）
+WITH temp_sales AS (
+    SELECT * FROM raw_sales  -- ❌ 不支持，raw_sales表没有对应的View
+)
+SELECT * FROM temp_sales
+
+-- 自定义SQL
+WITH temp_data AS (
+    SELECT id, amount, DATE(created_at) AS date
+    FROM orders
+    WHERE amount > 100  -- ❌ 不支持自定义SQL
+)
+SELECT * FROM temp_data
+```
+
+**改进方案**:
+
+**方案A: 在CTE定义中增加`rawSql`字段**
+- MQL语法示例：
+```json
+{
+  "cte": [
+    {
+      "name": "temp_sales",
+      "rawSql": "SELECT * FROM raw_sales WHERE amount > 100"
+    }
+  ],
+  "from_cte": "temp_sales",
+  "dimensions": ["category"],
+  "metrics": ["total_amount"]
+}
+```
+- 优点：灵活性最高，支持任意SQL
+- 缺点：失去语义层保护，SQL注入风险
+- 实施周期：1-2周
+
+**方案B: 在CTE定义中增加`rawTable`字段**
+- MQL语法示例：
+```json
+{
+  "cte": [
+    {
+      "name": "temp_sales",
+      "rawTable": "raw_sales",
+      "datasourceId": "mysql_prod",
+      "dimensions": ["category", "date"],
+      "metrics": ["total_amount"]
+    }
+  ],
+  "from_cte": "temp_sales",
+  "dimensions": ["category"],
+  "metrics": ["total_amount"]
+}
+```
+- 优点：相对安全，仍需定义字段
+- 缺点：需要管理datasource_id，灵活性低于方案A
+- 实施周期：1周
+
+**方案C: 自动创建临时View**
+- 当检测到CTE引用未定义的表时，自动创建临时View
+- 优点：保持语义层一致性，用户无感知
+- 缺点：实现复杂，可能导致View定义混乱
+- 实施周期：2-3周
+
+**推荐方案**: 方案A（rawSql）+ 安全检查
+- 允许`rawSql`字段，但增加SQL安全检查（只读权限、语法验证）
+- 实施周期：1-2周
+---
+
+### 11.2 优先级排序与实施路线图
+
+| 限制 | 优先级 | 影响范围 | 实施周期 | 推荐顺序 | 状态 |
+|------|--------|----------|----------|----------|------|
+| 限制1: CTE嵌套 | P1 | 中 | 1-2周 | 2 | 待实施 |
+| 限制2: CTE字段处理 | P0 | 高 | 1-2周 | 1 | ✅ 已完成 |
+| 限制3: UNION字段忽略 | P1 | 中 | 1周 | 3 | ✅ 已完成 |
+| 限制4: CTE相互引用 | P1 | 中 | 2-3周 | 4 | 待实施 |
+| 限制5: CTE窗口函数 | P2 | 低 | 1周 | 5 | 待实施 |
+| 限制6: 通用子查询 | P3 | 低 | 4-6周 | 9 | 待实施 |
+| 限制7: CASE表达式 | P1 | 高 | 2-3周 | 6 | 待实施 |
+| 限制8: 复杂聚合函数 | P2 | 中 | 2-3周 | 7 | 待实施 |
+| 限制9: INTERSECT/EXCEPT | P2 | 中 | 1-2周 | 8 | 待实施 |
+| 限制10: PIVOT/UNPIVOT | P3 | 低 | 6-8周 | 10 | 待实施 |
+| 限制11: 原始表/自定义SQL | P1 | 高 | 1-2周 | 5.5 | 待实施 |
+
+---
+
+### 11.3 快速改进计划(2-4周)
+
+#### Week 1-2: P0问题修复
+- ✅ 修复限制2: CTE作为数据源时的字段处理（方案A：SemanticContext）
+  - ✅ 在SemanticContext中增加CTE元数据存储
+    - `_cte_columns`: {cte_name: [column_names]}
+    - `_cte_metrics`: {cte_name: {metric_names}}
+    - `_cte_dimensions`: {cte_name: {dimension_names}}
+    - `_cte_constants`: {cte_name: [constants]}
+    - 新增方法：`register_cte_columns()`, `is_cte_column()`, `get_cte_constants()`
+  - ✅ 在ASTBuilder._build_with_cte中收集CTE列信息
+    - 修复bug：初始化`cte_nodes = []`
+  - ✅ 修改_build_metric_expression支持CTE列引用
+    - 优先检查CTE列，直接返回列引用（无需metricDefinitions）
+    - 实现方案A：CTE场景下不需要metricDefinitions
+  - ✅ 修改_build_dimension_expression支持CTE列引用
+    - CTE列：直接返回列引用
+  - ✅ 在_build_select_clause中支持CTE常量列引用
+  - ✅ 修复_build_base_select调用顺序问题
+    - CTE场景：提前设置`_used_view`（在`_build_select_clause`之前）
+  - ✅ 修改_build_cte_from设置`_used_view`
+  - ✅ 修改MQLCompositeValidator支持from_cte
+    - from_cte场景：跳过MetricValidator和DimensionValidator
+
+- ✅ 修复限制3: UNION字段忽略机制
+  - ✅ 在MQLCompositeValidator中集中处理UNION逻辑
+    - 检测到UNION时只处理：{union, limit, queryResultType, cte}
+    - 跳过其他字段的验证
+  - ✅ 修改UnionValidator支持递归验证
+    - 验证union.queries中的子MQL
+  - ✅ 修改CTEValidator支持递归验证
+    - 验证cte[].query中的子MQL
+  - ✅ 修复导入路径为相对导入
+
+#### Week 2-3: P1问题修复
+- 修复限制1: CTE嵌套支持
+- 实现限制7: CASE表达式
+- 修复限制11: 原始表/自定义SQL支持（方案A：rawSql）
+
+#### Week 3-4: P1问题继续
+- 修复限制4: CTE相互引用
+
+---
+
+## 十二、总结
+
+### 改进方向
+
+1. **短期(2-4周)**: 修复P0和P1问题,提升CTE和UNION的完整性
+2. **中期(4-8周)**: 扩展SQL语法支持(CASE、复杂聚合、INTERSECT等)
+3. **长期(8周+)**: 实现高级SQL特性(通用子查询、PIVOT等)
+
+### 推荐方案
+
+**优先推荐**: **按优先级逐步修复SQL语法限制**
+
+**理由**:
+- ✅ 渐进式改进,风险可控
+- ✅ 每个问题都有明确的改进方案
+- ✅ 预期收益明显,用户体验提升显著
+- ✅ 实施周期短,快速见效
+
+---
+
+**文档版本**: v4.1 (限制2、3已修复版)
+**最后更新**: 2026-03-24
 **作者**: NL2MQL2SQL Team

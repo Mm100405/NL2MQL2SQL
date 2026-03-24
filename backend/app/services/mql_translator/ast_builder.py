@@ -71,6 +71,40 @@ class MQLASTBuilder:
         if cte_defs and isinstance(cte_defs, list) and len(cte_defs) > 0:
             return self._build_with_cte(mql, cte_defs)
 
+        # === 构建（支持 UNION 和基础 SELECT，但不支持 CTE） ===
+        return self._build_without_cte(mql)
+
+    def _build_without_cte(self, mql: Dict[str, Any]) -> exp.Expression:
+        """
+        构建不包含 CTE 的查询（支持 UNION 和基础 SELECT）
+
+        这个方法用于：
+        1. 主查询构建（当没有 CTE 时）
+        2. CTE 子查询构建（CTE 内部不能再有 CTE）
+
+        当使用 UNION 时，与 union 同级的字段会被完全忽略
+        只处理 union、limit、queryResultType、cte 等允许的字段
+
+        Args:
+            mql: MQL JSON 对象
+
+        Returns:
+            sqlglot 表达式（Select / Union）
+        """
+        # 检测是否使用 UNION
+        has_union = mql.get("union") is not None
+
+        # 当使用 UNION 时，构建临时MQL，只包含允许的字段
+        if has_union:
+            allowed_fields = {"union", "limit", "queryResultType", "cte"}
+            filtered_mql = {k: v for k, v in mql.items() if k in allowed_fields}
+            return self._build_union_query_or_select(filtered_mql)
+        else:
+            # 没有 UNION，正常处理
+            return self._build_union_query_or_select(mql)
+
+    def _build_union_query_or_select(self, mql: Dict[str, Any]) -> exp.Expression:
+        """辅助方法：处理UNION或基础SELECT"""
         # === 高级特性：UNION ===
         union_def = mql.get("union")
         if union_def and isinstance(union_def, dict):
@@ -87,9 +121,30 @@ class MQLASTBuilder:
         # 标记是否引用 CTE 作为数据源
         self._is_cte_source = bool(mql.get("from_cte"))
 
-        # 确定使用的视图
-        self._used_view, datasource_id = self.semantic.get_used_view(mql)
-        if datasource_id is None and self._used_view:
+        # 确定使用的视图和数据源方言
+        # 如果使用 from_cte，提前设置 _used_view（在构建SELECT子句之前）
+        if self._is_cte_source:
+            # CTE场景：_used_view 在 _build_from_clause 中设置
+            # 但我们需要在这里先设置，因为 _build_select_clause 会用到
+            from_cte = mql.get("from_cte")
+            if isinstance(from_cte, str):
+                self._used_view = type('ViewRef', (), {
+                    'name': from_cte,
+                    'id': None,
+                    'display_name': from_cte,
+                    'view_type': 'cte',
+                    'datasource_id': None,
+                    'base_table_id': None,
+                    'join_config': None,
+                    'custom_sql': None,
+                    'columns': []
+                })()
+            datasource_id = None
+        else:
+            # 非CTE场景：从metricDefinitions中查找视图
+            self._used_view, datasource_id = self.semantic.get_used_view(mql)
+
+        if datasource_id is None and self._used_view and self._used_view.datasource_id:
             datasource_id = self._used_view.datasource_id
 
         # 更新方言（如果可能）
@@ -106,7 +161,8 @@ class MQLASTBuilder:
             select.append("expressions", expr)
 
         # 1.5 窗口函数（追加到 SELECT 子句）
-        window_expressions = self._build_window_function_expressions(mql)
+        # 传入 select_expressions 用于解析指标别名到实际表达式
+        window_expressions = self._build_window_function_expressions(mql, select_expressions)
         for expr in window_expressions:
             select.append("expressions", expr)
 
@@ -157,8 +213,17 @@ class MQLASTBuilder:
 
         return select
 
-    def _build_window_function_expressions(self, mql: Dict[str, Any]) -> List[exp.Expression]:
-        """从 MQL 的 windowFunctions 字段构建窗口函数 SELECT 表达式"""
+    def _build_window_function_expressions(
+        self, 
+        mql: Dict[str, Any],
+        select_exprs: List[exp.Expression] = None
+    ) -> List[exp.Expression]:
+        """从 MQL 的 windowFunctions 字段构建窗口函数 SELECT 表达式
+        
+        Args:
+            mql: MQL 对象
+            select_exprs: 已构建的 SELECT 表达式列表，用于解析指标别名到实际表达式
+        """
         window_funcs = mql.get("windowFunctions")
         if not window_funcs or not isinstance(window_funcs, list):
             return []
@@ -166,12 +231,47 @@ class MQLASTBuilder:
         from app.services.mql_translator.advanced_sql import AdvancedSQLBuilder
         adv_builder = AdvancedSQLBuilder(self.semantic, self.dialect)
 
+        # 构建字段解析器：从 select_exprs 中查找字段对应的表达式
+        def field_resolver(field_name: str) -> Optional[exp.Expression]:
+            """将字段名解析为 SQL 表达式
+            
+            对于指标别名（如"上报数"），返回完整的聚合表达式（如 SUM(t0.report_num)）
+            对于维度或普通列，返回 None（由调用方处理为列引用）
+            """
+            if not select_exprs:
+                return None
+            
+            # 在 select_exprs 中查找别名匹配的表达式
+            for expr in select_exprs:
+                alias = None
+                # 获取表达式的别名
+                if hasattr(expr, 'alias') and expr.alias:
+                    alias = expr.alias
+                elif hasattr(expr, 'this') and hasattr(expr.this, 'alias') and expr.this.alias:
+                    alias = expr.this.alias
+                
+                if alias == field_name:
+                    # 找到匹配的表达式，返回其内部表达式（去掉别名）
+                    # 例如：SUM(t0.report_num) AS `上报数` -> SUM(t0.report_num)
+                    if hasattr(expr, 'this'):
+                        return expr.this
+                    elif hasattr(expr, 'copy'):
+                        # 对于复杂表达式，返回副本
+                        inner = expr.copy()
+                        # 清除别名
+                        if hasattr(inner, 'set'):
+                            inner.set("alias", None)
+                        return inner
+                    return expr
+            
+            return None
+
         expressions = []
-        for wf_spec in window_funcs:
+        for idx, wf_spec in enumerate(window_funcs):
             if not isinstance(wf_spec, dict):
                 continue
             try:
-                window_node, alias = adv_builder.build_window_function(wf_spec)
+                window_node, alias = adv_builder.build_window_function(wf_spec, field_resolver)
                 # 设置别名
                 window_node = window_node.as_(alias)
                 expressions.append(window_node)
@@ -182,16 +282,40 @@ class MQLASTBuilder:
         return expressions
 
     def _build_with_cte(self, mql: Dict[str, Any], cte_defs: list) -> exp.Expression:
-        """构建 WITH ... AS ... 主查询"""
-        # 逐个构建 CTE 子查询
-        cte_nodes = []
+        """
+        构建 WITH ... AS ... 主查询
+
+        注意：CTE 子查询中可以使用 UNION，但不能嵌套 CTE
+        """
+        cte_nodes = []  # 初始化CTE节点列表
+
+        # 构建CTE时收集列信息
         for cte_def in cte_defs:
             name = cte_def.get("name")
             query_mql = cte_def.get("query")
             if not name or not query_mql:
                 continue
 
-            cte_select = self._build_base_select(query_mql)
+            # 收集列信息并注册到SemanticContext
+            metrics = query_mql.get("metrics", [])
+            dimensions = query_mql.get("dimensions", [])
+            constants = query_mql.get("constants", [])
+            window_funcs = query_mql.get("windowFunctions", [])
+
+            # 提取窗口函数别名
+            window_function_aliases = []
+            if window_funcs:
+                for wf in window_funcs:
+                    if isinstance(wf, dict):
+                        alias = wf.get("alias")
+                        if alias:
+                            window_function_aliases.append(alias)
+
+            if self.semantic:
+                self.semantic.register_cte_columns(name, metrics, dimensions, constants, window_function_aliases)
+
+            # 使用 _build_without_cte 构建 CTE 子查询（支持 UNION，但不支持 CTE）
+            cte_select = self._build_without_cte(query_mql)
             cte_node = exp.CTE(
                 this=cte_select,
                 alias=exp.Identifier(this=name)
@@ -200,11 +324,21 @@ class MQLASTBuilder:
 
         if not cte_nodes:
             # 没有 CTE，退化为普通查询
-            return self._build_base_select(mql)
+            return self._build_without_cte(mql)
 
         # 构建主查询（去掉 cte 字段避免递归）
-        main_mql = {k: v for k, v in mql.items() if k != "cte"}
-        main_select = self._build_base_select(main_mql)
+        # 当使用 from_cte 时，主查询只引用CTE结果，不应该包含timeConstraint/filters等条件
+        # 这些条件应该在CTE子查询中处理
+        if mql.get("from_cte"):
+            # from_cte场景：只保留显示和排序相关的字段
+            # 允许 having（用于过滤 CTE 返回的窗口函数列，如 [rn] <= 10）
+            allowed_main_fields = {"dimensions", "metrics", "limit", "orderBy", "from_cte", "distinct", "having"}
+            main_mql = {k: v for k, v in mql.items() if k in allowed_main_fields}
+        else:
+            # 非from_cte场景：保留所有字段（除了cte）
+            main_mql = {k: v for k, v in mql.items() if k != "cte"}
+
+        main_select = self._build_without_cte(main_mql)
 
         # 将 CTE 设置到主 Select 的 with_ 属性上
         # sqlglot 中 WITH ... AS (...) SELECT ... 整体是 Select 类型，CTE 存储在 with_ 参数中
@@ -213,18 +347,32 @@ class MQLASTBuilder:
         return main_select
 
     def _build_union_query(self, mqls: List[Dict[str, Any]], union_type: str) -> exp.Expression:
-        """构建 UNION / UNION ALL 查询"""
+        """
+        构建 UNION / UNION ALL 查询
+        
+        注意：
+        - UNION 子查询不应该包含 LIMIT，LIMIT 应该在 UNION 的最外层应用
+        - 子查询的 LIMIT 会在构建后被移除
+        - UNION 的 LIMIT 取第一个子查询的 limit 值，如果没有则使用 1000
+        """
         if not mqls:
             raise ValueError("UNION requires at least one query")
 
-        # 构建所有子查询
+        # 获取 UNION 的 LIMIT（取第一个子查询的 limit）
+        union_limit = mqls[0].get("limit", 1000) if mqls else 1000
+
+        # 构建所有子查询（移除每个子查询的 LIMIT）
         selects = []
         for mql in mqls:
-            selects.append(self._build_base_select(mql))
+            select = self._build_base_select(mql)
+            # 移除子查询的 LIMIT 节点
+            select.set("limit", None)
+            selects.append(select)
 
         # 组合为 UNION
         if len(selects) == 1:
-            return selects[0]
+            # 单个子查询，直接返回并应用 LIMIT
+            return selects[0].limit(union_limit)
 
         is_distinct = union_type != "ALL"
         result = exp.Union(this=selects[0], expression=selects[1], distinct=is_distinct)
@@ -232,7 +380,24 @@ class MQLASTBuilder:
         for s in selects[2:]:
             result = exp.Union(this=result, expression=s, distinct=is_distinct)
 
-        return result
+        # 在 UNION 最外层应用 LIMIT
+        # sqlglot 中，UNION 表达式不能直接应用 LIMIT
+        # 解决方法：创建一个外层 SELECT 来包装 UNION 并应用 LIMIT
+        from sqlglot import parse_one
+        
+        # 构建 UNION 的 SQL
+        union_sql = result.sql(dialect=self.dialect)
+        
+        # 创建外层 SELECT：SELECT * FROM (UNION) LIMIT n
+        wrapped_sql = f"SELECT * FROM ({union_sql}) AS union_result LIMIT {union_limit}"
+        
+        # 解析为 AST
+        try:
+            wrapped_ast = parse_one(wrapped_sql, dialect=self.dialect)
+            return wrapped_ast
+        except Exception:
+            # 如果解析失败，直接返回 UNION（不带 LIMIT）
+            return result
 
     def _build_select_clause(
         self, mql: Dict[str, Any]
@@ -240,13 +405,53 @@ class MQLASTBuilder:
         """
         构建 SELECT 子句
 
+        支持常量列（Constants）、维度（Dimensions）、指标（Metrics）
+        支持CTE常量列引用
+
         Returns:
             (select_expressions, group_by_expressions)
         """
         select_exprs: List[exp.Expression] = []
         group_by_exprs: List[exp.Expression] = []
 
-        # 先处理维度（维度是 GROUP BY 的基础）
+        # 1. 处理常量列（放在最前面）
+        constants = mql.get("constants", [])
+        for const in constants:
+            const_name = const.get("name")
+            const_value = const.get("value")
+            const_type = const.get("type", "string")
+            
+            if const_type == "string":
+                expr = exp.Literal.string(str(const_value))
+            elif const_type == "number":
+                expr = exp.Literal.number(float(const_value))
+            else:
+                expr = exp.Literal.string(str(const_value))
+            
+            select_exprs.append(expr.as_(const_name))
+            # 常量列不加入 GROUP BY
+
+        # 1.5. 处理CTE常量列（当from_cte时）
+        if self._is_cte_source and self._used_view:
+            cte_name = self._used_view.name
+            cte_constants = self.semantic.get_cte_constants(cte_name) if self.semantic else []
+            
+            for const in cte_constants:
+                const_name = const.get("name")
+                const_value = const.get("value")
+                const_type = const.get("type", "string")
+                
+                if const_type == "string":
+                    expr = exp.Literal.string(str(const_value))
+                elif const_type == "number":
+                    expr = exp.Literal.number(float(const_value))
+                else:
+                    expr = exp.Literal.string(str(const_value))
+                
+                select_exprs.append(expr.as_(const_name))
+                # CTE常量列不加入 GROUP BY
+
+        # 2. 处理维度（维度是 GROUP BY 的基础）
         # 兼容 NL prompt 生成的 group_by 字段（与 dimensions 等价）
         # 使用 dict.fromkeys() 去重，保持顺序
         all_dims = list(dict.fromkeys(mql.get("dimensions", []) + mql.get("group_by", [])))
@@ -257,7 +462,7 @@ class MQLASTBuilder:
                 if dim_group_by:
                     group_by_exprs.append(dim_group_by)
 
-        # 再处理指标
+        # 3. 处理指标
         metric_defs = mql.get("metricDefinitions", {})
         for metric_alias in mql.get("metrics", []):
             defn = metric_defs.get(metric_alias, {})
@@ -280,6 +485,13 @@ class MQLASTBuilder:
         3. 应用时间格式化（如果适用）
         4. 返回列表达式和 GROUP BY 表达式
         """
+        # 检查是否引用CTE列
+        if self._is_cte_source and self._used_view:
+            cte_name = self._used_view.name
+            if self.semantic and self.semantic.is_cte_column(cte_name, dim_name):
+                # 直接返回列引用（CTE的维度列），CTE返回的字段都可以用于GROUP BY
+                return exp.column(dim_name).as_(dim_name), exp.column(dim_name)
+
         # 解析后缀
         actual_name = dim_name
         suffix = None
@@ -372,10 +584,23 @@ class MQLASTBuilder:
         构建指标表达式
 
         处理三种指标类型：
+        - CTE列：直接返回列引用（无需metricDefinitions）
         - basic: 基础聚合（SUM, COUNT 等）
         - derived: 派生指标（YoY, MoM 等）
         - composite: 复合指标（[MetricA] + [MetricB] 等）
         """
+        # 优先检查是否引用CTE列
+        if self._is_cte_source and self._used_view:
+            cte_name = self._used_view.name  # from_cte指定的CTE名
+            if self.semantic and self.semantic.is_cte_column(cte_name, metric_alias):
+                # CTE列：直接返回列引用（CTE已聚合，无需metricDefinitions）
+                return exp.column(metric_alias).as_(metric_alias)
+
+        # 非CTE列：需要metricDefinitions
+        if not metric_def:
+            # 没有metricDefinitions且不是CTE列，返回None或兜底
+            return None
+
         ref_metric_name = metric_def.get("refMetric", metric_alias)
         indirections = metric_def.get("indirections", [])
 
@@ -589,6 +814,18 @@ class MQLASTBuilder:
         """
         if isinstance(from_cte, str):
             # 简单格式："CTE_名称"
+            # 设置 _used_view 用于 CTE 列检查
+            self._used_view = type('ViewRef', (), {
+                'name': from_cte,
+                'id': None,
+                'display_name': from_cte,
+                'view_type': 'cte',
+                'datasource_id': None,
+                'base_table_id': None,
+                'join_config': None,
+                'custom_sql': None,
+                'columns': []
+            })()
             return (
                 exp.From(this=exp.Table(this=exp.Identifier(this=from_cte))),
                 []

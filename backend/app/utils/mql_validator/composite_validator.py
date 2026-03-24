@@ -67,21 +67,69 @@ class MQLCompositeValidator:
         """
         result = ValidationResult()
 
-        # 运行所有校验器
-        for validator in self.validators:
-            try:
-                # 获取字段值
-                field_value = mql.get(validator.field_name)
-                # 传入完整 MQL（用于交叉校验）
-                field_result = validator.validate(field_value, mql)
-                result.merge(field_result)
-            except Exception as e:
-                result.add_error(validator.error(
-                    "VALIDATOR_EXCEPTION",
-                    f"校验器 {validator.__class__.__name__} 执行异常: {str(e)}",
-                    validator.field_name,
-                    value=str(e),
-                ))
+        # 检测是否使用 UNION
+        has_union = mql.get("union") is not None
+
+        # 检测是否使用 from_cte
+        from_cte = mql.get("from_cte")
+
+        # 当使用 UNION 时，与 union 同级的字段会被忽略
+        # 只校验特定字段：union、limit、queryResultType、cte
+        # 其他字段（metrics、dimensions、filters、having、orderBy等）跳过校验
+        if has_union:
+            allowed_fields = {"union", "limit", "queryResultType", "cte"}
+
+            # 运行允许的校验器
+            for validator in self.validators:
+                if validator.field_name not in allowed_fields:
+                    continue  # 跳过不应该校验的字段
+
+                try:
+                    field_value = mql.get(validator.field_name)
+                    field_result = validator.validate(field_value, mql)
+                    result.merge(field_result)
+                except Exception as e:
+                    result.add_error(validator.error(
+                        "VALIDATOR_EXCEPTION",
+                        f"校验器 {validator.__class__.__name__} 执行异常: {str(e)}",
+                        validator.field_name,
+                        value=str(e),
+                    ))
+        elif from_cte:
+            # 使用 from_cte 时，跳过 MetricValidator 和 DimensionValidator
+            # 因为数据已经在 CTE 中聚合，主查询只是引用 CTE 的列
+            skip_validators = {"metrics", "dimensions"}
+
+            # 运行允许的校验器
+            for validator in self.validators:
+                if validator.field_name in skip_validators:
+                    continue  # 跳过指标和维度校验器
+
+                try:
+                    field_value = mql.get(validator.field_name)
+                    field_result = validator.validate(field_value, mql)
+                    result.merge(field_result)
+                except Exception as e:
+                    result.add_error(validator.error(
+                        "VALIDATOR_EXCEPTION",
+                        f"校验器 {validator.__class__.__name__} 执行异常: {str(e)}",
+                        validator.field_name,
+                        value=str(e),
+                    ))
+        else:
+            # 没有 UNION 和 from_cte 时，运行所有校验器
+            for validator in self.validators:
+                try:
+                    field_value = mql.get(validator.field_name)
+                    field_result = validator.validate(field_value, mql)
+                    result.merge(field_result)
+                except Exception as e:
+                    result.add_error(validator.error(
+                        "VALIDATOR_EXCEPTION",
+                        f"校验器 {validator.__class__.__name__} 执行异常: {str(e)}",
+                        validator.field_name,
+                        value=str(e),
+                    ))
 
         return result
 

@@ -3,7 +3,7 @@ union_validator.py - UNION 查询校验器
 """
 
 from typing import Any, Dict
-from app.utils.mql_validator.base import (
+from .base import (
     BaseMQLValidator,
     ValidationResult,
 )
@@ -66,5 +66,20 @@ class UnionValidator(BaseMQLValidator):
                 value=len(queries),
                 suggestion="UNION 需要至少 2 个查询，如：{\"queries\": [MQL1, MQL2]}"
             ))
+        else:
+            # 递归校验每个子查询
+            from .composite_validator import MQLCompositeValidator
+            if self.context:
+                validator = MQLCompositeValidator(self.context.db)
+                for i, sub_mql in enumerate(queries):
+                    if isinstance(sub_mql, dict):
+                        sub_result = validator.validate(sub_mql)
+                        # 修改错误字段路径，标记是第几个子查询
+                        for error in sub_result.errors:
+                            error.field = f"union.queries[{i}].{error.field}"
+                            result.add_error(error)
+                        for warning in sub_result.warnings:
+                            warning.field = f"union.queries[{i}].{warning.field}"
+                            result.add_warning(warning)
 
         return result

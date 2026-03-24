@@ -87,5 +87,18 @@ class CTEValidator(BaseMQLValidator):
                     value=type(query).__name__,
                     suggestion="query 必须是 MQL 对象"
                 ))
+            else:
+                # 递归校验 CTE 子查询
+                from .composite_validator import MQLCompositeValidator
+                if self.context:
+                    validator = MQLCompositeValidator(self.context.db)
+                    cte_result = validator.validate(query)
+                    # 修改错误字段路径，标记是第几个CTE
+                    for error in cte_result.errors:
+                        error.field = f"cte[{i}].query.{error.field}"
+                        result.add_error(error)
+                    for warning in cte_result.warnings:
+                        warning.field = f"cte[{i}].query.{warning.field}"
+                        result.add_warning(warning)
 
         return result

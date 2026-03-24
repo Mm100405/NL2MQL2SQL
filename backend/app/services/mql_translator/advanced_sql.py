@@ -61,6 +61,7 @@ class AdvancedSQLBuilder:
     def build_window_function(
         self,
         window_spec: Dict[str, Any],
+        field_resolver: Optional[callable] = None,
     ) -> Tuple[exp.Expression, str]:
         """
         构建窗口函数表达式
@@ -77,6 +78,8 @@ class AdvancedSQLBuilder:
                     ],  # 也支持字符串格式 "上报数 DESC"（兼容旧版）
                     "rows": "UNBOUNDED PRECEDING TO CURRENT ROW"  # 可选，窗口框架
                 }
+            field_resolver: 可选的字段解析函数，签名为 (field_name) -> exp.Expression
+                           用于将指标别名解析为实际的 SQL 表达式
 
         Returns:
             (窗口函数 AST 节点, 别名)
@@ -89,8 +92,12 @@ class AdvancedSQLBuilder:
         rows_frame = window_spec.get("rows")  # 如 "UNBOUNDED PRECEDING TO CURRENT ROW"
 
         # 构建基础表达式
+        # 如果提供了 field_resolver，使用它解析字段；否则直接使用列引用
         if field:
-            field_expr = exp.column(field)
+            if field_resolver:
+                field_expr = field_resolver(field)
+            else:
+                field_expr = exp.column(field)
         else:
             field_expr = None
 
@@ -102,7 +109,9 @@ class AdvancedSQLBuilder:
             else:
                 func_expr = agg_func()
         elif func_name in ("ROW_NUMBER", "RANK", "DENSE_RANK"):
-            func_expr = getattr(exp, func_name)()
+            # sqlglot中函数名使用PascalCase：RowNumber, Rank, DenseRank
+            func_class_name = ''.join(word.capitalize() for word in func_name.split('_'))
+            func_expr = getattr(exp, func_class_name)()
         elif func_name in ("LAG", "LEAD"):
             offset = window_spec.get("offset", 1)
             default = window_spec.get("default")
@@ -117,11 +126,20 @@ class AdvancedSQLBuilder:
         # 构建窗口规范
         window_spec_parts = []
 
+        # 辅助函数：解析字段到表达式
+        def resolve_field_expr(field_name: str) -> exp.Expression:
+            """解析字段名到 SQL 表达式"""
+            if field_resolver:
+                resolved = field_resolver(field_name)
+                if resolved:
+                    return resolved
+            return exp.column(field_name)
+
         # PARTITION BY（支持数组格式 ["字段"] 和字符串格式 "字段"）
         if partition_by:
             if isinstance(partition_by, str):
                 partition_by = [partition_by]
-            partition_exprs = [exp.column(p) for p in partition_by]
+            partition_exprs = [resolve_field_expr(p) for p in partition_by]
             window_spec_parts.append(exp.Partition(expressions=partition_exprs))
 
         # ORDER BY（支持数组格式 [{field, direction}] 和字符串格式 "field DESC"）
@@ -137,7 +155,7 @@ class AdvancedSQLBuilder:
                         direction = "ASC"
                     if order_field:
                         window_spec_parts.append(exp.Ordered(
-                            this=exp.column(order_field),
+                            this=resolve_field_expr(order_field),
                             desc=direction == "DESC"
                         ))
             elif isinstance(order_by, str):
@@ -152,7 +170,7 @@ class AdvancedSQLBuilder:
                     order_field = order_field[:order_field.upper().rfind(" ASC")].strip()
                 if order_field:
                     window_spec_parts.append(exp.Ordered(
-                        this=exp.column(order_field),
+                        this=resolve_field_expr(order_field),
                         desc=direction == "DESC"
                     ))
 
@@ -163,20 +181,30 @@ class AdvancedSQLBuilder:
                 window_spec_parts.append(window_frame)
 
         # 构建 Window 节点
-        if window_spec_parts:
-            if len(window_spec_parts) == 1 and isinstance(window_spec_parts[0], exp.Partition):
-                window_node = exp.Window(this=func_expr, partition=window_spec_parts[0])
-            else:
-                window_node = exp.Window(this=func_expr)
-                for part in window_spec_parts:
-                    if isinstance(part, exp.Partition):
-                        window_node.set("partition", part)
-                    elif isinstance(part, exp.Ordered):
-                        window_node.set("order", part)
-                    elif hasattr(exp, 'WindowFrame') and isinstance(part, exp.WindowFrame):
-                        window_node.set("frame", part)
-        else:
-            window_node = exp.Window(this=func_expr)
+        # 注意：
+        # 1. sqlglot 的 order 需要 exp.Order(expressions=[Ordered1, Ordered2, ...])
+        #    而不是直接设置 exp.Ordered，否则会生成错误的 SQL 如 OVER ("字段" ORDER BY )
+        # 2. sqlglot 的 key 是 partition_by（列表），不是 partition
+        partition_columns = []
+        order_exprs = []
+        frame_expr = None
+
+        for part in window_spec_parts:
+            if isinstance(part, exp.Partition):
+                # 从 Partition 对象提取列列表
+                partition_columns = list(part.expressions) if part.expressions else []
+            elif isinstance(part, exp.Ordered):
+                order_exprs.append(part)
+            elif hasattr(exp, 'WindowFrame') and isinstance(part, exp.WindowFrame):
+                frame_expr = part
+
+        window_node = exp.Window(this=func_expr)
+        if partition_columns:
+            window_node.set("partition_by", partition_columns)
+        if order_exprs:
+            window_node.set("order", exp.Order(expressions=order_exprs))
+        if frame_expr:
+            window_node.set("frame", frame_expr)
 
         return window_node, alias
 
