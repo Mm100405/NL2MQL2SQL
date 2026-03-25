@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import logging
 import socket
+import os
 
 from app.config import settings
 from app.database import engine, Base
@@ -41,8 +42,8 @@ def get_cors_origins():
     
     return origins
 
+
 # 配置日志系统
-import os
 log_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
 os.makedirs(log_dir, exist_ok=True)
 
@@ -77,7 +78,7 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 @app.on_event("startup")
-def startup_event():
+async def startup_event():
     print("=" * 60)
     print("Application startup initiated")
     print("=" * 60)
@@ -89,23 +90,58 @@ def startup_event():
         print(f"  - {origin}")
     print()
     
-    # 同步执行数据库迁移，但添加详细的进度日志
+    # 自动创建数据库（如果不存在）
+    from urllib.parse import urlparse, urlunparse
+    from sqlalchemy import create_engine, text
+    
+    try:
+        print("Checking database existence...")
+        # 解析数据库 URL
+        parsed_url = urlparse(settings.DATABASE_URL)
+        db_name = parsed_url.path.lstrip('/')
+        
+        # 构建连接到 MySQL 服务器的 URL（不指定数据库）
+        server_url = urlunparse(parsed_url._replace(path=''))
+        
+        # 连接到 MySQL 服务器并创建数据库
+        engine = create_engine(server_url, isolation_level="AUTOCOMMIT")
+        with engine.connect() as conn:
+            # 检查数据库是否存在
+            result = conn.execute(text(f"SHOW DATABASES LIKE '{db_name}'"))
+            if result.fetchone() is None:
+                print(f"Creating database '{db_name}'...")
+                conn.execute(text(f"CREATE DATABASE {db_name} DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"))
+                print(f"Database '{db_name}' created successfully")
+            else:
+                print(f"Database '{db_name}' already exists")
+        engine.dispose()
+    except Exception as e:
+        print(f"Database creation check failed: {e}")
+        import traceback
+        traceback.print_exc()
+        # 即使创建失败也继续，可能数据库已存在
+    
+    # 数据库迁移
     from alembic.config import Config
     from alembic import command
-    import os
     
     try:
         print("Starting database migration...")
         # 设置alembic配置
         alembic_cfg = Config(os.path.join(os.path.dirname(__file__), "..", "alembic.ini"))
         alembic_cfg.set_main_option("script_location", os.path.join(os.path.dirname(__file__), "..", "alembic"))
-        alembic_cfg.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
+        
+        # 处理 Alembic 的 % 转义：将 % 替换为 %%
+        db_url_for_alembic = settings.DATABASE_URL.replace('%', '%%')
+        alembic_cfg.set_main_option("sqlalchemy.url", db_url_for_alembic)
         
         # 运行迁移至最新版本
         command.upgrade(alembic_cfg, "head")
         print("Database migration completed successfully")
     except Exception as e:
         print(f"Database migration failed: {e}")
+        import traceback
+        traceback.print_exc()
         # 即使迁移失败也不影响应用启动
         pass
     

@@ -7,6 +7,8 @@ class Settings(BaseSettings):
     # Application
     APP_NAME: str = "NL2MQL2SQL"
     DEBUG: bool = True
+    HOST: str = "0.0.0.0"
+    PORT: int = 8011
     
     # Database
     DATABASE_URL: str = "mysql+pymysql://root:123456@localhost:3306/nlqdb"
@@ -37,6 +39,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "allow"  # 允许 .env 文件中有额外字段，提高部署兼容性
 
 
 settings = Settings()

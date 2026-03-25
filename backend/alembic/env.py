@@ -21,7 +21,9 @@ if config.config_file_name is not None:
 
 # Set the SQLAlchemy URL from environment or default
 from app.config import settings
-config.set_main_option('sqlalchemy.url', settings.DATABASE_URL)
+# 转义 % 符号，避免 Alembic 的变量插值解析错误
+db_url = settings.DATABASE_URL.replace('%', '%%')
+config.set_main_option('sqlalchemy.url', db_url)
 
 # add your model's MetaData object here for 'autogenerate' support
 target_metadata = Base.metadata
