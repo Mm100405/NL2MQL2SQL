@@ -1,5 +1,21 @@
 """
 time_constraint_validator.py - 时间约束校验器
+
+⚠️ 已废弃 (DEPRECATED) ⚠️
+
+从 V2 版本开始，timeConstraint 字段已废弃。
+时间过滤应统一使用 filters 字段，支持任意时间类型字段。
+
+废弃原因：
+1. timeConstraint 只能指定一个时间字段，无法支持多时间字段场景
+2. 默认时间字段已迁移到 View.default_date_column_id
+3. 时间过滤与其他维度过滤统一，简化 MQL 结构
+
+迁移指南：
+- 旧格式: "timeConstraint": "[日期] >= LAST_N_DAYS(30)"
+- 新格式: "filters": {"operator": "AND", "conditions": [{"field": "日期", "op": ">=", "value": "LAST_N_DAYS(30)"}]}
+
+此校验器保留用于向后兼容，但会输出废弃警告。
 """
 
 import re

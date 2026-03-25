@@ -64,3 +64,12 @@ export function getQueryHistoryDetail(id: string): Promise<QueryHistory> {
 export function deleteQueryHistory(id: string): Promise<void> {
   return request.delete(`/query/history/${id}`)
 }
+
+// 解析时间范围
+export function parseTimeRanges(params: {
+  mql?: any
+  filters?: any
+}): Promise<any> {
+  return request.post('/agent/parse-time-ranges', params)
+}
+

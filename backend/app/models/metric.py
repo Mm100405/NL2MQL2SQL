@@ -55,10 +55,10 @@ class Metric(Base):
     measure_column = Column(String(255), nullable=True)  # Physical column for basic metrics
     calculation_formula = Column(Text, nullable=True)  # MQL formula for derived/composite
     is_semi_additive = Column(JSON, nullable=True) # JSON to store semi-additive settings
-    date_column_id = Column(String(36), nullable=True) # Metric Date Identifier
+    date_column_id = Column(String(36), nullable=True) # ⚠️ DEPRECATED: 使用 View.default_date_column_id 代替
     base_metric_id = Column(String(36), ForeignKey("metrics.id"), nullable=True)
     derivation_type = Column(String(20), nullable=True, default=DerivationType.none.value)
-    time_constraint = Column(Text, nullable=True)
+    time_constraint = Column(Text, nullable=True)  # ⚠️ DEPRECATED: 使用 filters 代替
     analysis_dimensions = Column(JSON, nullable=True)  # List of dimension IDs
     filters = Column(JSON, nullable=True)  # Default filters [{field, operator, value}]
     synonyms = Column(JSON, nullable=True)  # Alternative names for NL recognition

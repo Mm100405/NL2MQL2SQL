@@ -1009,7 +1009,25 @@ class MQLASTBuilder:
                 }
                 cls = op_map.get(op)
                 if cls:
-                    lit = exp.Literal.string(value) if isinstance(value, str) else exp.Literal.number(value)
+                    # 检查 value 是否为 MQL 时间函数
+                    if isinstance(value, str) and self.expr_parser.time_handler.is_mql_time_function(value):
+                        # 解析时间函数为 SQL
+                        time_sql = self.expr_parser.time_handler.parse_and_render(value)
+                        # 解析为 sqlglot 表达式
+                        try:
+                            lit = sqlglot.parse_one(time_sql, dialect=self.dialect)
+                        except:
+                            lit = exp.Literal.string(time_sql)
+                    # 检查是否为 Raw SQL 表达式（如 DATE_ADD(STR_TO_DATE(...), INTERVAL -1 DAY)）
+                    elif isinstance(value, str) and self._is_sql_expression(value):
+                        try:
+                            lit = sqlglot.parse_one(value, dialect=self.dialect)
+                        except:
+                            lit = exp.Literal.string(value)
+                    elif isinstance(value, str):
+                        lit = exp.Literal.string(value)
+                    else:
+                        lit = exp.Literal.number(value)
                     return cls(this=field_col, expression=lit)
                 # 兜底：拼接字符串让表达式解析器处理
                 return self.expr_parser.parse(f"[{field}] {op} {value!r}", is_where=is_where, skip_formatting=skip_formatting)
@@ -1044,34 +1062,84 @@ class MQLASTBuilder:
         return result
 
     def _build_where_clause(self, mql: Dict[str, Any]) -> Optional[exp.Expression]:
-        """构建 WHERE 子句"""
+        """构建 WHERE 子句
+        
+        时间过滤规则（V2 重构）：
+        1. timeConstraint 字段已废弃，时间过滤统一使用 filters
+        2. 如果 filters 中已包含时间类型字段的过滤，不做额外处理
+        3. 如果 filters 中没有时间过滤，且视图有默认时间字段，自动添加默认时间过滤
+        """
         conditions: List[exp.Expression] = []
 
-        # timeConstraint
+        # === 处理 timeConstraint（向后兼容，已废弃） ===
         time_constraint = mql.get("timeConstraint")
-        if time_constraint:
+        if time_constraint and time_constraint != "true":
+            # 兼容旧的 timeConstraint 格式
             tc_expr = self.expr_parser.parse(time_constraint, is_where=True, skip_formatting=True)
             if tc_expr and not (isinstance(tc_expr, exp.Boolean) and tc_expr.this is True):
                 conditions.append(tc_expr)
+                # 如果使用了 timeConstraint，跳过 filters 中的时间过滤检查
+                # 直接处理 filters 并返回
+                filters = mql.get("filters", [])
+                if filters:
+                    if isinstance(filters, dict):
+                        f_expr = self._build_structured_filter(filters, is_where=True, skip_formatting=True)
+                        if f_expr and not (isinstance(f_expr, exp.Boolean) and f_expr.this is True):
+                            conditions.append(f_expr)
+                    elif isinstance(filters, list):
+                        for filter_expr in filters:
+                            if isinstance(filter_expr, dict):
+                                f_expr = self._build_structured_filter(filter_expr, is_where=True, skip_formatting=True)
+                            else:
+                                f_expr = self.expr_parser.parse(filter_expr, is_where=True, skip_formatting=True)
+                            if f_expr and not (isinstance(f_expr, exp.Boolean) and f_expr.this is True):
+                                conditions.append(f_expr)
+                
+                if not conditions:
+                    return None
+                if len(conditions) == 1:
+                    return conditions[0]
+                return exp.And(expressions=conditions)
 
-        # filters - 支持结构化和字符串两种格式
+        # === 处理 filters（新逻辑：支持时间字段过滤） ===
         filters = mql.get("filters", [])
+        has_time_filter = False
+        
         if filters:
             if isinstance(filters, dict):
-                # 新结构化格式
+                # 检查是否包含时间过滤
+                has_time_filter = self._check_has_time_filter_in_structured(filters)
                 f_expr = self._build_structured_filter(filters, is_where=True, skip_formatting=True)
                 if f_expr and not (isinstance(f_expr, exp.Boolean) and f_expr.this is True):
                     conditions.append(f_expr)
             elif isinstance(filters, list):
-                # 旧字符串格式（向后兼容）或混合格式
+                # 旧字符串格式或混合格式
                 for filter_expr in filters:
                     if isinstance(filter_expr, dict):
-                        # 单个结构化条件
+                        # 检查是否为时间字段过滤
+                        field = filter_expr.get("field", "")
+                        field_ref = self.semantic.resolve_field(field)
+                        if field_ref and field_ref.dimension_type == "time":
+                            has_time_filter = True
                         f_expr = self._build_structured_filter(filter_expr, is_where=True, skip_formatting=True)
                     else:
+                        # 字符串格式，检查是否包含时间字段
+                        import re
+                        match = re.search(r'\[([^\]]+)\]', filter_expr)
+                        if match:
+                            field = match.group(1)
+                            field_ref = self.semantic.resolve_field(field)
+                            if field_ref and field_ref.dimension_type == "time":
+                                has_time_filter = True
                         f_expr = self.expr_parser.parse(filter_expr, is_where=True, skip_formatting=True)
                     if f_expr and not (isinstance(f_expr, exp.Boolean) and f_expr.this is True):
                         conditions.append(f_expr)
+
+        # === 默认时间过滤（如果 filters 中没有时间过滤） ===
+        if not has_time_filter and not time_constraint:
+            default_time_filter = self._build_default_time_filter(mql)
+            if default_time_filter:
+                conditions.insert(0, default_time_filter)
 
         if not conditions:
             return None
@@ -1080,6 +1148,47 @@ class MQLASTBuilder:
             return conditions[0]
 
         return exp.And(expressions=conditions)
+
+    def _check_has_time_filter_in_structured(self, filter_obj: Dict[str, Any]) -> bool:
+        """检查结构化 filter 中是否包含时间字段过滤"""
+        if "field" in filter_obj:
+            # 叶子条件
+            field = filter_obj.get("field", "")
+            field_ref = self.semantic.resolve_field(field)
+            return field_ref and field_ref.dimension_type == "time"
+        
+        # 分组条件
+        conditions = filter_obj.get("conditions", [])
+        for cond in conditions:
+            if self._check_has_time_filter_in_structured(cond):
+                return True
+        return False
+
+    def _build_default_time_filter(self, mql: Dict[str, Any]) -> Optional[exp.Expression]:
+        """构建默认时间过滤
+        
+        当 filters 中没有时间过滤时，如果视图有默认时间字段，
+        则自动添加默认时间范围过滤（如最近30天）。
+        
+        注意：此功能需要根据业务需求配置默认行为。
+        当前实现：不做自动添加，保留扩展接口。
+        """
+        # 获取视图的默认时间字段
+        if not self._used_view:
+            return None
+        
+        view_id = self._used_view.id if hasattr(self._used_view, 'id') else None
+        if not view_id:
+            return None
+        
+        default_date_field = self.semantic.get_default_date_column(view_id)
+        if not default_date_field:
+            return None
+        
+        # TODO: 根据业务配置添加默认时间范围
+        # 例如：最近30天、本月、本年等
+        # 当前不自动添加，保留扩展接口
+        return None
 
     def _build_having_clause(self, mql: Dict[str, Any]) -> Optional[exp.Expression]:
         """构建 HAVING 子句（新增）"""
@@ -1142,6 +1251,42 @@ class MQLASTBuilder:
             return None
 
         return exp.Order(expressions=order_exprs)
+
+    def _is_sql_expression(self, value: str) -> bool:
+        """
+        检测字符串是否为 Raw SQL 表达式（而非普通字符串字面量）
+
+        Raw SQL 表达式特征：
+        - 包含 SQL 函数调用如 DATE_ADD, DATE_SUB, STR_TO_DATE, INTERVAL 等
+        - 包含括号和运算符，不是简单的字符串
+
+        这样可以区分：
+        - 普通字符串值：如 "张三"（应作为字面量处理）
+        - SQL 表达式：如 "DATE_ADD('2026-01-01', INTERVAL -1 DAY)"（应解析为表达式）
+        """
+        if not isinstance(value, str):
+            return False
+
+        # 常见 SQL 日期/时间函数关键词
+        sql_funcs = [
+            'DATE_ADD', 'DATE_SUB', 'DATE_FORMAT', 'STR_TO_DATE',
+            'CURRENT_DATE', 'CURRENT_TIMESTAMP', 'NOW', 'TIMESTAMP',
+            'INTERVAL', 'DAY', 'MONTH', 'YEAR', 'WEEK', 'QUARTER',
+            'TIMESTAMPDIFF', 'DATE', 'DATETIME'
+        ]
+
+        # 检查是否包含 SQL 函数调用模式
+        import re
+        # 匹配函数调用模式：WORD(...) 或 WORD(..., ...)
+        func_pattern = r'\b(' + '|'.join(sql_funcs) + r')\s*\('
+        if re.search(func_pattern, value, re.IGNORECASE):
+            return True
+
+        # 检查是否包含 INTERVAL 表达式
+        if re.search(r'\bINTERVAL\s+-?\d+\s+\w+', value, re.IGNORECASE):
+            return True
+
+        return False
 
     def to_sql(self, select: exp.Select) -> str:
         """将 AST 转换为 SQL 字符串"""

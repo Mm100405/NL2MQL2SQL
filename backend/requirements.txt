@@ -42,6 +42,7 @@ lark==1.2.2
 
 # Utilities
 python-dotenv==1.0.1
+python-dateutil==2.9.0
 tenacity==9.0.0
 
 # Development

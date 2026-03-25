@@ -56,6 +56,7 @@ class ViewRef:
     join_config: Optional[Dict] = None
     custom_sql: Optional[str] = None
     columns: List[Dict] = field(default_factory=list)  # [{name, source_table, source_column, alias, type}]
+    default_date_column_id: Optional[str] = None  # 默认时间字段ID
 
 
 @dataclass
@@ -174,6 +175,7 @@ class SemanticContext:
                 join_config=v.join_config,
                 custom_sql=v.custom_sql,
                 columns=v.columns or [],
+                default_date_column_id=getattr(v, 'default_date_column_id', None),
             )
             self._views[v.id] = ref
             
@@ -431,6 +433,74 @@ class SemanticContext:
             return self._time_formats.suffix_to_format[suffix]
 
         return None
+
+    def get_default_date_column(self, view_id: str) -> Optional[FieldRef]:
+        """
+        获取视图的默认时间字段
+
+        Args:
+            view_id: 视图 ID
+
+        Returns:
+            默认时间字段的 FieldRef，如果没有则返回 None
+        """
+        view = self._views.get(view_id)
+        if not view:
+            return None
+
+        # 获取视图的 default_date_column_id
+        default_date_id = getattr(view, 'default_date_column_id', None)
+        if not default_date_id:
+            return None
+
+        # 查找对应的维度
+        return self._dimensions.get(default_date_id)
+
+    def get_time_dimensions(self, view_id: str) -> List[FieldRef]:
+        """
+        获取视图的所有时间类型字段
+
+        Args:
+            view_id: 视图 ID
+
+        Returns:
+            时间类型字段的列表
+        """
+        return [
+            dim for dim in self._dimensions.values()
+            if dim.dimension_type == "time" and dim.source_view_id == view_id
+        ]
+
+    def has_time_filter(self, filters: List[Any]) -> bool:
+        """
+        检查 filters 中是否包含时间过滤条件
+
+        Args:
+            filters: filter 列表
+
+        Returns:
+            是否包含时间过滤
+        """
+        if not filters:
+            return False
+
+        for f in filters:
+            if isinstance(f, dict):
+                field = f.get("field", "")
+            elif isinstance(f, str):
+                # 字符串格式，提取字段名
+                import re
+                match = re.search(r'\[([^\]]+)\]', f)
+                field = match.group(1) if match else ""
+            else:
+                continue
+
+            # 检查字段是否为时间类型
+            field_ref = self.resolve_field(field)
+            if field_ref and field_ref.dimension_type == "time":
+                return True
+
+        return False
 
     @property
     def metrics(self) -> Dict[str, MetricRef]:

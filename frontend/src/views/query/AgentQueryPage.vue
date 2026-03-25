@@ -52,6 +52,10 @@
                         <template #icon><icon-share-alt /></template>
                         引用
                       </a-button>
+                      <a-button type="text" size="small" @click="handleShowSql(msg.queryResult)">
+                        <template #icon><icon-code /></template>
+                        查看SQL
+                      </a-button>
                       <a-button type="text" size="small" @click="showGlobalAddDimension(msg.queryResult)">
                         <template #icon><icon-plus-circle /></template>
                         维度细分
@@ -87,52 +91,99 @@
               </template>
 
               <div class="result-body-container">
-                <div class="result-meta-tags">
-                  <span>时间范围: {{ formatTimeRange(msg.queryResult.mql) }}</span>
-                  <span>指标: 
-                    <a-space size="mini">
-                      <a-popover v-for="col in getMetricsFromCols(msg.queryResult)" :key="col" position="bottom">
-                        <span class="meta-tag-link">{{ findMetric(col)?.display_name || col }}</span>
-                        <template #content>
-                          <div class="metadata-popup">
-                            <div v-if="findMetric(col)">
-                              <div class="p-title">{{ findMetric(col)?.display_name || col }}</div>
-                              <div class="p-desc">{{ findMetric(col)?.description || '暂无描述' }}</div>
-                              <div class="p-formula">计算口径：{{ findMetric(col)?.calculation_formula || '基础聚合' }}</div>
-                            </div>
-                            <div v-else>未知指标</div>
-                          </div>
-                        </template>
-                      </a-popover>
-                    </a-space>
-                  </span>
-                  <span>维度: 
-                    <a-space size="mini">
-                      <a-popover v-for="col in getDimensionsFromCols(msg.queryResult)" :key="col" position="bottom">
-                        <span class="meta-tag-link">
-                          {{ col && col.includes('__') ? (findDimension(col.split('__')[0] || '')?.display_name || col.split('__')[0]) + '(' + (col.split('__')[1] || '') + ')' : (findDimension(col || '')?.display_name || col) }}
+                <!-- 查询元信息面板 -->
+                <div class="query-meta-panel">
+                  <!-- 时间范围 -->
+                  <div v-if="getParsedTimeRange(msg.queryResult.mql, msg.queryResult.query_id) || formatTimeRange(msg.queryResult.mql)" class="meta-row">
+                    <div class="meta-label">
+                      <icon-clock-circle />
+                      <span>时间范围</span>
+                    </div>
+                    <div class="meta-content">
+                      <template v-if="getParsedTimeRange(msg.queryResult.mql, msg.queryResult.query_id)">
+                        <span class="time-range-box">
+                          <span class="time-field-name-in-box">
+                            {{ findDimension(extractTimeConditions(msg.queryResult.mql?.filters || {})[0]?.field || '')?.display_name || '时间' }}
+                          </span>
+                          <span class="time-date">{{ getParsedTimeRange(msg.queryResult.mql, msg.queryResult.query_id)?.start || '-' }}</span>
+                          <span class="time-separator">~</span>
+                          <span class="time-date">{{ getParsedTimeRange(msg.queryResult.mql, msg.queryResult.query_id)?.end || '-' }}</span>
                         </span>
-                        <template #content>
-                          <div class="metadata-popup">
-                            <div v-if="col && (findDimension(col) || (col.includes('__') && findDimension(col.split('__')[0] || '')))">
-                              <div class="p-title">
-                                {{ col.includes('__') ? (findDimension(col.split('__')[0] || '')?.display_name || col.split('__')[0]) + '(' + (col.split('__')[1] || '') + ')' : (findDimension(col)?.display_name || col) }}
+                      </template>
+                      <template v-else>
+                        <span>{{ formatTimeRange(msg.queryResult.mql) }}</span>
+                      </template>
+                    </div>
+                  </div>
+
+                  <!-- 指标 -->
+                  <div v-if="getMetricsFromCols(msg.queryResult).length > 0" class="meta-row">
+                    <div class="meta-label">
+                      <icon-bar-chart />
+                      <span>指标</span>
+                    </div>
+                    <div class="meta-content">
+                      <a-space size="small" wrap>
+                        <a-popover v-for="col in getMetricsFromCols(msg.queryResult)" :key="col" position="bottom">
+                          <span class="meta-tag-chip metric-chip">{{ findMetric(col)?.display_name || col }}</span>
+                          <template #content>
+                            <div class="metadata-popup">
+                              <div v-if="findMetric(col)">
+                                <div class="p-title">{{ findMetric(col)?.display_name || col }}</div>
+                                <div class="p-desc">{{ findMetric(col)?.description || '暂无描述' }}</div>
+                                <div class="p-formula">计算口径：{{ findMetric(col)?.calculation_formula || '基础聚合' }}</div>
                               </div>
-                              <div class="p-desc">{{ findDimension(col.split('__')[0] || '')?.description || '暂无描述' }}</div>
+                              <div v-else>未知指标</div>
                             </div>
-                            <div v-else>未知维度</div>
-                          </div>
-                        </template>
-                      </a-popover>
-                    </a-space>
-                  </span>
-                  <span v-if="hasFilters(msg.queryResult.mql.filters)" class="filter-display">过滤条件:
-                    <FilterTree :node="normalizeFilters(msg.queryResult.mql.filters)" :format-field="formatDimensionName" />
-                  </span>
+                          </template>
+                        </a-popover>
+                      </a-space>
+                    </div>
+                  </div>
+
+                  <!-- 维度 -->
+                  <div v-if="getDimensionsFromCols(msg.queryResult).length > 0" class="meta-row">
+                    <div class="meta-label">
+                      <icon-apps />
+                      <span>维度</span>
+                    </div>
+                    <div class="meta-content">
+                      <a-space size="small" wrap>
+                        <a-popover v-for="col in getDimensionsFromCols(msg.queryResult)" :key="col" position="bottom">
+                          <span class="meta-tag-chip dimension-chip">
+                            {{ col && col.includes('__') ? (findDimension(col.split('__')[0] || '')?.display_name || col.split('__')[0]) + '(' + (col.split('__')[1] || '') + ')' : (findDimension(col || '')?.display_name || col) }}
+                          </span>
+                          <template #content>
+                            <div class="metadata-popup">
+                              <div v-if="col && (findDimension(col) || (col.includes('__') && findDimension(col.split('__')[0] || '')))">
+                                <div class="p-title">
+                                  {{ col.includes('__') ? (findDimension(col.split('__')[0] || '')?.display_name || col.split('__')[0]) + '(' + (col.split('__')[1] || '') + ')' : (findDimension(col)?.display_name || col) }}
+                                </div>
+                                <div class="p-desc">{{ findDimension(col.split('__')[0] || '')?.description || '暂无描述' }}</div>
+                              </div>
+                              <div v-else>未知维度</div>
+                            </div>
+                          </template>
+                        </a-popover>
+                      </a-space>
+                    </div>
+                  </div>
+
+                  <!-- 过滤条件 -->
+                  <div v-if="hasFilters(msg.queryResult.mql.filters)" class="meta-row">
+                    <div class="meta-label">
+                      <icon-filter />
+                      <span>过滤条件</span>
+                    </div>
+                    <div class="meta-content filter-content">
+                      <FilterTree :node="normalizeFilters(msg.queryResult.mql.filters)" :format-field="formatDimensionName" />
+                    </div>
+                  </div>
                 </div>
 
                 <div class="result-content-wrapper">
                   <a-table
+                    v-if="msg.queryResult.viewType !== 'chart'"
                     :columns="formatColumns(msg.queryResult.result.columns)"
                     :data="formatData(msg.queryResult.result, msg.queryResult.query_id)"
                     :pagination="false"
@@ -156,7 +207,7 @@
                       </a-dropdown>
                     </template>
                   </a-table>
-                  
+
                   <ChartContainer
                     v-if="msg.queryResult.viewType === 'chart'"
                     :columns="msg.queryResult.result.columns"
@@ -191,6 +242,32 @@
                     <template #icon><icon-code /></template>
                     API调试
                   </a-button>
+                </div>
+              </div>
+
+              <!-- 洞察展示面板 -->
+              <div v-if="msg.queryResult?.insights?.length > 0" class="insights-panel">
+                <div class="insights-header" @click="insightsExpanded = !insightsExpanded">
+                  <div class="insights-title">
+                    <icon-light /> 洞察分析
+                    <a-badge v-if="msg.queryResult?.insights?.length > 0" :count="msg.queryResult?.insights?.length" :max-count="99" />
+                  </div>
+                  <a-button type="text" size="mini">
+                    <template #icon>
+                      <icon-down v-if="!insightsExpanded" />
+                      <icon-up v-else />
+                    </template>
+                  </a-button>
+                </div>
+                <div v-show="insightsExpanded" class="insights-content">
+                  <div
+                    v-for="(insight, idx) in msg.queryResult?.insights"
+                    :key="idx"
+                    class="insight-item"
+                  >
+                    <div class="insight-index">{{ idx + 1 }}</div>
+                    <div class="insight-text">{{ insight }}</div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -253,6 +330,25 @@
         </div>
       </div>
     </template>
+
+    <!-- SQL查看弹窗 -->
+    <a-modal v-model:visible="sqlViewVisible" title="查看SQL" width="1000px" height="600px" :footer="false" :body-style="{ maxHeight: '600px', overflow: 'auto' }">
+      <div class="sql-view-container">
+        <div class="sql-toolbar">
+          <a-button type="primary" size="small" @click="copySqlToClipboard">
+            <template #icon><icon-copy /></template>
+            复制SQL
+          </a-button>
+        </div>
+        <a-textarea
+          v-model="currentViewingSql"
+          readonly
+          auto-height
+          class="sql-textarea"
+          placeholder="暂无SQL"
+        />
+      </div>
+    </a-modal>
 
     <!-- 调整查询弹窗 -->
     <a-modal v-model:visible="adjustmentVisible" title="调整查询" @ok="handleAdjust" width="600px">
@@ -394,7 +490,7 @@ import ChartContainer from '@/components/common/ChartContainer.vue'
 import DataFormatConfigModal from '@/components/query/DataFormatConfigModal.vue'
 import ApiDebugModal from '@/components/query/ApiDebugModal.vue'
 import type { FullQueryResponse, AnalysisStep } from '@/api/types'
-import { analyzeIntent, generateMQL, mql2sql, executeSQL, getQueryHistoryDetail, startConversation, getConversationHistory, saveConversationHistory } from '@/api/query'
+import { analyzeIntent, generateMQL, mql2sql, executeSQL, getQueryHistoryDetail, startConversation, getConversationHistory, saveConversationHistory, parseTimeRanges } from '@/api/query'
 import { getMetrics, getDimensions, getMetricsAllowedDimensions } from '@/api/semantic'
 import { getSystemSetting } from '@/api/settings'
 import { generateDataFormatConfig } from '@/api/data_format'
@@ -492,6 +588,18 @@ const addDimensionForm = reactive({
 })
 
 const adjustmentVisible = ref(false)
+
+// SQL 查看
+const sqlViewVisible = ref(false)
+const currentViewingSql = ref('')
+
+// 洞察展示
+const insightsExpanded = ref(false)
+
+// 解析后的时间范围缓存 {queryId: {field: {start: '', end: '', data_type: ''}}}
+const parsedTimeRanges = ref<Record<string, Record<string, { start: string; end: string; data_type: string }>>>({})
+
+
 const filterEditorRef = ref<{ getRootOperator: () => string } | null>(null)
 const adjustmentForm = ref<{
   metrics: string[],
@@ -759,7 +867,12 @@ async function handleAddDimension() {
     }
     messages.value.push(agentMsg)
     Message.success('分析已更新')
-    
+
+    // 解析时间范围
+    if (agentMsg.queryResult?.mql && agentMsg.queryResult?.query_id) {
+      fetchAndParseTimeRanges(agentMsg.queryResult.mql, agentMsg.queryResult.query_id)
+    }
+
     // 保存完整的对话历史
     if (conversationId.value) {
       try {
@@ -857,7 +970,12 @@ async function handleDrillDown() {
     }
     messages.value.push(agentMsg)
     Message.success('分析已完成')
-    
+
+    // 解析时间范围
+    if (agentMsg.queryResult?.mql && agentMsg.queryResult?.query_id) {
+      fetchAndParseTimeRanges(agentMsg.queryResult.mql, agentMsg.queryResult.query_id)
+    }
+
     // 保存完整的对话历史
     if (conversationId.value) {
       try {
@@ -1070,7 +1188,16 @@ async function loadConversationHistory(convId: string) {
     console.log('[History] 加载历史记录, detail.id:', detail.id, 'detail.conversation_id:', detail.conversation_id)
     conversationId.value = detail.conversation_id || detail.id
     console.log('[History] 设置 conversationId.value:', conversationId.value)
-    
+
+    // 为所有消息解析时间范围
+    nextTick(() => {
+      for (const msg of messages.value) {
+        if (msg.type === 'agent' && msg.queryResult?.mql && msg.queryResult?.query_id) {
+          fetchAndParseTimeRanges(msg.queryResult.mql, msg.queryResult.query_id)
+        }
+      }
+    })
+
   } catch (error) {
     console.error('Load conversation history error:', error)
     Message.error('加载对话历史失败')
@@ -1093,6 +1220,29 @@ function handleQuote(mql: any, viewId?: string) {
     const input = document.querySelector('.query-input textarea') as HTMLTextAreaElement
     if (input) input.focus()
   })
+}
+
+// 查看 SQL
+function handleShowSql(queryResult: any) {
+  currentViewingSql.value = queryResult.sql || ''
+  sqlViewVisible.value = true
+}
+
+// 复制SQL到剪贴板
+async function copySqlToClipboard() {
+  try {
+    await navigator.clipboard.writeText(currentViewingSql.value)
+    Message.success('SQL已复制到剪贴板')
+  } catch (e) {
+    // fallback for older browsers
+    const textarea = document.createElement('textarea')
+    textarea.value = currentViewingSql.value
+    document.body.appendChild(textarea)
+    textarea.select()
+    document.execCommand('copy')
+    document.body.removeChild(textarea)
+    Message.success('SQL已复制到剪贴板')
+  }
 }
 
 // 初始化视图标签
@@ -1935,9 +2085,14 @@ async function handleQuery() {
                 content: 'Agent流式查询成功完成',
                 status: 'success'
               })
-              
+
               Message.success('查询成功')
-              
+
+              // 解析时间范围
+              if (res.mql && res.query_id) {
+                fetchAndParseTimeRanges(res.mql, res.query_id)
+              }
+
               nextTick()
               scrollToBottom()
             } else if (eventType === 'error') {
@@ -2129,129 +2284,207 @@ async function updateAllowedDimensions(queryResult: FullQueryResponse) {
   }
 }
 
+/**
+ * 调用后端解析时间范围
+ */
+async function fetchAndParseTimeRanges(mql: any, queryId: string) {
+  if (!mql || !mql.filters) return
+
+  try {
+    const response = await parseTimeRanges({ mql })
+    if (response.success && response.time_ranges) {
+      parsedTimeRanges.value[queryId] = response.time_ranges
+    }
+  } catch (error) {
+    console.error('Failed to parse time ranges:', error)
+  }
+}
+
+/**
+ * 获取解析后的时间范围（用于 UI 展示）
+ */
+function getParsedTimeRange(mql: any, queryId: string) {
+  if (!queryId || !parsedTimeRanges.value[queryId]) {
+    return null
+  }
+
+  const timeRanges = parsedTimeRanges.value[queryId]
+  const timeConditions = extractTimeConditions(mql?.filters || {})
+
+  if (timeConditions.length > 0) {
+    const field = timeConditions[0].field
+    return timeRanges[field] || null
+  }
+
+  return null
+}
+
+/**
+ * 格式化时间范围显示
+ * 从 filters 中提取时间字段的过滤条件并格式化显示
+ */
 function formatTimeRange(mql: any) {
-  if (!mql) return '全部'
-  
-  let timeStr = ''
-  let timeField = ''
-  const tc = mql.timeConstraint
-  
-  // 1. Check timeConstraint
-  if (tc && tc !== 'true' && tc !== '1=1') {
-    // Extract field name from [field]
-    const fieldMatch = tc.match(/\[(.*?)\]/)
-    if (fieldMatch && fieldMatch[1]) {
-      const rawField = fieldMatch[1]
-      let fieldDisplayName = rawField
-      
-      if (rawField.includes('__')) {
-        const parts = rawField.split('__')
-        const baseName = parts[0] || ''
-        const suffix = parts[1] || ''
-        const dim = baseName ? findDimension(baseName) : null
-        fieldDisplayName = dim ? `${dim.display_name || dim.name}(${suffix})` : rawField
-      } else {
-        const dim = findDimension(rawField)
-        fieldDisplayName = dim ? (dim.display_name || dim.name) : rawField
-      }
-      timeField = fieldDisplayName
-    }
+  if (!mql) return ''
 
-    // Relative Time Patterns (LAST_N_YEARS, TODAY, etc.)
-    if (tc.includes('LAST_N_YEARS')) {
-      const match = tc.match(/LAST_N_YEARS\((\d+)\)/)
-      if (match) timeStr = `最近${match[1]}年`
-    } else if (tc.includes('LAST_N_MONTHS')) {
-      const match = tc.match(/LAST_N_MONTHS\((\d+)\)/)
-      if (match) timeStr = `最近${match[1]}个月`
-    } else if (tc.includes('LAST_N_DAYS')) {
-      const match = tc.match(/LAST_N_DAYS\((\d+)\)/)
-      if (match) timeStr = `最近${match[1]}天`
-    } else if (tc.includes('TODAY')) {
-      const match = tc.match(/TODAY\(-(\d+)\)/)
-      if (match) timeStr = `自${match[1]}天前至今`
-      else timeStr = '今天'
-    }
+  // 首先尝试从 filters 中提取时间字段条件
+  if (mql.filters) {
+    const timeConditions = extractTimeConditions(mql.filters)
 
-    // DateTrunc MONTH pattern
-    if (!timeStr) {
-      let match = tc.match(/DateTrunc\s*\(.*?\s*,\s*'MONTH'\s*\)\s*=\s*'(.*?)'/i)
-      if (match) {
-        const dateStr = match[1]
-        timeStr = `${dateStr.substring(0, 4)}年${dateStr.substring(5, 7)}月`
+    // 找到时间过滤条件
+    if (timeConditions.length > 0) {
+      // 查找时间字段的显示名称
+      let timeFieldName = ''
+      const firstTimeCond = timeConditions[0]
+      const dim = findDimension(firstTimeCond.field)
+      if (dim) {
+        timeFieldName = dim.display_name || dim.name
       }
-    }
-    
-    // DateTrunc YEAR pattern
-    if (!timeStr) {
-      let match = tc.match(/DateTrunc\s*\(.*?\s*,\s*'YEAR'\s*\)\s*=\s*'(.*?)'/i)
-      if (match) {
-        timeStr = `${match[1].substring(0, 4)}年`
+
+      // 解析时间范围
+      const range = parseTimeRangeFromConditions(timeConditions)
+
+      if (range && range.start && range.end) {
+        return `${timeFieldName ? timeFieldName + ': ' : ''}${range.start} - ${range.end}`
+      } else if (range && range.start) {
+        return `${timeFieldName ? timeFieldName + ': ' : ''}${range.start} 起`
+      } else if (range && range.end) {
+        return `${timeFieldName ? timeFieldName + ': ' : ''}${range.end} 止`
       }
-    }
-    
-    // BETWEEN pattern
-    if (!timeStr) {
-      let match = tc.match(/BETWEEN\s*'(.*?)'\s*AND\s*'(.*?)'/i)
-      if (match) timeStr = `${match[1]} 至 ${match[2]}`
-    }
-    
-    // Greater/Less than pattern
-    if (!timeStr) {
-      const gtMatch = tc.match(/>=\s*'(.*?)'/i)
-      const ltMatch = tc.match(/<=\s*'(.*?)'/i)
-      if (gtMatch && ltMatch) timeStr = `${gtMatch[1]} 至 ${ltMatch[1]}`
-      else if (gtMatch) timeStr = `自 ${gtMatch[1]} 起`
-      else if (ltMatch) timeStr = `至 ${ltMatch[1]} 止`
-    }
-    
-    if (!timeStr) {
-      // Fallback clean up
-      timeStr = tc.replace(/\[|\]/g, '')
-                 .replace(/DateTrunc\(.*?,/gi, '时间(')
-                 .replace(/AddMonths\(.*?,/gi, '时间偏移(')
     }
   }
 
-  // 2. Check filters for additional time constraints
-  let filterParts: string[] = []
-  if (mql.filters && typeof mql.filters === 'object' && (mql.filters as MQLFilterGroup).conditions) {
-    const flatFilters = flattenFilters(mql.filters)
-    flatFilters.forEach(f => {
-      if (f.field && f.value) {
-        const colName = formatDimensionName(f.field)
-        filterParts.push(`${colName} ${f.op} ${f.value}`)
-      }
-    })
-  } else if (Array.isArray(mql.filters)) {
-    mql.filters.forEach((f: string) => {
-      if (f === 'true' || f === '1=1') return
-      
-      // Try to parse filter and make it readable
-      let readableFilter = f.replace(/['"]/g, '')
-      const fMatch = f.match(/^([a-zA-Z0-9_]+)\s*(>=|<=|>|<|=)\s*(.*)/)
-      if (fMatch && fMatch[1] && fMatch[2] && fMatch[3]) {
-        const col = fMatch[1]
-        const dim = findDimension(col)
-        const colName = dim ? (dim.display_name || dim.name) : col
-        readableFilter = `${colName} ${fMatch[2]} ${fMatch[3].replace(/['"]/g, '')}`
-      }
-      filterParts.push(readableFilter)
-    })
+  // 回退：尝试解析 timeConstraint（旧格式兼容）
+  if (mql.timeConstraint && mql.timeConstraint !== 'true' && mql.timeConstraint !== '1=1') {
+    const tc = mql.timeConstraint
+
+    // 解析 BETWEEN 模式
+    const betweenMatch = tc.match(/BETWEEN\s*'([^']+)'\s+AND\s*'([^']+)'/i)
+    if (betweenMatch) {
+      return `${formatDateString(betweenMatch[1])} - ${formatDateString(betweenMatch[2])}`
+    }
+
+    // 解析 >= 和 <= 模式
+    const geMatch = tc.match(/>=\s*'([^']+)'/i)
+    const leMatch = tc.match(/<=\s*'([^']+)'/i)
+    if (geMatch && leMatch) {
+      return `${formatDateString(geMatch[1])} - ${formatDateString(leMatch[1])}`
+    } else if (geMatch) {
+      return `${formatDateString(geMatch[1])} 起`
+    } else if (leMatch) {
+      return `${formatDateString(leMatch[1])} 止`
+    }
+
+    // 解析相对时间
+    const lastNYears = tc.match(/LAST_N_YEARS\((\d+)\)/i)
+    if (lastNYears) return `最近 ${lastNYears[1]} 年`
+
+    const lastNMonths = tc.match(/LAST_N_MONTHS\((\d+)\)/i)
+    if (lastNMonths) return `最近 ${lastNMonths[1]} 个月`
+
+    const lastNDays = tc.match(/LAST_N_DAYS\((\d+)\)/i)
+    if (lastNDays) return `最近 ${lastNDays[1]} 天`
+
+    if (tc.includes('TODAY')) return '今天'
+    if (tc.includes('YESTERDAY')) return '昨天'
   }
 
-  const finalParts = []
-  if (timeField && timeStr) {
-    finalParts.push(`${timeField}: ${timeStr}`)
-  } else if (timeStr) {
-    finalParts.push(timeStr)
+  return ''  // 无时间条件则返回空
+}
+
+/**
+ * 从 filters 中提取时间字段的过滤条件
+ */
+function extractTimeConditions(filters: any): MQLFilterCondition[] {
+  if (!filters) return []
+
+  const result: MQLFilterCondition[] = []
+  const flatFilters = flattenFilters(filters)
+
+  flatFilters.forEach(f => {
+    if (!f.field) return
+
+    // 检查是否是时间字段
+    const dim = findDimension(f.field)
+    if (!dim) return
+
+    const isTime = dim.dimension_type === 'time' ||
+      ['date', 'datetime', 'timestamp'].includes(dim.data_type?.toLowerCase() || '')
+
+    if (isTime) {
+      result.push(f)
+    }
+  })
+
+  return result
+}
+
+/**
+ * 从时间条件中解析时间范围
+ */
+function parseTimeRangeFromConditions(conditions: MQLFilterCondition[]): { start?: string, end?: string } | null {
+  if (conditions.length === 0) return null
+
+  let startDate: string | null = null
+  let endDate: string | null = null
+
+  conditions.forEach(cond => {
+    const value = cond.value?.replace(/['"]/g, '') || ''
+
+    if (cond.op === '>=' || cond.op === '>') {
+      // 如果已经有 startDate，取最大的（最新日期）
+      if (!startDate || value > startDate) {
+        startDate = value
+      }
+    } else if (cond.op === '<=' || cond.op === '<') {
+      // 如果已经有 endDate，取最小的（最晚日期）
+      if (!endDate || value < endDate) {
+        endDate = value
+      }
+    } else if (cond.op === '=') {
+      // 等于同时设置 start 和 end
+      startDate = value
+      endDate = value
+    } else if (cond.op === 'BETWEEN') {
+      // BETWEEN 格式: '2023-01-01 AND 2026-01-01'
+      const parts = value.split(/AND|and/i)
+      if (parts.length >= 2) {
+        startDate = parts[0]?.trim()
+        endDate = parts[1]?.trim()
+      }
+    }
+  })
+
+  if (!startDate && !endDate) return null
+
+  return {
+    start: startDate ? formatDateString(startDate) : undefined,
+    end: endDate ? formatDateString(endDate) : undefined
   }
-  
-  if (filterParts.length > 0) {
-    finalParts.push(filterParts.join('; '))
+}
+
+/**
+ * 格式化日期字符串，确保显示完整的年月日
+ */
+function formatDateString(dateStr: string): string {
+  if (!dateStr) return ''
+
+  // 如果是完整的年月日格式
+  if (dateStr.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    return dateStr
   }
 
-  return finalParts.join('; ') || '全部'
+  // 如果是年月格式，补全为月初
+  if (dateStr.match(/^\d{4}-\d{2}$/)) {
+    return `${dateStr}-01`
+  }
+
+  // 如果是年格式，补全为年初
+  if (dateStr.match(/^\d{4}$/)) {
+    return `${dateStr}-01-01`
+  }
+
+  // 其他情况直接返回
+  return dateStr
 }
 
 // 添加分析维度 (从卡片头部点击，全局追加)
@@ -2683,14 +2916,174 @@ async function handleAdjust() {
   flex-direction: column;
 }
 
-.result-meta-tags {
+/* 查询元信息面板 */
+.query-meta-panel {
   display: flex;
-  gap: 16px;
-  font-size: 12px;
-  color: var(--color-text-3);
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
   margin-bottom: 16px;
-  flex-wrap: wrap;
+  background: linear-gradient(135deg, #f7f8fa 0%, #f0f1f5 100%);
+  border-radius: 12px;
+  border: 1px solid #e8e9eb;
+  animation: slideDown 0.3s ease-out;
 }
+
+@keyframes slideDown {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.meta-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  animation: fadeIn 0.4s ease-out;
+  animation-fill-mode: both;
+}
+
+.meta-row:nth-child(1) { animation-delay: 0.05s; }
+.meta-row:nth-child(2) { animation-delay: 0.1s; }
+.meta-row:nth-child(3) { animation-delay: 0.15s; }
+.meta-row:nth-child(4) { animation-delay: 0.2s; }
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateX(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.meta-label {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  min-width: 80px;
+  height: 28px;
+  font-size: 12px;
+  color: #8e8e8e;
+  font-weight: 500;
+}
+
+.meta-label :deep(.arco-icon) {
+  font-size: 14px;
+  color: #6b6b6b;
+}
+
+.meta-content {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--color-text-2);
+}
+
+/* 时间范围样式 */
+.time-range-box {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e5e6eb;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  transition: all 0.2s ease;
+}
+
+.time-range-box:hover {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  transform: translateY(-1px);
+}
+
+.time-field-name-in-box {
+  padding: 2px 8px;
+  background: linear-gradient(135deg, #165dff 0%, #4080ff 100%);
+  color: #fff;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 2px 4px rgba(22, 93, 255, 0.2);
+}
+
+.time-date {
+  font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: #1d2129;
+  letter-spacing: 0.5px;
+}
+
+.time-separator {
+  color: #8e8e8e;
+  font-weight: 500;
+}
+
+/* 标签芯片样式 */
+.meta-tag-chip {
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+}
+
+.meta-tag-chip:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.metric-chip {
+  background: linear-gradient(135deg, #f0f5ff 0%, #e6f0ff 100%);
+  color: #165dff;
+  border-color: #c9dcff;
+}
+
+.metric-chip:hover {
+  background: linear-gradient(135deg, #e6f0ff 0%, #d9e6ff 100%);
+  border-color: #93b5ff;
+}
+
+.dimension-chip {
+  background: linear-gradient(135deg, #f5f0ff 0%, #ede6ff 100%);
+  color: #722ed1;
+  border-color: #d9b8ff;
+}
+
+.dimension-chip:hover {
+  background: linear-gradient(135deg, #ede6ff 0%, #e0d6ff 100%);
+  border-color: #b87fff;
+}
+
+/* 过滤条件样式 */
+.filter-content {
+  display: flex;
+  align-items: center;
+  padding: 6px 12px;
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e5e6eb;
+  font-size: 12px;
+}
+
+/* 旧的 result-meta-tags 保留兼容 */
+.result-meta-tags {
+  display: none; /* 隐藏旧样式，由新样式替代 */
+}
+
 
 .result-footer {
   margin-top: 16px;
@@ -2823,5 +3216,82 @@ async function handleAdjust() {
 
 :deep(.result-card .arco-card-body) {
   padding: 16px 20px;
+}
+
+.sql-view-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sql-toolbar {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.sql-textarea {
+  font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+  font-size: 13px;
+  background: #f7f8fa;
+  border-radius: 4px;
+}
+
+.insights-panel {
+  border-top: 1px solid var(--color-fill-2);
+  padding: 12px 20px;
+  background: #f7f8fa;
+}
+
+.insights-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+}
+
+.insights-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  color: var(--color-text-1);
+}
+
+.insights-content {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.insight-item {
+  display: flex;
+  gap: 12px;
+  padding: 10px 12px;
+  background: white;
+  border-radius: 6px;
+  border: 1px solid var(--color-fill-2);
+}
+
+.insight-index {
+  width: 24px;
+  height: 24px;
+  background: linear-gradient(135deg, #4080ff 0%, #0e42d2 100%);
+  color: white;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.insight-text {
+  flex: 1;
+  color: var(--color-text-1);
+  line-height: 1.6;
+  font-size: 13px;
 }
 </style>

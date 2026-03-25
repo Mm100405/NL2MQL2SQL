@@ -1,4 +1,16 @@
-"""流式Agent查询 - SSE实现示例"""
+"""
+[旧版本 - 已废弃] 流式Agent查询 - SSE实现示例
+
+⚠️  此文件已废弃，功能已迁移到 agent.py
+⚠️  此文件不再被任何路由引用
+
+迁移说明:
+    - 流式步骤回调逻辑已迁移到 agent.py 的 agent_query_stream 函数
+    - streaming_step_callback 逻辑已合并到主端点
+    - 如需修改流式查询逻辑，请修改 agent.py
+
+保留此文件仅用于参考备份。
+"""
 
 from fastapi import APIRouter, Request
 from sse_starlette.sse import EventSourceResponse  # 需要安装: pip install sse-starlette

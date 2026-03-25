@@ -248,13 +248,85 @@ async def agent_query_stream(
                 
                 _query_steps_store[query_id].append(step_info)
 
+            # 初始化步骤存储
+            _query_steps_store[query_id] = []
+
+            # 用于存储当前状态，在不同节点间共享
+            current_state = {}
+
+            # 创建同步版本的步骤回调（同步调用推送到队列）
+            def streaming_step_callback(step: dict):
+                """流式步骤回调 - 推送中间结果到步骤存储"""
+                node = step.get('node', '')
+
+                # 更新当前状态（content是字符串，直接从step读取字段）
+                if node == 'preparation':
+                    current_state.update({
+                        'preparation': step,
+                        'intent': step.get('metadata', {}).get('intent'),
+                        'intent_type': step.get('metadata', {}).get('intent_type'),
+                        'complexity': step.get('metadata', {}).get('complexity'),
+                        'suggested_metrics': step.get('suggested_metrics', []),
+                        'suggested_dimensions': step.get('suggested_dimensions', []),
+                    })
+                elif node == 'generation':
+                    current_state.update({
+                        'generation': step,
+                        'mql': step.get('mql'),
+                        'mql_attempts': step.get('mql_attempts', 1),
+                        'mql_errors': step.get('mql_errors', []),
+                    })
+                elif node == 'execution':
+                    current_state.update({
+                        'execution': step,
+                        'sql': step.get('sql'),
+                        'sql_datasources': step.get('sql_datasources', []),
+                        'query_result': step.get('result'),
+                        'query_id': step.get('query_id'),
+                    })
+                elif node == 'interpretation':
+                    current_state.update({
+                        'interpretation': step,
+                        'insights': step.get('insights', []),
+                        'visualization': step.get('visualization'),
+                    })
+
+                # 推送中间结果
+                if query_id not in _query_steps_store:
+                    _query_steps_store[query_id] = []
+
+                _query_steps_store[query_id].append({
+                    "type": "step",
+                    "node": node,
+                    "title": step.get('title', ''),
+                    "status": step.get('status', ''),
+                    "content": step.get('content', {}),
+                    "intermediate_data": {
+                        "stage": node,
+                        "intent": current_state.get('intent'),
+                        "intent_type": current_state.get('intent_type'),
+                        "complexity": current_state.get('complexity'),
+                        "suggested_metrics": current_state.get('suggested_metrics', []),
+                        "suggested_dimensions": current_state.get('suggested_dimensions', []),
+                        "mql": current_state.get('mql'),
+                        "mql_attempts": current_state.get('mql_attempts', 1),
+                        "mql_errors": current_state.get('mql_errors', []),
+                        "sql": current_state.get('sql'),
+                        "sql_datasources": current_state.get('sql_datasources', []),
+                        "query_result": current_state.get('query_result'),
+                        "query_id": current_state.get('query_id'),
+                        "insights": current_state.get('insights', []),
+                        "visualization": current_state.get('visualization'),
+                    }
+                })
+
             # 启动查询任务（使用 Skills）
             task = asyncio.create_task(
                 manager.execute_stream_with_skills(
                     natural_language=request.natural_language,
                     context=request.context or {},
                     max_retries=3,
-                    step_callback=step_callback,
+                    step_callback=streaming_step_callback,
                     use_skills=True  # 启用已加载的 Skills
                 )
             )
@@ -297,7 +369,20 @@ async def agent_query_stream(
                     "result": result.get('result'),
                     "interpretation": result.get('interpretation'),
                     "insights": result.get('insights', []),
-                    "execution_time": execution_time
+                    "execution_time": execution_time,
+                    # 新增：意图识别相关
+                    "intent": current_state.get('intent'),
+                    "intent_type": current_state.get('intent_type'),
+                    "complexity": current_state.get('complexity'),
+                    # 新增：建议的指标和维度
+                    "suggested_metrics": current_state.get('suggested_metrics', []),
+                    "suggested_dimensions": current_state.get('suggested_dimensions', []),
+                    # 新增：SQL相关信息
+                    "sql_datasources": current_state.get('sql_datasources', []),
+                    # 新增：MQL验证信息
+                    "mql_errors": current_state.get('mql_errors', []),
+                    "mql_attempts": current_state.get('mql_attempts', 1),
+                    "confidence": result.get('confidence'),
                 })
 
         except Exception as e:
@@ -513,6 +598,270 @@ async def test_agent_endpoint(
             "message": f"Test failed: {str(e)}",
             "error": str(e)
         }
+
+
+# ============ Time Range Parser ============
+class TimeRangeRequest(BaseModel):
+    """时间范围解析请求"""
+    filters: Optional[dict] = None  # MQL filters 对象
+    mql: Optional[dict] = None  # 完整的 MQL 对象（优先使用此获取 filters）
+
+
+class TimeRangeResponse(BaseModel):
+    """时间范围解析响应"""
+    success: bool
+    message: str
+    time_ranges: Optional[dict] = None  # {field_name: {start: "2023-01-01 00:00:00", end: "2026-01-01 00:00:00"}}
+
+
+@router.post("/parse-time-ranges", response_model=TimeRangeResponse)
+async def parse_time_ranges(request: TimeRangeRequest, db: Session = Depends(get_db)):
+    """
+    解析 MQL 中的时间过滤条件，返回实际的时间范围
+
+    支持 MQL 时间函数：
+    - LAST_N_DAYS(n), LAST_N_MONTHS(n), LAST_N_YEARS(n)
+    - NEXT_N_DAYS(n), NEXT_N_MONTHS(n)
+    - TODAY(), YESTERDAY(), TOMORROW()
+    - THIS_WEEK(), THIS_MONTH(), THIS_YEAR()
+    """
+    try:
+        from datetime import datetime, timedelta
+        from dateutil.relativedelta import relativedelta
+
+        # 提取 filters
+        filters = request.filters
+        if request.mql and request.filters is None:
+            filters = request.mql.get('filters')
+
+        if not filters:
+            return TimeRangeResponse(
+                success=True,
+                message="No filters to parse",
+                time_ranges={}
+            )
+
+        # 平铺 filters
+        def flatten_filters(filter_obj):
+            """平铺嵌套的 filter 结构"""
+            conditions = []
+
+            if isinstance(filter_obj, list):
+                for item in filter_obj:
+                    conditions.extend(flatten_filters(item))
+            elif isinstance(filter_obj, dict):
+                if 'conditions' in filter_obj:
+                    # 这是一个分组
+                    for cond in filter_obj['conditions']:
+                        conditions.extend(flatten_filters(cond))
+                elif 'field' in filter_obj and 'op' in filter_obj:
+                    # 这是一个条件
+                    conditions.append(filter_obj)
+
+            return conditions
+
+        conditions = flatten_filters(filters)
+
+        # 查询维度元数据，识别时间字段
+        from app.models.dimension import Dimension
+
+        # 获取所有维度（用于识别时间字段）
+        dimensions = db.query(Dimension).all()
+        time_fields = set()
+        time_field_types = {}  # 存储时间字段的数据类型
+
+        for dim in dimensions:
+            is_time_dim = (
+                str(dim.dimension_type).lower() == "time" or
+                str(dim.data_type).lower() in ["date", "datetime", "timestamp"]
+            )
+            if is_time_dim:
+                # 同时添加 name 和 physical_column，因为 filters 中的 field 可能是任一个
+                time_fields.add(dim.name)
+                time_fields.add(dim.physical_column)
+                time_field_types[dim.name] = dim.data_type
+                time_field_types[dim.physical_column] = dim.data_type
+
+        # 收集时间字段的条件
+        time_conditions = {}
+        for cond in conditions:
+            field = cond.get('field')
+            if field in time_fields:
+                if field not in time_conditions:
+                    time_conditions[field] = []
+                time_conditions[field].append(cond)
+
+        # 计算实际时间范围
+        result = {}
+
+        def resolve_time_function(func_str):
+            """
+            解析时间函数并返回实际 datetime
+            支持: LAST_N_DAYS(n), LAST_N_MONTHS(n), LAST_N_YEARS(n) 等
+            """
+            import re
+
+            if not isinstance(func_str, str):
+                try:
+                    # 尝试直接解析为日期
+                    return datetime.strptime(str(func_str), '%Y-%m-%d')
+                except:
+                    return None
+
+            func_str = func_str.strip()
+
+            # TODAY() -> 今天 00:00:00
+            if func_str.upper() == "TODAY()":
+                return datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+
+            # YESTERDAY() -> 昨天 00:00:00
+            if func_str.upper() == "YESTERDAY()":
+                return (datetime.now() - timedelta(days=1)).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+
+            # TOMORROW() -> 明天 00:00:00
+            if func_str.upper() == "TOMORROW()":
+                return (datetime.now() + timedelta(days=1)).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+
+            # LAST_N_DAYS(n)
+            match = re.match(r'LAST_N_DAYS\s*\(\s*(\d+)\s*\)', func_str, re.IGNORECASE)
+            if match:
+                n = int(match.group(1))
+                return (datetime.now() - timedelta(days=n)).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+
+            # LAST_N_MONTHS(n)
+            match = re.match(r'LAST_N_MONTHS\s*\(\s*(\d+)\s*\)', func_str, re.IGNORECASE)
+            if match:
+                n = int(match.group(1))
+                result_dt = datetime.now() - relativedelta(months=n)
+                return result_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            # LAST_N_YEARS(n)
+            match = re.match(r'LAST_N_YEARS\s*\(\s*(\d+)\s*\)', func_str, re.IGNORECASE)
+            if match:
+                n = int(match.group(1))
+                result_dt = datetime.now() - relativedelta(years=n)
+                return result_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            # NEXT_N_DAYS(n)
+            match = re.match(r'NEXT_N_DAYS\s*\(\s*(\d+)\s*\)', func_str, re.IGNORECASE)
+            if match:
+                n = int(match.group(1))
+                return (datetime.now() + timedelta(days=n)).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+
+            # NEXT_N_MONTHS(n)
+            match = re.match(r'NEXT_N_MONTHS\s*\(\s*(\d+)\s*\)', func_str, re.IGNORECASE)
+            if match:
+                n = int(match.group(1))
+                result_dt = datetime.now() + relativedelta(months=n)
+                return result_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+
+            # THIS_WEEK()
+            if func_str.upper() == "THIS_WEEK()":
+                # 本周一
+                today = datetime.now()
+                days_since_monday = today.weekday()
+                return (today - timedelta(days=days_since_monday)).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+
+            # THIS_MONTH()
+            if func_str.upper() == "THIS_MONTH()":
+                return datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+            # THIS_YEAR()
+            if func_str.upper() == "THIS_YEAR()":
+                return datetime.now().replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
+
+            # 尝试解析为日期字符串
+            try:
+                return datetime.strptime(func_str, '%Y-%m-%d')
+            except:
+                try:
+                    return datetime.strptime(func_str, '%Y-%m-%d %H:%M:%S')
+                except:
+                    pass
+
+            return None
+
+        for field, conds in time_conditions.items():
+            start_time = None
+            end_time = None
+            data_type = time_field_types.get(field, 'datetime')
+
+            for cond in conds:
+                op = cond.get('op')
+                value = cond.get('value')
+
+                if value is None:
+                    continue
+
+                parsed_time = resolve_time_function(value)
+
+                if parsed_time:
+                    if op == '>=' or op == '>':
+                        if start_time is None or parsed_time > start_time:
+                            start_time = parsed_time
+                    elif op == '<=' or op == '<':
+                        if end_time is None or parsed_time < end_time:
+                            end_time = parsed_time
+                    elif op == '=':
+                        start_time = parsed_time
+                        end_time = parsed_time
+
+            # 根据数据类型调整时间范围
+            if start_time:
+                if data_type == 'date':
+                    # date 类型只显示年月日
+                    start_time_str = start_time.strftime('%Y-%m-%d')
+                else:
+                    start_time_str = start_time.strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                start_time_str = None
+
+            if end_time:
+                if data_type == 'date':
+                    end_time_str = end_time.strftime('%Y-%m-%d')
+                else:
+                    end_time_str = end_time.strftime('%Y-%m-%d %H:%M:%S')
+            else:
+                # 默认使用当前时间作为结束时间
+                if data_type == 'date':
+                    end_time_str = datetime.now().strftime('%Y-%m-%d')
+                else:
+                    end_time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            if start_time_str or end_time_str:
+                result[field] = {
+                    'start': start_time_str,
+                    'end': end_time_str,
+                    'data_type': data_type
+                }
+
+        return TimeRangeResponse(
+            success=True,
+            message=f"Parsed {len(result)} time range(s)",
+            time_ranges=result
+        )
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        return TimeRangeResponse(
+            success=False,
+            message=f"Failed to parse time ranges: {str(e)}",
+            time_ranges=None
+        )
+
+
+
 
 
 

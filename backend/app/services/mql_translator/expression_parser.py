@@ -8,10 +8,12 @@ expression_parser.py - MQL 表达式解析器
 - 时间维度格式化：[日期__按月] -> DateFormat(Column, 'YYYY-MM')
 - 指标引用：[MetricName] -> 聚合表达式
 - 嵌套表达式：([字段] + [字段]) * 100
+- 时间函数：TODAY(), LAST_N_DAYS(30), etc.
 
 与旧版 process_mql_expression 的区别：
 - 旧版：字符串拼接 + 正则替换
 - 新版：递归下降解析器，生成 sqlglot AST 节点
+- 新版：使用 ibis + sqlglot 实现多数据源时间函数适配
 """
 
 import re
@@ -20,6 +22,7 @@ from sqlglot import exp
 from typing import Dict, Optional, Tuple, List, Any
 
 from app.services.mql_translator.semantic import SemanticContext, FieldRef, MetricRef
+from app.services.mql_translator.time_function_handler import TimeFunctionHandler, TimeFilterBuilder
 
 
 class ExpressionParser:
@@ -34,16 +37,11 @@ class ExpressionParser:
         ast = parser.parse("[销售额] > 1000", is_where=True)
     """
 
-    # MQL 时间函数
-    MQL_TIME_FUNCTIONS = {
-        "TODAY": "CURRENT_DATE",
-        "YESTERDAY": "CURRENT_DATE - INTERVAL 1 DAY",
-        "TOMORROW": "CURRENT_DATE + INTERVAL 1 DAY",
-    }
-
     def __init__(self, semantic: SemanticContext, dialect: str = "mysql"):
         self.semantic = semantic
         self.dialect = dialect
+        self.time_handler = TimeFunctionHandler(dialect)
+        self.time_filter_builder = TimeFilterBuilder(dialect)
 
     def parse(
         self,
@@ -84,102 +82,35 @@ class ExpressionParser:
         return ast
 
     def _preprocess_time_functions(self, expr: str) -> str:
-        """预处理 MQL 时间函数"""
+        """
+        预处理 MQL 时间函数
+        
+        使用 TimeFunctionHandler 将 MQL 时间函数转换为目标方言 SQL。
+        支持：TODAY(), YESTERDAY(), LAST_N_DAYS(n), THIS_MONTH(), etc.
+        """
         result = expr
-
-        # TODAY() -> CURRENT_DATE (MySQL) / CURRENT_DATE (PostgreSQL)
-        result = re.sub(r"TODAY\(\s*\)", "CURRENT_DATE", result, flags=re.IGNORECASE)
-
-        # TODAY(-N) -> 往前推N天 = CURRENT_DATE - INTERVAL N DAY
-        # TODAY(N)  -> 往后推N天 = CURRENT_DATE + INTERVAL N DAY
-        def today_offset(m):
-            offset = m.group(1).strip()
-            if offset.startswith("-"):
-                # 负数表示往前推，用减法
-                return f"CURRENT_DATE - INTERVAL {offset[1:]} DAY"
-            else:
-                # 正数表示往后推，用加法（去掉可能的前导+）
-                n = offset[1:] if offset.startswith("+") else offset
-                return f"CURRENT_DATE + INTERVAL {n} DAY"
-
-        result = re.sub(r"TODAY\(\s*(-?\+?\d+)\s*\)", today_offset, result, flags=re.IGNORECASE)
-
-        # YESTERDAY() -> CURRENT_DATE - INTERVAL 1 DAY
-        result = re.sub(r"YESTERDAY\(\s*\)", "CURRENT_DATE - INTERVAL 1 DAY", result, flags=re.IGNORECASE)
-
-        # LAST_N_DAYS(N) -> CURRENT_DATE - INTERVAL N DAY
-        def last_n_days(m):
-            n = m.group(1)
-            return f"CURRENT_DATE - INTERVAL {n} DAY"
-
-        result = re.sub(r"LAST_N_DAYS\((\d+)\)", last_n_days, result, flags=re.IGNORECASE)
-
-        # LAST_N_MONTHS(N) -> CURRENT_DATE - INTERVAL N MONTH
-        def last_n_months(m):
-            n = m.group(1)
-            return f"CURRENT_DATE - INTERVAL {n} MONTH"
-
-        result = re.sub(r"LAST_N_MONTHS\((\d+)\)", last_n_months, result, flags=re.IGNORECASE)
-
-        # LAST_N_YEARS(N) -> CURRENT_DATE - INTERVAL N YEAR
-        def last_n_years(m):
-            n = m.group(1)
-            return f"CURRENT_DATE - INTERVAL {n} YEAR"
-
-        result = re.sub(r"LAST_N_YEARS\((\d+)\)", last_n_years, result, flags=re.IGNORECASE)
-
-        # THIS_WEEK() -> DATE_FORMAT(CURRENT_DATE, '%Y-%m-%d') (周起始)
-        result = re.sub(r"THIS_WEEK\(\s*\)", "CURRENT_DATE - INTERVAL WEEKDAY(CURRENT_DATE) DAY", result, flags=re.IGNORECASE)
-
-        # THIS_MONTH() -> DATE_FORMAT(CURRENT_DATE, '%Y-%m-01')
-        if self.dialect == "mysql":
-            result = re.sub(r"THIS_MONTH\(\s*\)", "DATE_FORMAT(CURRENT_DATE, '%Y-%m-01')", result, flags=re.IGNORECASE)
-        elif self.dialect == "postgresql":
-            result = re.sub(r"THIS_MONTH\(\s*\)", "DATE_TRUNC('MONTH', CURRENT_DATE)::DATE", result, flags=re.IGNORECASE)
-
-        # THIS_YEAR() -> DATE_FORMAT(CURRENT_DATE, '%Y-01-01')
-        if self.dialect == "mysql":
-            result = re.sub(r"THIS_YEAR\(\s*\)", "DATE_FORMAT(CURRENT_DATE, '%Y-01-01')", result, flags=re.IGNORECASE)
-        elif self.dialect == "postgresql":
-            result = re.sub(r"THIS_YEAR\(\s*\)", "DATE_TRUNC('YEAR', CURRENT_DATE)::DATE", result, flags=re.IGNORECASE)
-
-        # AddMonths(date, n) -> DATE_ADD(date, INTERVAL n MONTH)
-        def add_months(m):
-            date = m.group(1)
-            n = m.group(2)
-            if self.dialect == "mysql":
-                return f"DATE_ADD({date}, INTERVAL {n} MONTH)"
-            elif self.dialect == "postgresql":
-                return f"({date} + INTERVAL '{n} MONTH')::DATE"
-
-        result = re.sub(r"AddMonths\(([^,]+),\s*(-?\d+)\)", add_months, result, flags=re.IGNORECASE)
-
-        # DateTrunc(col, 'MONTH') -> 根据方言处理
-        def date_trunc(m):
-            col = m.group(1)
-            unit = m.group(2).strip().upper()
-            if self.dialect == "mysql":
-                if unit == "MONTH":
-                    return f"DATE_FORMAT({col}, '%Y-%m-01')"
-                elif unit == "YEAR":
-                    return f"DATE_FORMAT({col}, '%Y-01-01')"
-                elif unit == "DAY":
-                    return f"DATE_FORMAT({col}, '%Y-%m-%d')"
-                elif unit == "WEEK":
-                    return f"DATE_FORMAT({col}, '%Y-%m-%d')"
-            elif self.dialect == "postgresql":
-                if unit == "MONTH":
-                    return f"DATE_TRUNC('MONTH', {col})::DATE"
-                elif unit == "YEAR":
-                    return f"DATE_TRUNC('YEAR', {col})::DATE"
-                elif unit == "DAY":
-                    return f"DATE_TRUNC('DAY', {col})::DATE"
-                elif unit == "WEEK":
-                    return f"DATE_TRUNC('WEEK', {col})::DATE"
-            return col
-
-        result = re.sub(r"DateTrunc\(([^,]+),\s*'([^']+)'\s*\)", date_trunc, result, flags=re.IGNORECASE)
-
+        
+        # 使用 TimeFunctionHandler 的正则匹配所有 MQL 时间函数
+        # 匹配格式：FUNC_NAME(args) 或 FUNC_NAME()
+        time_func_pattern = r'\b(' + '|'.join([
+            'TODAY', 'YESTERDAY', 'TOMORROW',
+            'LAST_N_DAYS', 'LAST_N_MONTHS', 'LAST_N_YEARS',
+            'NEXT_N_DAYS', 'NEXT_N_MONTHS',
+            'THIS_WEEK', 'THIS_MONTH', 'THIS_QUARTER', 'THIS_YEAR',
+            'ADD_MONTHS'
+        ]) + r')\s*\([^)]*\)'
+        
+        def replace_time_func(match):
+            func_str = match.group(0)
+            try:
+                # 使用 TimeFunctionHandler 转换
+                return self.time_handler.parse_and_render(func_str)
+            except Exception:
+                # 转换失败，返回原值
+                return func_str
+        
+        result = re.sub(time_func_pattern, replace_time_func, result, flags=re.IGNORECASE)
+        
         return result
 
     # 占位符用于方括号引用

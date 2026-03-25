@@ -10,6 +10,7 @@ MQL Translator V2 - 基于 sqlglot AST 的 MQL 到 SQL 转换引擎
 - optimizer.py: 查询优化
 - cache.py: LRU + TTL 缓存
 - datasource_adapter.py: 多数据源适配器（ibis）
+- time_function_handler.py: 时间函数处理（ibis + sqlglot）
 - access_control.py: 访问控制预留
 - translator.py: 编排管线，串联所有组件
 """
@@ -22,6 +23,12 @@ from app.services.mql_translator.dialect import DialectConverter, get_dialect_na
 from app.services.mql_translator.optimizer import MQLOptimizer
 from app.services.mql_translator.cache import MQLQueryCache, TranslationCache, get_translation_cache
 from app.services.mql_translator.datasource_adapter import DataSourceAdapter, get_global_adapter
+from app.services.mql_translator.time_function_handler import (
+    TimeFunctionHandler,
+    TimeFilterBuilder,
+    parse_time_function,
+    get_supported_time_functions,
+)
 from app.services.mql_translator.access_control import (
     AccessControl,
     Permission,
@@ -52,6 +59,11 @@ __all__ = [
     # 多数据源
     "DataSourceAdapter",
     "get_global_adapter",
+    # 时间函数
+    "TimeFunctionHandler",
+    "TimeFilterBuilder",
+    "parse_time_function",
+    "get_supported_time_functions",
     # 访问控制
     "AccessControl",
     "Permission",

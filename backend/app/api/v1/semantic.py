@@ -48,10 +48,10 @@ class MetricCreate(BaseModel):
     measure_column: Optional[str] = None
     calculation_formula: Optional[str] = None
     is_semi_additive: Optional[dict] = None
-    date_column_id: Optional[str] = None
+    date_column_id: Optional[str] = None  # ⚠️ DEPRECATED: 使用 View.default_date_column_id
     base_metric_id: Optional[str] = None
     derivation_type: Optional[str] = "none"
-    time_constraint: Optional[str] = None
+    time_constraint: Optional[str] = None  # ⚠️ DEPRECATED: 使用 filters 代替
     analysis_dimensions: Optional[List[str]] = None
     filters: Optional[List[dict]] = None
     synonyms: Optional[List[str]] = None

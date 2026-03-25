@@ -6,7 +6,7 @@ MQL V2 完整字段（11个）：
 1. metrics: 指标别名列表
 2. metricDefinitions: 指标定义
 3. dimensions: 维度列表
-4. timeConstraint: 时间过滤
+4. timeConstraint: ⚠️ 已废弃 - 时间过滤统一使用 filters
 5. filters: WHERE 过滤（聚合前）- 维度/时间过滤
 6. having: HAVING 过滤（聚合后）- 指标过滤
 7. orderBy: 排序
@@ -88,9 +88,13 @@ MQL V2 JSON结构及字段规范：
    - 示例2（UNION 作为 CTE 子查询）：
      {{"cte": [{{"name": "union_data", "query": {{"union": {{"type": "ALL", "queries": [...]}}}}}}], "from_cte": "union_data", "dimensions": [...], "metrics": [...]}}
 
-1. **timeConstraint vs filters 区分**：
-   - `timeConstraint`：仅用于时间/日期相关的过滤（如"2025年4月"、"最近7天"、"本月"）
-   - `filters`：用于所有非时间维度的过滤（如"线上渠道"、"已完成订单"）
+1. **时间过滤规则（V2 重构）**：
+   - ⚠️ `timeConstraint` 字段已废弃，保留仅为向后兼容
+   - 时间过滤统一使用 `filters` 字段，与普通维度过滤相同
+   - 支持多个时间类型字段的过滤（如创建时间、更新时间等）
+   - 如果用户未指定时间范围，系统会根据视图的默认时间字段自动填充
+   - 时间函数支持：TODAY(), YESTERDAY(), LAST_N_DAYS(n), THIS_MONTH(), THIS_YEAR(), DATE_SUB(), DATE_ADD() 等
+   - 示例：filters: {{"operator": "AND", "conditions": [{{"field": "创建时间", "op": ">=", "value": "LAST_N_DAYS(30)"}}]}}
 
 2. **filters vs having 区分（极其重要）**：
    - `filters`：在聚合之前执行，只能过滤下面可过滤字段列表里的字段
@@ -180,29 +184,30 @@ MQL V2 JSON结构及字段规范：
 1. 月度截断：DateTrunc([字段], 'MONTH') = 'YYYY-MM-01'
 2. 年度截断：DateTrunc([字段], 'YEAR') = 'YYYY-01-01'
 3. 月份加减：AddMonths([字段], -12) // 减 12 个月表示去年同期
-4. 相对时间：[字段] >= TODAY(-7) 或 [字段] >= LAST_N_DAYS(30)
+4. 相对时间：TODAY(), YESTERDAY(), LAST_N_DAYS(n), LAST_N_MONTHS(n), LAST_N_YEARS(n), THIS_WEEK(), THIS_MONTH(), THIS_YEAR()
 5. 范围查询：[字段] BETWEEN '2025-01-01' AND '2025-04-30'
-6. 近N年：[字段] >= DATE_SUB(CURDATE(), INTERVAL 3 YEAR) // 近3年
-7. 近N月：[字段] >= DATE_SUB(CURDATE(), INTERVAL 3 MONTH) // 近3个月
+6. 日期计算：DATE_SUB(CURDATE(), INTERVAL 3 YEAR), DATE_ADD(CURDATE(), INTERVAL 3 MONTH)
 
-重要禁令：
-- timeConstraint 中的 [字段] 必须使用元数据列表中的"展示名"，且必须是**原始时间维度**（如"创建时间"），绝不是虚拟维度名（如"创建时间(按年)"）！
-- 禁止将函数名放在中括号内，例如 [TODAY](-7) 是错误的，应为 TODAY(-7)。
-- 禁止使用 DateAdd, INTERVAL, NOW() 等非白名单函数。
-- timeConstraint 只能引用时间维度字段，禁止包含非时间维度。
+重要说明：
+- 时间过滤统一使用 filters 字段，字段名必须是元数据列表中的"展示名"
+- 支持多个时间类型字段的过滤（如创建时间、更新时间等）
+- 如果用户未指定时间范围，系统会自动应用默认时间范围
+- 禁止将函数名放在中括号内，例如 [TODAY](-7) 是错误的，应为 TODAY(-7) 或 LAST_N_DAYS(7)
+- 禁止在 filters 中使用非白名单函数
 
-示例1（基础查询）：
+示例1（基础查询 - 使用 filters 进行时间过滤）：
 用户："线上渠道2025年4月的销售额"
 MQL：
 {{
   "dimensions": [],
   "metricDefinitions": {{ "销售额": {{ "refMetric": "gmv" }} }},
-  "timeConstraint": "DateTrunc([日期], 'MONTH') = '2025-04-01'",
+  "timeConstraint": null,
   "metrics": ["销售额"],
   "filters": {{
     "operator": "AND",
     "conditions": [
-      {{"field": "渠道", "op": "=", "value": "线上"}}
+      {{"field": "渠道", "op": "=", "value": "线上"}},
+      {{"field": "日期", "op": ">=", "value": "LAST_N_DAYS(30)"}}
     ]
   }},
   "having": [],
@@ -221,7 +226,7 @@ MQL：
 {{
   "dimensions": [],
   "metricDefinitions": {{ "订单数": {{ "refMetric": "order_count" }} }},
-  "timeConstraint": "true",
+  "timeConstraint": null,
   "metrics": ["订单数"],
   "filters": {{
     "operator": "AND",
@@ -239,15 +244,20 @@ MQL：
   "queryResultType": "DATA"
 }}
 
-示例3（排序 + 去重）：
+示例3（排序 + 时间过滤）：
 用户："2025年4月各渠道的销售额，按销售额从高到低排序"
 MQL：
 {{
   "dimensions": ["渠道"],
   "metricDefinitions": {{ "销售额": {{ "refMetric": "gmv" }} }},
-  "timeConstraint": "DateTrunc([日期], 'MONTH') = '2025-04-01'",
+  "timeConstraint": null,
   "metrics": ["销售额"],
-  "filters": {{}},
+  "filters": {{
+    "operator": "AND",
+    "conditions": [
+      {{"field": "日期", "op": ">=", "value": "THIS_MONTH()"}}
+    ]
+  }},
   "having": [],
   "orderBy": [{{"field": "销售额", "direction": "DESC"}}],
   "distinct": false,
@@ -258,15 +268,20 @@ MQL：
   "queryResultType": "DATA"
 }}
 
-示例3b（近N年过滤）：
+示例3b（近N年过滤 - 使用 filters）：
 用户："近三年各产品销售额"
 MQL：
 {{
   "dimensions": ["产品"],
   "metricDefinitions": {{ "销售额": {{ "refMetric": "gmv" }} }},
-  "timeConstraint": "[创建时间] >= DATE_SUB(CURDATE(), INTERVAL 3 YEAR)",
+  "timeConstraint": null,
   "metrics": ["销售额"],
-  "filters": {{}},
+  "filters": {{
+    "operator": "AND",
+    "conditions": [
+      {{"field": "创建时间", "op": ">=", "value": "LAST_N_YEARS(3)"}}
+    ]
+  }},
   "having": [],
   "orderBy": [],
   "distinct": false,
@@ -283,9 +298,14 @@ MQL：
 {{
   "dimensions": ["街道"],
   "metricDefinitions": {{ "立案数": {{ "refMetric": "立案数", "aggregation": "SUM" }} }},
-  "timeConstraint": "[创建时间] >= DATE_SUB(CURDATE(), INTERVAL 3 YEAR)",
+  "timeConstraint": null,
   "metrics": ["立案数"],
-  "filters": {{}},
+  "filters": {{
+    "operator": "AND",
+    "conditions": [
+      {{"field": "创建时间", "op": ">=", "value": "LAST_N_YEARS(3)"}}
+    ]
+  }},
   "having": ["[立案数] >= 1"],
   "orderBy": [{{"field": "立案数", "direction": "DESC"}}],
   "distinct": false,
@@ -305,9 +325,14 @@ MQL：
     "销售额": {{ "refMetric": "gmv" }},
     "销售额年同比": {{ "refMetric": "gmv", "indirections": ["sameperiod__yoy__growth"] }}
   }},
-  "timeConstraint": "DateTrunc([日期], 'MONTH') = '2025-04-01'",
+  "timeConstraint": null,
   "metrics": ["销售额", "销售额年同比"],
-  "filters": {{}},
+  "filters": {{
+    "operator": "AND",
+    "conditions": [
+      {{"field": "日期", "op": ">=", "value": "THIS_MONTH()"}}
+    ]
+  }},
   "having": [],
   "orderBy": [{{"field": "销售额年同比", "direction": "DESC"}}],
   "distinct": false,
@@ -324,9 +349,14 @@ MQL：
 {{
   "dimensions": ["日期__按月"],
   "metricDefinitions": {{ "销售额": {{ "refMetric": "gmv" }} }},
-  "timeConstraint": "[日期] >= '2025-01-01'",
+  "timeConstraint": null,
   "metrics": ["销售额"],
-  "filters": {{}},
+  "filters": {{
+    "operator": "AND",
+    "conditions": [
+      {{"field": "日期", "op": ">=", "value": "THIS_YEAR()"}}
+    ]
+  }},
   "having": [],
   "orderBy": [{{"field": "日期__按月", "direction": "ASC"}}],
   "distinct": false,
@@ -343,9 +373,14 @@ MQL：
 {{
   "dimensions": ["日期__按月"],
   "metricDefinitions": {{ "销售额": {{ "refMetric": "gmv" }} }},
-  "timeConstraint": "[日期] >= '2025-01-01'",
+  "timeConstraint": null,
   "metrics": ["销售额"],
-  "filters": {{}},
+  "filters": {{
+    "operator": "AND",
+    "conditions": [
+      {{"field": "日期", "op": ">=", "value": "THIS_YEAR()"}}
+    ]
+  }},
   "having": ["[销售额] > 10000"],
   "orderBy": [{{"field": "销售额", "direction": "DESC"}}],
   "distinct": false,
@@ -362,9 +397,14 @@ MQL：
 {{
   "dimensions": [],
   "metricDefinitions": {{ "用户数": {{ "refMetric": "user_count" }} }},
-  "timeConstraint": "DateTrunc([日期], 'MONTH') = '2025-04-01'",
+  "timeConstraint": null,
   "metrics": ["用户数"],
-  "filters": {{}},
+  "filters": {{
+    "operator": "AND",
+    "conditions": [
+      {{"field": "日期", "op": ">=", "value": "THIS_MONTH()"}}
+    ]
+  }},
   "having": [],
   "orderBy": [],
   "distinct": true,
@@ -381,16 +421,21 @@ MQL：
 {{
   "dimensions": [],
   "metricDefinitions": {{ "销售额": {{ "refMetric": "gmv" }} }},
-  "timeConstraint": "[日期] >= '2025-01-01'",
+  "timeConstraint": null,
   "metrics": ["销售额"],
-  "filters": {{}},
+  "filters": {{
+    "operator": "AND",
+    "conditions": [
+      {{"field": "日期", "op": ">=", "value": "THIS_YEAR()"}}
+    ]
+  }},
   "having": ["[销售额] > [月均销售额]"],
   "orderBy": [{{"field": "销售额", "direction": "DESC"}}],
   "distinct": false,
   "limit": 1000,
   "windowFunctions": [],
   "union": null,
-  "cte": [{{"name": "月均销售额", "query": {{"dimensions": [], "metricDefinitions": {{ "销售额": {{ "refMetric": "gmv" }} }}, "timeConstraint": "[日期] >= '2025-01-01'", "metrics": ["销售额"], "filters": {{}}, "having": [], "orderBy": [], "distinct": false, "limit": 1, "windowFunctions": [], "union": null, "cte": null}}}}],
+  "cte": [{{"name": "月均销售额", "query": {{"dimensions": [], "metricDefinitions": {{ "销售额": {{ "refMetric": "gmv" }} }}, "timeConstraint": null, "metrics": ["销售额"], "filters": {{"operator": "AND", "conditions": [{{"field": "日期", "op": ">=", "value": "THIS_YEAR()"}}]}}, "having": [], "orderBy": [], "distinct": false, "limit": 1, "windowFunctions": [], "union": null, "cte": null}}}}],
   "queryResultType": "DATA"
 }}
 
@@ -399,7 +444,7 @@ MQL：
 MQL：
 {{
   "dimensions": ["街道", "上报数", "rn"],
-  "timeConstraint": "true",
+  "timeConstraint": null,
   "metrics": [],
   "filters": {{}},
   "having": ["[rn] <= 3"],
@@ -408,7 +453,7 @@ MQL：
   "limit": 1000,
   "windowFunctions": [],
   "union": null,
-  "cte": [{{"name": "CTE_街道上报", "query": {{"dimensions": ["街道"], "metricDefinitions": {{ "上报数": {{ "refMetric": "reportNum", "aggregation": "SUM" }} }}, "timeConstraint": "[创建时间] >= DATE_SUB(CURDATE(), INTERVAL 3 YEAR)", "metrics": ["上报数"], "filters": {{}}, "having": [], "orderBy": [{{"field": "上报数", "direction": "DESC"}}], "distinct": false, "limit": 1000, "windowFunctions": [{{"alias": "rn", "func": "ROW_NUMBER", "field": "上报数", "partition": [], "orderBy": [{{"field": "上报数", "direction": "DESC"}}]}}], "union": null, "cte": null}}}}],
+  "cte": [{{"name": "CTE_街道上报", "query": {{"dimensions": ["街道"], "metricDefinitions": {{ "上报数": {{ "refMetric": "reportNum", "aggregation": "SUM" }} }}, "timeConstraint": null, "metrics": ["上报数"], "filters": {{"operator": "AND", "conditions": [{{"field": "创建时间", "op": ">=", "value": "LAST_N_YEARS(3)"}}]}}, "having": [], "orderBy": [{{"field": "上报数", "direction": "DESC"}}], "distinct": false, "limit": 1000, "windowFunctions": [{{"alias": "rn", "func": "ROW_NUMBER", "field": "上报数", "partition": [], "orderBy": [{{"field": "上报数", "direction": "DESC"}}]}}], "union": null, "cte": null}}}}],
   "from_cte": "CTE_街道上报",
   "queryResultType": "DATA"
 }}
@@ -418,8 +463,8 @@ MQL：
 MQL：
 {{
   "union": {{"type": "ALL", "queries": [
-    {{"dimensions": ["渠道"], "metricDefinitions": {{ "销售额": {{ "refMetric": "gmv" }} }}, "timeConstraint": "DateTrunc([日期], 'MONTH') = '2025-04-01'", "metrics": ["销售额"], "filters": {{"operator": "AND", "conditions": [{{"field": "渠道", "op": "=", "value": "线上"}}]}}, "having": [], "orderBy": [], "distinct": false, "limit": 1000, "windowFunctions": [], "cte": null}},
-    {{"dimensions": ["渠道"], "metricDefinitions": {{ "销售额": {{ "refMetric": "gmv" }} }}, "timeConstraint": "DateTrunc([日期], 'MONTH') = '2025-04-01'", "metrics": ["销售额"], "filters": {{"operator": "AND", "conditions": [{{"field": "渠道", "op": "=", "value": "线下"}}]}}, "having": [], "orderBy": [], "distinct": false, "limit": 1000, "windowFunctions": [], "cte": null}}
+    {{"dimensions": ["渠道"], "metricDefinitions": {{ "销售额": {{ "refMetric": "gmv" }} }}, "timeConstraint": null, "metrics": ["销售额"], "filters": {{"operator": "AND", "conditions": [{{"field": "渠道", "op": "=", "value": "线上"}}, {{"field": "日期", "op": ">=", "value": "THIS_MONTH()"}}]}}, "having": [], "orderBy": [], "distinct": false, "limit": 1000, "windowFunctions": [], "cte": null}},
+    {{"dimensions": ["渠道"], "metricDefinitions": {{ "销售额": {{ "refMetric": "gmv" }} }}, "timeConstraint": null, "metrics": ["销售额"], "filters": {{"operator": "AND", "conditions": [{{"field": "渠道", "op": "=", "value": "线下"}}, {{"field": "日期", "op": ">=", "value": "THIS_MONTH()"}}]}}, "having": [], "orderBy": [], "distinct": false, "limit": 1000, "windowFunctions": [], "cte": null}}
   ]}},
   "cte": null,
   "queryResultType": "DATA"
@@ -433,7 +478,7 @@ MQL：
 {{
   "dimensions": [],
   "metricDefinitions": {{ "立案数": {{ "refMetric": "inst_count", "aggregation": "COUNT" }} }},
-  "timeConstraint": "true",
+  "timeConstraint": null,
   "metrics": ["立案数"],
   "filters": {{
     "operator": "OR",
@@ -470,7 +515,7 @@ MQL：
         ],
         "dimensions": [],
         "metricDefinitions": {{ "案件数": {{ "refMetric": "案件数" }} }},
-        "timeConstraint": "true",
+        "timeConstraint": null,
         "metrics": ["案件数"],
         "filters": {{
           "operator": "AND",
@@ -494,7 +539,7 @@ MQL：
         ],
         "dimensions": [],
         "metricDefinitions": {{ "案件数": {{ "refMetric": "案件数" }} }},
-        "timeConstraint": "true",
+        "timeConstraint": null,
         "metrics": ["案件数"],
         "filters": {{
           "operator": "AND",

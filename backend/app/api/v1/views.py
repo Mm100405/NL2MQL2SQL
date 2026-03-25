@@ -72,6 +72,7 @@ class ViewCreate(BaseModel):
     join_config: Optional[dict] = None
     custom_sql: Optional[str] = None
     columns: Optional[List[dict]] = None
+    default_date_column_id: Optional[str] = None  # 默认时间字段ID
     canvas_config: Optional[dict] = None
     description: Optional[str] = None
 
@@ -86,6 +87,7 @@ class ViewUpdate(BaseModel):
     join_config: Optional[dict] = None
     custom_sql: Optional[str] = None
     columns: Optional[List[dict]] = None
+    default_date_column_id: Optional[str] = None  # 默认时间字段ID
     canvas_config: Optional[dict] = None
     description: Optional[str] = None
 

@@ -66,6 +66,10 @@ class View(Base):
     # }]
     columns = Column(JSON, nullable=True)
     
+    # 默认时间字段 ID（用于 MQL 查询时自动填充时间过滤）
+    # 关联 Dimension 表的 ID，指定该视图的默认时间维度
+    default_date_column_id = Column(String(36), nullable=True)
+    
     # 画布布局配置（用于保存节点位置等）
     canvas_config = Column(JSON, nullable=True)
     
@@ -87,6 +91,7 @@ class View(Base):
             "join_config": self.join_config,
             "custom_sql": self.custom_sql,
             "columns": self.columns or [],
+            "default_date_column_id": self.default_date_column_id,
             "canvas_config": self.canvas_config,
             "description": self.description,
             "created_at": self.created_at.isoformat() if self.created_at else None,
