@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 import logging
 
 from app.agents.deep_agents.state import DeepAgentState
+from app.agents.deep_agents.config import deep_agents_config
 from app.agents.deep_agents.tools import (
     analyze_intent,
     retrieve_metadata,
@@ -28,6 +29,7 @@ from app.agents.deep_agents.tools import (
     execute_query,
     analyze_result
 )
+
 
 
 logger = logging.getLogger(__name__)
@@ -83,18 +85,32 @@ async def preparation_node(state: DeepAgentState) -> Dict[str, Any]:
             },
         }
 
-    # 3. 调用意图分析工具
-    intent_result = await analyze_intent.ainvoke({
-        "natural_language": natural_language,
-        "metadata": metadata,
-        "db_session": context.get("db_session")
-    })
+    # 3. 调用意图分析工具（如果启用）
+    if deep_agents_config.enable_intent_analysis:
+        intent_result = await analyze_intent.ainvoke({
+            "natural_language": natural_language,
+            "metadata": metadata,
+            "db_session": context.get("db_session")
+        })
 
-    intent = intent_result.get("intent", {})
-    intent_type = intent_result.get("intent_type", "aggregation")
-    complexity = intent_result.get("complexity", "low")
+        intent = intent_result.get("intent", {})
+        intent_type = intent_result.get("intent_type", "aggregation")
+        complexity = intent_result.get("complexity", "low")
 
-    logger.info(f"[PreparationNode] 意图分析完成: type={intent_type}, complexity={complexity}")
+        logger.info(f"[PreparationNode] 意图分析完成: type={intent_type}, complexity={complexity}")
+    else:
+        # 返回默认意图
+        logger.info("[PreparationNode] 意图识别已禁用，返回默认意图")
+        intent = {
+            "intent_type": "aggregation",
+            "description": "聚合查询",
+            "suggested_metrics": [],
+            "suggested_dimensions": [],
+            "complexity": "low"
+        }
+        intent_type = "aggregation"
+        complexity = "low"
+
 
     steps = state.get("steps", [])
     steps.append({
@@ -502,15 +518,26 @@ async def interpretation_node(state: DeepAgentState) -> Dict[str, Any]:
             "error": error
         }
     
+
     logger.info(f"[InterpretationNode] 分析结果")
     
-    # 调用结果分析工具
-    result = await analyze_result.ainvoke({
-        "query_result": query_result,
-        "natural_language": natural_language,
-        "intent": intent,
-        "db_session": context.get("db_session")
-    })
+    # 调用结果分析工具（如果启用）
+    if deep_agents_config.enable_insight_analysis:
+        result = await analyze_result.ainvoke({
+            "query_result": query_result,
+            "natural_language": natural_language,
+            "intent": intent,
+            "db_session": context.get("db_session")
+        })
+    else:
+        # 返回默认分析
+        logger.info("[InterpretationNode] 洞察分析已禁用，返回默认分析")
+        result = {
+            "interpretation": f"查询返回 {query_result.get('total_count', 0)} 条结果",
+            "insights": [],
+            "visualization_suggestion": {"type": "table"}
+        }
+
 
     insights = result.get("insights", [])
     viz = result.get("visualization_suggestion", {})

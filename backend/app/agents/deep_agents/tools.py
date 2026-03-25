@@ -43,9 +43,28 @@ async def analyze_intent(
         - suggested_metrics: 建议的指标
         - suggested_dimensions: 建议的维度
     """
+    # 检查是否启用意图识别
+    from app.agents.deep_agents.config import deep_agents_config
+    
+    if not deep_agents_config.enable_intent_analysis:
+        print(f"[analyze_intent] INFO 意图识别已禁用，返回默认值")
+        return {
+            "success": True,
+            "intent": {
+                "intent_type": "aggregation",
+                "description": "聚合查询",
+                "suggested_metrics": [],
+                "suggested_dimensions": [],
+                "complexity": "low"
+            },
+            "intent_type": "aggregation",
+            "complexity": "low"
+        }
+    
     try:
         # 获取模型配置
         model_config = _get_model_config(db_session)
+
         
         if not model_config["api_key"]:
             print(f"[analyze_intent] WARN 未配置 API Key，返回默认意图")
@@ -798,6 +817,18 @@ async def analyze_result(
         - insights: 洞察列表
         - visualization_suggestion: 可视化建议
     """
+    # 检查是否启用洞察分析
+    from app.agents.deep_agents.config import deep_agents_config
+    
+    if not deep_agents_config.enable_insight_analysis:
+        print(f"[analyze_result] INFO 洞察分析已禁用，返回默认值")
+        return {
+            "success": True,
+            "interpretation": f"查询返回 {query_result.get('total_count', 0)} 条结果",
+            "insights": [],
+            "visualization_suggestion": {"type": "table"}
+        }
+    
     try:
         if not query_result or query_result.get("error"):
             return {
@@ -809,6 +840,7 @@ async def analyze_result(
         
         # 获取模型配置
         model_config = _get_model_config(db_session)
+
         
         if not model_config["api_key"]:
             # 未配置 API Key，返回简单分析

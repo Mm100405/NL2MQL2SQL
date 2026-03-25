@@ -99,6 +99,17 @@ class DeepAgentsConfig(BaseSettings):
         description="记忆类型（buffer、summary、vector）"
     )
     
+    # 功能开关配置
+    enable_intent_analysis: bool = Field(
+        default=True,
+        description="是否启用意图识别"
+    )
+    
+    enable_insight_analysis: bool = Field(
+        default=True,
+        description="是否启用洞察分析"
+    )
+    
     # 可观测性配置
     enable_tracing: bool = Field(
         default=False,
