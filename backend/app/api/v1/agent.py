@@ -104,22 +104,19 @@ class AgentSkillsResponse(BaseModel):
 @router.get("/status", response_model=AgentStatusResponse)
 def get_agent_status(db: Session = Depends(get_db)):
     """获取Agent状态"""
-    from app.agents.skills.skill_loader import SkillLoader
-
     # 检查模型配置
     model_config = db.query(ModelConfig).filter(
         ModelConfig.is_default == True,
         ModelConfig.is_active == True
     ).first()
 
-    # 检查Skills
+    # 检查 Deep Agents Tools（替代旧 Skills 系统）
     try:
-        loader = SkillLoader()
-        code_skills = loader.load_code_skills()
-        markdown_skills = loader.load_markdown_skills()
-        skills_loaded = len(code_skills) + len(markdown_skills)
+        from app.agents.deep_agents import get_all_tools
+        tools = get_all_tools()
+        tools_loaded = len(tools)
     except Exception:
-        skills_loaded = 0
+        tools_loaded = 0
 
     return AgentStatusResponse(
         is_available=True,
@@ -129,45 +126,35 @@ def get_agent_status(db: Session = Depends(get_db)):
             "provider": model_config.provider if model_config else None,
             "model_name": model_config.model_name if model_config else None
         } if model_config else None,
-        skills_loaded=skills_loaded
+        skills_loaded=tools_loaded  # 保持字段名兼容
     )
 
 
 @router.get("/skills", response_model=AgentSkillsResponse)
 def get_agent_skills():
-    """获取Agent所有Skills"""
-    from app.agents.skills.skill_loader import SkillLoader
-
+    """获取Agent所有Tools（Deep Agents）"""
     try:
-        loader = SkillLoader()
-        code_skills_dict = loader.load_code_skills()
-        markdown_skills_dict = loader.load_markdown_skills()
+        from app.agents.deep_agents import get_all_tools
 
+        tools = get_all_tools()
         code_skills = []
-        for skill_name, skill_instance in code_skills_dict.items():
-            code_skills.append(SkillInfo(
-                name=skill_name,
-                type="code",
-                description=skill_instance.description,
-                dependencies=skill_instance.dependencies if hasattr(skill_instance, 'dependencies') else []
-            ))
 
-        markdown_skills = []
-        for skill_name, skill_obj in markdown_skills_dict.items():
-            markdown_skills.append(SkillInfo(
-                name=skill_name,
-                type="markdown",
-                description=skill_obj.description,
-                dependencies=[]
+        for tool in tools:
+            code_skills.append(SkillInfo(
+                name=tool.name,
+                type="tool",
+                description=tool.description,
+                dependencies=[],
+                enabled=True
             ))
 
         return AgentSkillsResponse(
             code_skills=code_skills,
-            markdown_skills=markdown_skills,
-            total=len(code_skills) + len(markdown_skills)
+            markdown_skills=[],  # Deep Agents 不使用 markdown skills
+            total=len(code_skills)
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to load skills: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to load tools: {str(e)}")
 
 
 # 全局技能状态存储
@@ -570,11 +557,9 @@ async def test_agent_endpoint(
                 "recommendation": "Please configure an AI model in Settings > Model Config"
             }
 
-        # 检查Skills
-        from app.agents.skills.skill_loader import SkillLoader
-        loader = SkillLoader()
-        code_skills = loader.load_code_skills()
-        markdown_skills = loader.load_markdown_skills()
+        # 检查 Deep Agents Tools
+        from app.agents.deep_agents import get_all_tools
+        tools = get_all_tools()
 
         return {
             "success": True,
@@ -584,10 +569,9 @@ async def test_agent_endpoint(
                 "provider": model_config.provider,
                 "model_name": model_config.model_name
             },
-            "skills": {
-                "code_skills_count": len(code_skills),
-                "markdown_skills_count": len(markdown_skills),
-                "total": len(code_skills) + len(markdown_skills)
+            "tools": {
+                "count": len(tools),
+                "names": [tool.name for tool in tools]
             },
             "test_query": natural_language,
             "recommendation": f"Try querying: {natural_language}"
