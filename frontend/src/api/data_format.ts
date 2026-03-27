@@ -22,7 +22,7 @@ export interface GenerateConfigRequest {
  * 生成数据格式配置
  */
 export function generateDataFormatConfig(data: GenerateConfigRequest) {
-  return request.post('/data-format/generate-config', data)
+  return request.post('/data-format/generate-config', data, { timeout: 120000 })
 }
 
 /**

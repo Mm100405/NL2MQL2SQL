@@ -564,23 +564,61 @@ async def call_custom_api(
     if config.status != "validated":
         raise HTTPException(status_code=400, detail="配置未通过验证")
 
-    # 2. 获取MQL模板并替换参数
+    # 2. 获取MQL模板并构建 MQL（filters 使用 MQL Engine V2 结构化格式）
     mql_template = config.mql_template or {}
+    template_filters = mql_template.get("filters", []) or []
+
+    # 规范化模板 filters：与 MQL Engine V2 FilterValidator 一致
+    # V2 使用 extract_field_refs（字符串）和 extract_field_refs_from_structured（dict）校验
+    import re as _re
+
+    def _has_field_ref(expr: str) -> bool:
+        """V2 extract_field_refs: 匹配 [字段名] 格式"""
+        return bool(_re.findall(r"\[([^\]]+)\]", expr))
+
+    def _has_structured_field_ref(condition) -> bool:
+        """V2 extract_field_refs_from_structured: 递归提取 dict 条件中的 field"""
+        if not isinstance(condition, dict):
+            return False
+        if "field" in condition:
+            return True
+        for sub in condition.get("conditions", []):
+            if _has_structured_field_ref(sub):
+                return True
+        return False
+
+    base_conditions = []
+    if isinstance(template_filters, dict):
+        # V2 结构化格式 {"operator": "AND", "conditions": [...]}，提取 conditions
+        base_conditions = list(template_filters.get("conditions", []))
+    elif isinstance(template_filters, list):
+        for f in template_filters:
+            if isinstance(f, dict):
+                # 结构化条件：用 extract_field_refs_from_structured 校验是否含有效 field
+                if _has_structured_field_ref(f):
+                    base_conditions.append(f)
+            elif isinstance(f, str) and f.strip():
+                # 字符串条件：用 extract_field_refs 校验是否含有效 [field] 引用
+                if _has_field_ref(f):
+                    base_conditions.append(f)
+                # 无 field 引用的无效字符串（如 "operator", "conditions"）自动跳过
+
     mql = {
         "metrics": mql_template.get("metrics", []),
         "metricDefinitions": mql_template.get("metricDefinitions", {}),
         "dimensions": mql_template.get("dimensions", []),
-        # 保留MQL模板中已有的filters作为基础
-        "filters": list(mql_template.get("filters", [])),
+        "filters": base_conditions,
         "timeConstraint": mql_template.get("timeConstraint", "true"),
         "limit": mql_template.get("limit", 1000),
         "queryResultType": mql_template.get("queryResultType", "DATA")
     }
 
-    # 使用parameter_mappings生成动态过滤条件
+    # 注意：不再单独调用 correct_mql，mql_to_sql 内部的 MQLTranslator.translate()
+    # 已调用 MQLCorrector.correct_and_validate() 进行验证和修正
+
+    # 使用parameter_mappings生成动态过滤条件（V2 结构化格式）
     parameter_mappings = config.parameter_mappings or {}
-    import re
-    
+
     if parameter_mappings and isinstance(parameter_mappings, dict):
         # 先收集所有时间范围参数，按base_field_name分组
         time_range_params = {}
@@ -593,7 +631,7 @@ async def call_custom_api(
             # 兼容性检查：如果is_time_range不存在，通过参数名判断
             if not is_time_range and param_name:
                 time_range_pattern = r'^(.+?)[_]?(开始|结束|start|end|from|to)$'
-                match = re.match(time_range_pattern, param_name, re.IGNORECASE)
+                match = _re.match(time_range_pattern, param_name, _re.IGNORECASE)
                 is_time_range = match is not None
             
             if is_time_range:
@@ -603,7 +641,7 @@ async def call_custom_api(
                 # 如果没有显式的base_field_name和range_type，从param_name解析
                 if param_name and (not base_field_name or not range_type):
                     time_range_pattern = r'^(.+?)[_]?(开始|结束|start|end|from|to)$'
-                    match = re.match(time_range_pattern, param_name, re.IGNORECASE)
+                    match = _re.match(time_range_pattern, param_name, _re.IGNORECASE)
                     if match:
                         base_field_name = base_field_name or match.group(1)
                         suffix = match.group(2).lower()
@@ -620,29 +658,21 @@ async def call_custom_api(
                 # 普通参数
                 regular_params.append((field_name, param_info))
         
-        # 处理时间范围参数（同时处理开始和结束）
+        # 处理时间范围参数（V2 结构化条件格式）
         for base_field_name, time_range in time_range_params.items():
-            # 使用base_field_name作为实际字段名（如create_time，不包含_开始/结束后缀）
             source_field = time_range["source_field"] or base_field_name
             start_value = time_range["start"]
             end_value = time_range["end"]
             
             if start_value and end_value:
-                # 都有值：分别使用 >= 和 <=
-                filter_start = f"[{source_field}] >= '{start_value}'"
-                filter_end = f"[{source_field}] <= '{end_value}'"
-                mql["filters"].append(filter_start)
-                mql["filters"].append(filter_end)
+                mql["filters"].append({"field": source_field, "op": ">=", "value": start_value})
+                mql["filters"].append({"field": source_field, "op": "<=", "value": end_value})
             elif start_value:
-                # 只有开始时间
-                filter_condition = f"[{source_field}] >= '{start_value}'"
-                mql["filters"].append(filter_condition)
+                mql["filters"].append({"field": source_field, "op": ">=", "value": start_value})
             elif end_value:
-                # 只有结束时间
-                filter_condition = f"[{source_field}] <= '{end_value}'"
-                mql["filters"].append(filter_condition)
+                mql["filters"].append({"field": source_field, "op": "<=", "value": end_value})
         
-        # 处理普通参数
+        # 处理普通参数（V2 结构化条件格式）
         for field_name, param_info in regular_params:
             param_name = param_info.get("param_name")
             if param_name and param_name in request:
@@ -652,16 +682,28 @@ async def call_custom_api(
                 if not param_value:
                     continue
                 
-                # 优先使用field_name，如果source_field为None则回退到field_name
                 source_field = param_info.get("source_field") or param_info.get("field_name", field_name)
                 
+                # 数字类型转换为数值
                 if field_type in ["number", "int", "integer", "float"]:
-                    # 数字类型不加引号
-                    filter_condition = f"[{source_field}] = {param_value}"
-                else:
-                    # 字符类型加引号
-                    filter_condition = f"[{source_field}] = '{param_value}'"
-                mql["filters"].append(filter_condition)
+                    try:
+                        param_value = float(param_value)
+                        if param_value == int(param_value):
+                            param_value = int(param_value)
+                    except (ValueError, TypeError):
+                        pass
+                
+                mql["filters"].append({"field": source_field, "op": "=", "value": param_value})
+
+    # 将 filters 统一为 V2 标准结构化格式
+    all_filters = mql["filters"]
+    if all_filters:
+        if all(isinstance(f, dict) for f in all_filters):
+            # 全部为 dict，包装为 V2 结构化格式
+            mql["filters"] = {"operator": "AND", "conditions": all_filters}
+        # 否则保持混合列表格式（V2 AST Builder 同样支持）
+    else:
+        mql["filters"] = []
 
     # 3. 执行MQL查询
     try:

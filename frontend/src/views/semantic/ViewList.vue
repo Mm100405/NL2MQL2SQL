@@ -313,12 +313,12 @@ function flattenCategories(tree: any[]): ViewCategory[] {
 }
 
 function handleCreate() {
-  router.push('/semantic/views/new')
+  router.push('/management/data/views/new')
 }
 
 function handleEdit(record: View) {
   if (!record?.id) return
-  router.push(`/semantic/views/${record.id}`)
+  router.push(`/management/data/views/${record.id}`)
 }
 
 async function handlePreview(record: View) {

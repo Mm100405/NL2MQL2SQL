@@ -27,7 +27,7 @@ const router = useRouter()
 const settingsStore = useSettingsStore()
 
 function goToConfig() {
-  router.push({ name: 'ModelConfig' })
+  router.push('/management/system/model')
 }
 </script>
 

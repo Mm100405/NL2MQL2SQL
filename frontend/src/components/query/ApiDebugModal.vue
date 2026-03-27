@@ -213,15 +213,6 @@ async function handleDebug() {
     return
   }
 
-  // 验证必填参数（现在所有从 parameterConfig 来的参数都是必填的）
-  const paramNames = Object.keys(requestParams.value)
-  const missingParams = paramNames.filter(key => !requestParams.value[key])
-
-  if (missingParams.length > 0 && paramNames.length > 0) {
-    Message.warning(`请填写参数: ${missingParams.join(', ')}`)
-    return
-  }
-
   loading.value = true
   responseData.value = null
   responseTime.value = 0

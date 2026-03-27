@@ -1630,7 +1630,7 @@ async function handleSave() {
     } else {
       const created = await createView(data)
       Message.success('创建成功')
-      router.replace(`/semantic/views/${created.id}`)
+      router.replace(`/management/data/views/${created.id}`)
     }
   } catch (e: any) {
     Message.error(e.message || '保存失败')
@@ -1773,7 +1773,7 @@ function handleTablePageSizeChange(pageSize: number) {
 
 // 返回列表
 function goBack() {
-  router.push('/semantic/views')
+  router.push('/management/data/views')
 }
 
 // 面板宽度调整相关函数

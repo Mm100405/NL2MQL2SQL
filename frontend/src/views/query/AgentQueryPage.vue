@@ -37,6 +37,7 @@
             <QuerySteps
               v-if="msg.queryResult || msg.loading"
               :steps="msg.queryResult?.steps || loadingSteps"
+              :auto-collapse="true"
             />
 
             <!-- 查询结果卡片 -->
@@ -189,7 +190,7 @@
                     :pagination="false"
                     :bordered="false"
                     size="small"
-                    :scroll="{ x: '100%', y: 400 }"
+                    :scroll="{ x: '100%' }"
                     row-key="key"
                     :row-class-name="(record: any) => record.key === selectedRowKey ? 'arco-table-tr-checked' : ''"
                     @row-click="(record: any) => handleRowSelection(record, msg.queryResult!)"
@@ -278,55 +279,57 @@
 
       <!-- 底部输入框 -->
       <div class="input-container">
-        <!-- 引用上下文显示区域 -->
-        <div v-if="quotedMql" class="quoted-mql-box">
-          <div class="quoted-header">
-            <span class="quoted-label"><icon-share-alt /> 正在引用上下文进行分析</span>
-            <a-button type="text" size="mini" @click="quotedMql = null">
-              <template #icon><icon-close /></template>
-              取消引用
-            </a-button>
+        <div class="input-box">
+          <!-- 引用上下文显示区域 -->
+          <div v-if="quotedMql" class="quoted-mql-box">
+            <div class="quoted-header">
+              <span class="quoted-label"><icon-share-alt /> 正在引用上下文进行分析</span>
+              <a-button type="text" size="mini" @click="quotedMql = null">
+                <template #icon><icon-close /></template>
+              </a-button>
+            </div>
+            <div class="quoted-content">
+              <a-tag v-for="m in quotedMql.metrics" :key="m" color="arcoblue" size="small">{{ m }}</a-tag>
+              <a-tag v-for="d in quotedMql.dimensions" :key="d" color="green" size="small">{{ d }}</a-tag>
+              <span v-if="quotedMql.timeConstraint && quotedMql.timeConstraint !== 'true'" class="quoted-time">
+                {{ formatTimeRange(quotedMql) }}
+              </span>
+            </div>
           </div>
-          <div class="quoted-content">
-            <a-tag v-for="m in quotedMql.metrics" :key="m" color="arcoblue" size="small">{{ m }}</a-tag>
-            <a-tag v-for="d in quotedMql.dimensions" :key="d" color="green" size="small">{{ d }}</a-tag>
-            <span v-if="quotedMql.timeConstraint && quotedMql.timeConstraint !== 'true'" class="quoted-time">
-              {{ formatTimeRange(quotedMql) }}
-            </span>
-          </div>
-        </div>
 
-        <div class="input-wrapper">
-          <a-textarea
-            v-model="queryInput"
-            placeholder="输入问题"
-            :auto-size="{ minRows: 1, maxRows: 4 }"
-            @keydown.enter.prevent="handleEnter"
-            class="query-input"
-          />
-          <div class="input-footer">
-            <span class="input-hint">Agent测试服务生成的所有内容均由人工智能模型生成，请谨慎识别数据准确性。</span>
-            <a-space>
-              <a-button 
-                type="outline"
+          <!-- 输入主体 -->
+          <div class="input-main">
+            <a-textarea
+              v-model="queryInput"
+              placeholder="输入问题，按 Enter 发送..."
+              :auto-size="{ minRows: 1, maxRows: 5 }"
+              @keydown.enter.prevent="handleEnter"
+              class="query-input"
+            />
+            <div class="input-actions">
+              <a-button
+                type="text"
                 size="small"
                 @click="showDataFormatConfig"
                 title="配置输出格式"
+                class="action-btn"
               >
                 <template #icon><icon-settings /></template>
-                格式
               </a-button>
-              <a-button 
-                type="primary" 
-                shape="circle" 
-                :loading="loading" 
+              <a-button
+                type="primary"
+                :loading="loading"
                 @click="handleQuery"
                 class="send-btn"
               >
                 <template #icon><icon-send /></template>
               </a-button>
-            </a-space>
+            </div>
           </div>
+        </div>
+
+        <div class="input-hint-bottom">
+          Agent 服务生成的内容由 AI 模型生成，请谨慎核实数据准确性
         </div>
       </div>
     </template>
@@ -1289,7 +1292,7 @@ function handleViewDropdown(key: string) {
   if (key === 'add') {
     showViewSelectModal.value = true
   } else if (key === 'manage') {
-    router.push('/semantic/views')
+    router.push('/management/data/views')
   }
 }
 
@@ -1445,6 +1448,14 @@ async function loadHistorySession(id: string) {
 }
 
 onMounted(async () => {
+  // 检查模型状态
+  await settingsStore.checkModelConfigStatus()
+  
+  // 如果模型不可用，不继续初始化
+  if (!settingsStore.isModelAvailable) {
+    return
+  }
+  
   // 初始化视图标签
   await initViews()
   
@@ -1509,7 +1520,7 @@ function formatColumns(cols: string[]) {
       title: title,
       dataIndex: col,
       align: 'right' as const,
-      headerCellStyle: { background: '#f2f3f5' }
+      headerCellStyle: { background: 'var(--bg-sunken)' }
     }
   })
 
@@ -2688,39 +2699,39 @@ async function handleAdjust() {
 
 <style scoped>
 .query-page {
-  height: calc(100vh - 64px);
+  height: 100%;
   display: flex;
   flex-direction: column;
-  background: #fff;
+  background: var(--bg-base);
   position: relative;
   overflow: hidden;
 }
 
 .query-header {
-  height: 56px;
+  height: 48px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 24px;
-  border-bottom: 1px solid #f2f3f5;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--border-light);
   flex-shrink: 0;
-  background: #fff;
+  background: var(--bg-elevated);
 }
 
 .query-title {
-  font-size: 16px;
+  font-size: 13px;
   font-weight: 600;
-  color: #1d2129;
+  color: var(--text-primary);
 }
 
 .view-selector {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .view-selector :deep(.arco-radio-group-button) {
-  background: #f2f3f5;
+  background: var(--bg-sunken);
   border-radius: 6px;
   padding: 2px;
 }
@@ -2728,30 +2739,30 @@ async function handleAdjust() {
 .view-selector :deep(.arco-radio-button) {
   border: none;
   border-radius: 4px !important;
-  padding: 4px 12px;
-  font-size: 13px;
-  transition: all 0.2s;
+  padding: 3px 10px;
+  font-size: 12px;
+  transition: all var(--duration-base) var(--ease-smooth);
 }
 
 .view-selector :deep(.arco-radio-button:hover) {
-  background: #e5e6eb;
+  background: var(--bg-hover);
 }
 
 .view-selector :deep(.arco-radio-button-checked) {
-  background: #165dff;
+  background: var(--soft-primary);
   color: #fff;
   box-shadow: none;
 }
 
 .view-selector :deep(.arco-radio-button-checked:hover) {
-  background: #4080ff;
+  opacity: 0.85;
 }
 
 .tab-close-icon {
-  margin-left: 4px;
+  margin-left: 3px;
   font-size: 10px;
   opacity: 0.6;
-  transition: opacity 0.2s;
+  transition: opacity var(--duration-fast);
 }
 
 .tab-close-icon:hover {
@@ -2759,68 +2770,62 @@ async function handleAdjust() {
 }
 
 .add-view-trigger {
-  color: #86909c;
-  padding: 4px;
+  color: var(--text-tertiary);
+  padding: 3px;
 }
 
 .add-view-trigger:hover {
-  color: #165dff;
-  background: #f2f3f5;
+  color: var(--soft-primary);
+  background: var(--bg-hover);
   border-radius: 4px;
-}
-
-.query-title {
-  font-weight: 600;
-  color: var(--color-text-1);
 }
 
 .chat-container {
   flex: 1;
   overflow-y: auto;
-  padding: 24px 10% 40px;
+  padding: 16px 10% 24px;
   display: flex;
   flex-direction: column;
-  gap: 32px;
+  gap: 24px;
   scroll-behavior: smooth;
 }
 
 .result-content-wrapper {
-  min-height: 200px;
-  margin-top: 12px;
+  margin-top: 4px;
 }
 
 .meta-tag-link {
-  color: var(--color-primary-light-4);
+  color: var(--soft-primary);
   cursor: help;
-  border-bottom: 1px dashed var(--color-primary-light-4);
+  border-bottom: 1px dashed var(--soft-primary);
 }
 
 .metadata-popup {
-  max-width: 280px;
-  padding: 4px;
+  max-width: 240px;
+  padding: 6px;
 }
 
 .metadata-popup .p-title {
   font-weight: 600;
-  margin-bottom: 8px;
-  font-size: 14px;
-  color: var(--color-text-1);
+  margin-bottom: 6px;
+  font-size: 12px;
+  color: var(--text-primary);
 }
 
 .metadata-popup .p-desc {
-  color: var(--color-text-2);
-  font-size: 12px;
-  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  margin-bottom: 6px;
   line-height: 1.5;
 }
 
 .metadata-popup .p-formula {
-  background: var(--color-fill-2);
-  padding: 6px;
+  background: var(--bg-sunken);
+  padding: 4px 6px;
   border-radius: 4px;
-  font-size: 11px;
+  font-size: 10px;
   font-family: monospace;
-  color: var(--color-text-3);
+  color: var(--text-secondary);
 }
 
 .message-item {
@@ -2829,37 +2834,37 @@ async function handleAdjust() {
 }
 
 .drill-down-context {
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .context-title {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
-  color: var(--color-text-2);
-  margin-bottom: 8px;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
   display: flex;
   align-items: center;
 }
 
 .current-dims-display {
-  padding: 12px;
+  padding: 10px;
   border-radius: 6px;
-  min-height: 40px;
+  min-height: 32px;
 }
 
 .current-dims-display.drill-mode {
-  background: var(--color-primary-light-1);
-  border: 1px solid var(--color-primary-light-2);
+  background: var(--soft-primary-lighter);
+  border: 1px solid var(--soft-primary-light);
 }
 
 .current-dims-display.global-mode {
-  background: var(--color-success-light-1);
-  border: 1px solid var(--color-success-light-2);
+  background: var(--soft-accent-light);
+  border: 1px solid var(--soft-accent);
 }
 
 .tag-label {
   opacity: 0.8;
-  margin-right: 4px;
+  margin-right: 3px;
 }
 
 .tag-value {
@@ -2867,20 +2872,20 @@ async function handleAdjust() {
 }
 
 .context-tip {
-  font-size: 12px;
-  color: var(--color-text-3);
-  margin-top: 8px;
+  font-size: 11px;
+  color: var(--text-tertiary);
+  margin-top: 6px;
   font-style: italic;
 }
 
 .user-bubble {
   align-self: flex-end;
-  background: #e8f3ff;
-  color: #165dff;
-  padding: 8px 16px;
-  border-radius: 16px 16px 0 16px;
+  background: var(--soft-primary-lighter);
+  color: var(--soft-primary);
+  padding: 6px 13px;
+  border-radius: 10px 10px 2px 10px;
   max-width: 70%;
-  font-size: 14px;
+  font-size: 12px;
 }
 
 .agent-message {
@@ -2889,9 +2894,10 @@ async function handleAdjust() {
 }
 
 .result-card {
-  border: 1px solid #e5e6eb;
-  box-shadow: 0 4px 10px rgba(0,0,0,0.05);
-  margin-top: 16px;
+  border: 1px solid var(--border-light);
+  box-shadow: var(--shadow-xs);
+  margin-top: 8px;
+  border-radius: 8px;
 }
 
 .result-card-header {
@@ -2903,11 +2909,11 @@ async function handleAdjust() {
 .result-info {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 4px;
 }
 
 .metrics-name {
-  font-size: 16px;
+  font-size: 13px;
   font-weight: 600;
 }
 
@@ -2916,23 +2922,23 @@ async function handleAdjust() {
   flex-direction: column;
 }
 
-/* 查询元信息面板 */
+/* 查询元信息面板 - 统一信息行风格 */
 .query-meta-panel {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 16px;
-  margin-bottom: 16px;
-  background: linear-gradient(135deg, #f7f8fa 0%, #f0f1f5 100%);
-  border-radius: 12px;
-  border: 1px solid #e8e9eb;
+  padding: 10px 14px;
+  margin-bottom: 8px;
+  background: var(--bg-sunken);
+  border-radius: 8px;
+  border: 1px solid var(--border-light);
   animation: slideDown 0.3s ease-out;
 }
 
 @keyframes slideDown {
   from {
     opacity: 0;
-    transform: translateY(-10px);
+    transform: translateY(-8px);
   }
   to {
     opacity: 1;
@@ -2943,7 +2949,7 @@ async function handleAdjust() {
 .meta-row {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   animation: fadeIn 0.4s ease-out;
   animation-fill-mode: both;
 }
@@ -2956,7 +2962,7 @@ async function handleAdjust() {
 @keyframes fadeIn {
   from {
     opacity: 0;
-    transform: translateX(-8px);
+    transform: translateX(-6px);
   }
   to {
     opacity: 1;
@@ -2964,133 +2970,132 @@ async function handleAdjust() {
   }
 }
 
+/* 左侧标签 - 图标+文字 */
 .meta-label {
   display: flex;
   align-items: center;
   justify-content: flex-start;
   gap: 6px;
-  min-width: 80px;
-  height: 28px;
+  min-width: 72px;
+  height: 26px;
   font-size: 12px;
-  color: #8e8e8e;
+  color: var(--text-secondary);
   font-weight: 500;
 }
 
 .meta-label :deep(.arco-icon) {
   font-size: 14px;
-  color: #6b6b6b;
+  color: var(--text-secondary);
 }
 
+/* 右侧内容区 - 统一用标签芯片风格 */
 .meta-content {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--color-text-2);
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
-/* 时间范围样式 */
+/* 时间范围 - 统一为芯片风格 */
 .time-range-box {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  background: #fff;
-  border-radius: 8px;
-  border: 1px solid #e5e6eb;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
-  transition: all 0.2s ease;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--soft-primary-lighter);
+  border-radius: 4px;
+  border: 1px solid var(--soft-primary-light);
+  transition: all var(--duration-base) var(--ease-smooth);
 }
 
 .time-range-box:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
-  transform: translateY(-1px);
+  background: var(--soft-primary-light);
 }
 
 .time-field-name-in-box {
-  padding: 2px 8px;
-  background: linear-gradient(135deg, #165dff 0%, #4080ff 100%);
+  padding: 1px 6px;
+  background: var(--soft-primary);
   color: #fff;
-  border-radius: 4px;
-  font-size: 12px;
+  border-radius: 3px;
+  font-size: 11px;
   font-weight: 600;
-  box-shadow: 0 2px 4px rgba(22, 93, 255, 0.2);
 }
 
 .time-date {
   font-family: 'Monaco', 'Menlo', 'Courier New', monospace;
-  font-size: 13px;
-  font-weight: 600;
-  color: #1d2129;
-  letter-spacing: 0.5px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--soft-primary);
+  letter-spacing: 0.2px;
 }
 
 .time-separator {
-  color: #8e8e8e;
+  color: var(--soft-primary);
+  opacity: 0.6;
   font-weight: 500;
 }
 
-/* 标签芯片样式 */
+/* 指标芯片 */
 .meta-tag-chip {
-  padding: 4px 10px;
-  border-radius: 6px;
+  padding: 3px 10px;
+  border-radius: 4px;
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all var(--duration-base) var(--ease-smooth);
   border: 1px solid transparent;
 }
 
 .meta-tag-chip:hover {
   transform: translateY(-1px);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  box-shadow: var(--shadow-sm);
 }
 
 .metric-chip {
-  background: linear-gradient(135deg, #f0f5ff 0%, #e6f0ff 100%);
-  color: #165dff;
-  border-color: #c9dcff;
+  background: var(--soft-primary-lighter);
+  color: var(--soft-primary);
+  border-color: var(--soft-primary-light);
 }
 
 .metric-chip:hover {
-  background: linear-gradient(135deg, #e6f0ff 0%, #d9e6ff 100%);
-  border-color: #93b5ff;
+  background: var(--soft-primary-light);
 }
 
+/* 维度芯片 */
 .dimension-chip {
-  background: linear-gradient(135deg, #f5f0ff 0%, #ede6ff 100%);
-  color: #722ed1;
-  border-color: #d9b8ff;
+  background: #f0ecf6;
+  color: #7B61A0;
+  border-color: #d9d0e8;
 }
 
 .dimension-chip:hover {
-  background: linear-gradient(135deg, #ede6ff 0%, #e0d6ff 100%);
-  border-color: #b87fff;
+  background: #e4daef;
 }
 
-/* 过滤条件样式 */
+/* 过滤条件 - 统一芯片风格 */
 .filter-content {
   display: flex;
   align-items: center;
-  padding: 6px 12px;
-  background: #fff;
-  border-radius: 8px;
-  border: 1px solid #e5e6eb;
+  padding: 4px 10px;
+  background: #fef3cd;
+  border-radius: 4px;
+  border: 1px solid #f0e0a0;
   font-size: 12px;
+  color: #8a6d3b;
 }
 
 /* 旧的 result-meta-tags 保留兼容 */
 .result-meta-tags {
-  display: none; /* 隐藏旧样式，由新样式替代 */
+  display: none;
 }
 
-
 .result-footer {
-  margin-top: 16px;
-  padding-top: 12px;
-  border-top: 1px solid #f2f3f5;
-  color: var(--color-text-4);
-  font-size: 12px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-light);
+  color: var(--text-tertiary);
+  font-size: 10px;
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -3099,7 +3104,7 @@ async function handleAdjust() {
 .footer-left {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
 .footer-right {
@@ -3108,84 +3113,8 @@ async function handleAdjust() {
 }
 
 .config-id {
-  color: var(--color-success-light-3);
+  color: var(--soft-accent);
   font-weight: 500;
-}
-
-.input-container {
-  padding: 16px 15% 40px;
-  background: #fff;
-  flex-shrink: 0;
-  border-top: 1px solid #f2f3f5;
-}
-
-.quoted-mql-box {
-  background: #f7f8fa;
-  border: 1px solid #e5e6eb;
-  border-bottom: none;
-  border-radius: 8px 8px 0 0;
-  padding: 8px 16px;
-  margin-bottom: 0;
-}
-
-.quoted-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 4px;
-}
-
-.quoted-label {
-  font-size: 12px;
-  color: var(--color-text-3);
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.quoted-content {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.quoted-time {
-  font-size: 11px;
-  color: var(--color-text-4);
-  background: #fff;
-  padding: 0 6px;
-  border-radius: 4px;
-  border: 1px solid #e5e6eb;
-}
-
-.input-wrapper {
-  border: 1px solid #e5e6eb;
-  border-radius: 0 0 12px 12px;
-  padding: 8px;
-  background: #fff;
-  box-shadow: 0 4px 10px rgba(0,0,0,0.02);
-}
-
-.query-input {
-  border: none;
-  background: transparent;
-}
-
-.input-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 8px;
-}
-
-.input-hint {
-  font-size: 12px;
-  color: var(--color-text-4);
-}
-
-.send-btn {
-  background: #165dff;
 }
 
 :deep(.arco-textarea) {
@@ -3211,7 +3140,7 @@ async function handleAdjust() {
 
 :deep(.result-card .arco-card-header) {
   border-bottom: none;
-  padding: 16px 20px 0;
+  padding: 10px 14px 0;
 }
 
 :deep(.result-card .arco-card-body) {
@@ -3232,14 +3161,14 @@ async function handleAdjust() {
 .sql-textarea {
   font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
   font-size: 13px;
-  background: #f7f8fa;
-  border-radius: 4px;
+  background: var(--bg-sunken);
+  border-radius: var(--radius-xs);
 }
 
 .insights-panel {
-  border-top: 1px solid var(--color-fill-2);
+  border-top: 1px solid var(--border-light);
   padding: 12px 20px;
-  background: #f7f8fa;
+  background: var(--bg-sunken);
 }
 
 .insights-header {
@@ -3255,7 +3184,7 @@ async function handleAdjust() {
   align-items: center;
   gap: 8px;
   font-weight: 500;
-  color: var(--color-text-1);
+  color: var(--text-primary);
 }
 
 .insights-content {
@@ -3269,15 +3198,15 @@ async function handleAdjust() {
   display: flex;
   gap: 12px;
   padding: 10px 12px;
-  background: white;
-  border-radius: 6px;
-  border: 1px solid var(--color-fill-2);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-light);
 }
 
 .insight-index {
   width: 24px;
   height: 24px;
-  background: linear-gradient(135deg, #4080ff 0%, #0e42d2 100%);
+  background: var(--soft-primary);
   color: white;
   border-radius: 50%;
   display: flex;
@@ -3290,7 +3219,7 @@ async function handleAdjust() {
 
 .insight-text {
   flex: 1;
-  color: var(--color-text-1);
+  color: var(--text-primary);
   line-height: 1.6;
   font-size: 13px;
 }

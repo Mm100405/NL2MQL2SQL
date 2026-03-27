@@ -1,181 +1,131 @@
 <template>
   <a-layout class="main-layout">
-    <!-- 侧边栏 -->
+    <!-- 极简侧边栏 -->
     <a-layout-sider
-      :collapsed="appStore.sidebarCollapsed"
-      :width="260"
-      :collapsed-width="48"
+      v-model:collapsed="sidebarCollapsed"
+      :width="240"
+      :collapsed-width="56"
       collapsible
+      hide-trigger
       breakpoint="lg"
-      @collapse="appStore.toggleSidebar"
       class="sidebar-sider"
     >
       <!-- Logo -->
       <div class="logo">
-        <span v-if="!appStore.sidebarCollapsed" class="logo-text">NL2MQL2SQL Agent</span>
-        <icon-menu-unfold v-if="appStore.sidebarCollapsed" @click="appStore.toggleSidebar" />
-        <icon-menu-fold v-else class="fold-icon" @click="appStore.toggleSidebar" />
+        <icon-thunderbolt class="logo-icon" />
+        <span v-if="!sidebarCollapsed" class="logo-text">Agent</span>
       </div>
 
-      <!-- 问数页面特有侧边栏 -->
-      <template v-if="(route.name === 'Query' || route.name === 'AgentQuery') && !appStore.sidebarCollapsed && showAgentSidebar">
-        <div class="sidebar-header-actions">
-          <a-button type="text" size="small" @click="toggleSidebarMode">
-            <template #icon><icon-left /></template>
-            返回导航
-          </a-button>
-        </div>
+      <!-- 收起/展开按钮 -->
+      <div class="toggle-wrapper">
+        <a-button
+          type="text"
+          size="mini"
+          class="toggle-btn"
+          @click="sidebarCollapsed = !sidebarCollapsed"
+        >
+          <template #icon>
+            <icon-menu-fold v-if="!sidebarCollapsed" />
+            <icon-menu-unfold v-else />
+          </template>
+        </a-button>
+      </div>
 
-        <div class="new-chat-wrapper">
-          <a-button type="primary" long class="new-chat-btn" @click="handleNewChat">
-            <template #icon><icon-plus-circle-fill /></template>
-            新建对话
+      <!-- 新建对话按钮 -->
+      <div class="new-chat-wrapper">
+        <a-button
+          v-if="!sidebarCollapsed"
+          type="primary"
+          long
+          class="new-chat-btn"
+          @click="handleNewChat"
+        >
+          <template #icon><icon-plus /></template>
+          新建对话
+        </a-button>
+        <a-tooltip v-else content="新建对话" position="right">
+          <a-button
+            type="primary"
+            shape="circle"
+            size="small"
+            class="new-chat-btn-collapsed"
+            @click="handleNewChat"
+          >
+            <template #icon><icon-plus /></template>
           </a-button>
-        </div>
+        </a-tooltip>
+      </div>
 
-        <div class="chat-history">
-          <div class="history-group">
-            <div class="group-title">历史查询</div>
-            <div 
-              v-for="item in chatHistory" 
-              :key="item.conversation_id || item.id" 
+      <!-- 历史对话列表 (展开时显示) -->
+      <div v-if="!sidebarCollapsed" class="chat-history">
+        <div class="history-group">
+          <div class="group-title">历史对话</div>
+          <div class="history-list">
+            <div
+              v-for="item in chatHistory"
+              :key="item.conversation_id || item.id"
               class="history-item"
               :class="{ active: route.query.id === item.conversation_id || route.query.id === item.id }"
               @click="handleHistoryClick(item.conversation_id || item.id)"
             >
-              {{ item.natural_language.slice(0, 20) }}{{ item.natural_language.length > 20 ? '...' : '' }}
+              <icon-message class="history-icon" />
+              <span class="history-text">
+                {{ item.natural_language.slice(0, 18) }}{{ item.natural_language.length > 18 ? '...' : '' }}
+              </span>
+              <icon-delete
+                class="delete-icon"
+                @click.stop="handleDeleteHistory(item.conversation_id || item.id)"
+              />
             </div>
-            <div v-if="chatHistory.length === 0" class="empty-history">暂无历史</div>
+            <div v-if="chatHistory.length === 0" class="empty-history">
+              <icon-chat class="empty-icon" />
+              <span>暂无历史对话</span>
+            </div>
           </div>
         </div>
+      </div>
 
-        <div class="user-info">
-          <a-avatar :size="24">云轩</a-avatar>
-          <span class="user-name">向云轩</span>
-          <a-button type="text" size="small" class="settings-btn" @click="openSettings">
-            <template #icon><icon-settings /></template>
-          </a-button>
+      <!-- 用户信息 -->
+      <div class="user-info">
+        <a-dropdown trigger="click" position="top" @select="handleUserMenuSelect">
+          <div class="user-avatar-wrapper">
+            <a-avatar :size="sidebarCollapsed ? 32 : 36" class="user-avatar">云轩</a-avatar>
+            <icon-down v-if="!sidebarCollapsed" class="dropdown-icon" />
+          </div>
+          <template #content>
+            <a-doption value="profile">
+              <template #icon><icon-user /></template>
+              个人设置
+            </a-doption>
+            <a-doption value="model-status">
+              <template #icon>
+                <icon-check-circle v-if="settingsStore.isModelAvailable" />
+                <icon-exclamation-circle v-else />
+              </template>
+              模型状态
+              <a-tag v-if="settingsStore.isModelAvailable" color="green" size="small">正常</a-tag>
+              <a-tag v-else color="red" size="small">异常</a-tag>
+            </a-doption>
+            <a-divider style="margin: 4px 0" />
+            <a-doption value="management">
+              <template #icon><icon-settings /></template>
+              管理中心
+            </a-doption>
+            <a-doption value="logout">
+              <template #icon><icon-export /></template>
+              退出登录
+            </a-doption>
+          </template>
+        </a-dropdown>
+        <div v-if="!sidebarCollapsed" class="user-details">
+          <div class="user-name">向云轩</div>
+          <div class="user-role">数据分析师</div>
         </div>
-      </template>
-
-      <!-- 导航菜单 (非问数页面或折叠时显示) -->
-      <a-menu
-        v-else
-        :selected-keys="selectedKeys"
-        v-model:open-keys="openKeys"
-        :auto-open-selected="true"
-        :accordion="false"
-        @menu-item-click="handleMenuClick"
-      >
-        <a-menu-item v-if="route.name === 'Query'" key="toggle" @click="toggleSidebarMode">
-          <template #icon><icon-apps /></template>
-          返回 Agent 视图
-        </a-menu-item>
-        <!-- 智能问数 -->
-        <a-menu-item key="Query">
-          <template #icon><icon-search /></template>
-          智能问数
-        </a-menu-item>
-        <a-menu-item key="AgentQuery">
-          <template #icon><icon-thunderbolt /></template>
-          Agent查询
-        </a-menu-item>
-        <a-menu-item key="QueryHistory">
-          <template #icon><icon-history /></template>
-          查询历史
-        </a-menu-item>
-
-        <a-divider style="margin: 8px 0" />
-
-        <!-- 语义层管理 -->
-        <a-sub-menu key="Semantic">
-          <template #icon><icon-layers /></template>
-          <template #title>语义层管理</template>
-          <a-menu-item key="DataSources">数据源管理</a-menu-item>
-          <a-menu-item key="Datasets">物理表管理</a-menu-item>
-          <a-menu-item key="Views">视图管理</a-menu-item>
-          <a-menu-item key="Metrics">指标管理</a-menu-item>
-          <a-menu-item key="Dimensions">维度管理</a-menu-item>
-          <a-menu-item key="Dictionaries">字典管理</a-menu-item>
-          <a-menu-item key="Lineage">血缘管理</a-menu-item>
-        </a-sub-menu>
-
-        <!-- 系统设置 -->
-        <a-sub-menu key="Settings">
-          <template #icon><icon-settings /></template>
-          <template #title>系统设置</template>
-          <a-menu-item key="ModelConfig">模型配置</a-menu-item>
-          <a-menu-item key="QueryConfig">问数配置</a-menu-item>
-          <a-menu-item key="AgentTest">Agent测试</a-menu-item>
-        </a-sub-menu>
-
-        <a-divider style="margin: 8px 0" />
-
-        <!-- AIR模块 -->
-        <a-sub-menu key="Air">
-          <template #icon><icon-cloud /></template>
-          <template #title>AIR</template>
-          <a-menu-item key="Workbook">工作簿</a-menu-item>
-          <a-menu-item key="Integration">数据集成</a-menu-item>
-          <a-menu-item key="Consolidation">数据整合</a-menu-item>
-          <a-menu-item key="AirAcceleration">数据加速</a-menu-item>
-        </a-sub-menu>
-
-        <!-- CAN模块 -->
-        <a-sub-menu key="Can">
-          <template #icon><icon-bar-chart /></template>
-          <template #title>CAN</template>
-          <a-menu-item key="Catalog">指标目录</a-menu-item>
-          <a-menu-item key="Application">指标应用</a-menu-item>
-          <a-menu-item key="CanAcceleration">指标加速</a-menu-item>
-          <a-menu-item key="CanSettings">管理设置</a-menu-item>
-        </a-sub-menu>
-
-        <!-- BIG模块 -->
-        <a-sub-menu key="Big">
-          <template #icon><icon-branch /></template>
-          <template #title>BIG</template>
-          <a-menu-item key="OperatorLineage">算子级血缘</a-menu-item>
-        </a-sub-menu>
-      </a-menu>
+      </div>
     </a-layout-sider>
 
     <!-- 主内容区 -->
-    <a-layout>
-      <!-- 顶部栏 -->
-      <a-layout-header class="layout-header">
-        <div class="header-left">
-          <a-breadcrumb>
-            <a-breadcrumb-item v-for="item in breadcrumbs" :key="item.path">
-              <router-link v-if="item.path" :to="item.path">{{ item.title }}</router-link>
-              <span v-else>{{ item.title }}</span>
-            </a-breadcrumb-item>
-          </a-breadcrumb>
-        </div>
-        <div class="header-right">
-          <!-- 模型配置状态提示 -->
-          <a-tooltip v-if="!settingsStore.isModelConfigured" content="AI模型未配置，点击前往配置">
-            <a-button type="text" status="warning" @click="goToModelConfig">
-              <template #icon><icon-exclamation-circle /></template>
-              模型未配置
-            </a-button>
-          </a-tooltip>
-          <a-tooltip v-else-if="!settingsStore.isModelAvailable" content="AI模型已配置但不可用，点击前往配置">
-            <a-button type="text" status="warning" @click="goToModelConfig">
-              <template #icon><icon-exclamation-circle /></template>
-              模型不可用
-            </a-button>
-          </a-tooltip>
-          <a-tooltip v-else content="AI模型已配置且可用">
-            <a-button type="text" status="success">
-              <template #icon><icon-check-circle /></template>
-              模型已就绪
-            </a-button>
-          </a-tooltip>
-        </div>
-      </a-layout-header>
-
-      <!-- 内容区 -->
+    <a-layout class="content-layout">
       <a-layout-content class="layout-content">
         <router-view v-slot="{ Component }">
           <transition name="fade" mode="out-in">
@@ -184,1035 +134,574 @@
         </router-view>
       </a-layout-content>
     </a-layout>
+
+    <!-- 个人设置弹窗 -->
+    <a-modal
+      v-model:visible="profileVisible"
+      title="个人设置"
+      :width="500"
+      :footer="false"
+      @cancel="profileVisible = false"
+      class="profile-modal"
+    >
+      <a-form :model="profileForm" layout="vertical">
+        <a-form-item label="用户名">
+          <a-input v-model="profileForm.username" placeholder="请输入用户名" />
+        </a-form-item>
+        <a-form-item label="邮箱">
+          <a-input v-model="profileForm.email" placeholder="请输入邮箱" />
+        </a-form-item>
+        <a-form-item label="角色">
+          <a-input v-model="profileForm.role" disabled />
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
+    <!-- 模型状态弹窗 -->
+    <a-modal
+      v-model:visible="modelStatusVisible"
+      title="模型状态"
+      :width="600"
+      :footer="false"
+      @cancel="modelStatusVisible = false"
+      class="model-status-modal"
+    >
+      <div class="status-content">
+        <a-descriptions :column="1" bordered>
+          <a-descriptions-item label="模型状态">
+            <a-tag v-if="settingsStore.isModelAvailable" color="green">
+              <template #icon><icon-check-circle /></template>
+              正常运行
+            </a-tag>
+            <a-tag v-else color="red">
+              <template #icon><icon-close-circle /></template>
+              不可用
+            </a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item label="模型提供商">
+            {{ modelConfig.provider || '未配置' }}
+          </a-descriptions-item>
+          <a-descriptions-item label="模型名称">
+            {{ modelConfig.model_name || '未配置' }}
+          </a-descriptions-item>
+          <a-descriptions-item label="接口地址">
+            {{ modelConfig.base_url || '默认' }}
+          </a-descriptions-item>
+        </a-descriptions>
+        <div class="status-actions">
+          <a-button type="primary" @click="goToModelConfig">
+            <template #icon><icon-settings /></template>
+            配置模型
+          </a-button>
+          <a-button @click="testModelConnection">
+            <template #icon><icon-refresh /></template>
+            测试连接
+          </a-button>
+        </div>
+      </div>
+    </a-modal>
   </a-layout>
-
-  <!-- 设置弹窗 -->
-  <a-modal
-    v-model:visible="settingsVisible"
-    title="设置"
-    :width="1100"
-    :footer="false"
-    @cancel="closeSettings"
-    class="settings-modal"
-  >
-    <div class="settings-content">
-      <!-- 左侧：通用设置 -->
-      <div class="settings-left">
-        <div class="user-profile">
-          <a-avatar :size="80">云轩</a-avatar>
-          <h3 class="profile-name">向云轩</h3>
-          <p class="profile-role">数据分析专家</p>
-        </div>
-
-        <a-divider style="margin: 16px 0;" />
-
-        <div class="profile-settings">
-          <a-form layout="vertical">
-            <a-form-item label="头像">
-              <a-input v-model="userProfile.avatar" placeholder="输入头像URL" />
-            </a-form-item>
-            <a-form-item label="用户名">
-              <a-input v-model="userProfile.name" placeholder="输入用户名" />
-            </a-form-item>
-          </a-form>
-        </div>
-      </div>
-
-      <!-- 右侧：分标签设置 -->
-      <div class="settings-right">
-        <a-tabs v-model:active-key="activeTab" type="line">
-          <!-- 智能体状态 -->
-          <a-tab-pane key="status" title="智能体状态">
-            <div class="status-panel">
-              <a-descriptions :column="2" bordered>
-                <a-descriptions-item label="Agent状态">
-                  <a-tag :color="agentStatus.color">{{ agentStatus.text }}</a-tag>
-                </a-descriptions-item>
-                <a-descriptions-item label="当前模型">
-                  {{ agentStatus.currentModel || '未配置' }}
-                </a-descriptions-item>
-                <a-descriptions-item label="已加载Skills">
-                  {{ agentStatus.loadedSkills || 0 }} 个
-                </a-descriptions-item>
-                <a-descriptions-item label="核心工具">
-                  {{ agentStatus.coreTools || 8 }} 个
-                </a-descriptions-item>
-              </a-descriptions>
-
-              <a-divider style="margin: 24px 0;" />
-
-              <!-- Agent 信息 -->
-              <h4>Agent 信息</h4>
-              <a-descriptions :column="1" bordered size="small">
-                <a-descriptions-item label="工具总数">
-                  {{ agentInfo.totalTools || 0 }} 个
-                </a-descriptions-item>
-                <a-descriptions-item label="工具路径">
-                  <a-tag color="blue" size="small">
-                    {{ agentInfo.skillPaths?.length || 0 }} 个路径
-                  </a-tag>
-                </a-descriptions-item>
-                <a-descriptions-item label="启用技能">
-                  {{ agentInfo.enabledSkills || 0 }} 个
-                </a-descriptions-item>
-                <a-descriptions-item label="健康状态">
-                  <a-tag :color="agentInfo.healthy ? 'green' : 'red'">
-                    {{ agentInfo.healthy ? '正常' : '异常' }}
-                  </a-tag>
-                </a-descriptions-item>
-              </a-descriptions>
-
-              <a-divider style="margin: 24px 0;" />
-
-              <h4>模型配置</h4>
-              <a-form layout="vertical">
-                <a-row :gutter="16">
-                  <a-col :span="12">
-                    <a-form-item label="LLM模型">
-                      <a-select v-model="modelConfig.llmModel" placeholder="选择模型">
-                        <a-option value="gpt-4">GPT-4</a-option>
-                        <a-option value="gpt-3.5-turbo">GPT-3.5 Turbo</a-option>
-                        <a-option value="claude-3">Claude-3</a-option>
-                      </a-select>
-                    </a-form-item>
-                  </a-col>
-                  <a-col :span="12">
-                    <a-form-item label="温度">
-                      <a-slider v-model="modelConfig.temperature" :min="0" :max="1" :step="0.1" />
-                    </a-form-item>
-                  </a-col>
-                </a-row>
-                <a-row :gutter="16">
-                  <a-col :span="12">
-                    <a-form-item label="最大重试次数">
-                      <a-input-number v-model="modelConfig.maxRetries" :min="1" :max="10" />
-                    </a-form-item>
-                  </a-col>
-                  <a-col :span="12">
-                    <a-form-item label="超时时间（秒）">
-                      <a-input-number v-model="modelConfig.timeout" :min="10" :max="300" />
-                    </a-form-item>
-                  </a-col>
-                </a-row>
-              </a-form>
-
-              <div style="text-align: right; margin-top: 16px;">
-                <a-button type="primary" @click="saveModelConfig">
-                  保存配置
-                </a-button>
-              </div>
-            </div>
-          </a-tab-pane>
-
-          <!-- 技能管理 -->
-          <a-tab-pane key="skills" title="技能管理">
-            <div class="skills-panel">
-              <a-tabs v-model:active-key="skillsTab" type="card-gutter">
-                <!-- 核心技能 -->
-                <a-tab-pane key="core" title="核心技能">
-                  <div class="skills-list">
-                    <a-alert
-                      type="info"
-                      content="核心技能是系统内置的基础工具，不可关闭或删除"
-                      style="margin-bottom: 16px;"
-                    />
-                    <a-list :data="coreSkills" size="small">
-                      <template #item="{ item }">
-                        <a-list-item>
-                          <a-list-item-meta :title="item.name" :description="item.description">
-                            <template #avatar>
-                              <icon-tool :size="24" style="color: rgb(var(--primary-6))" />
-                            </template>
-                          </a-list-item-meta>
-                          <template #actions>
-                            <a-tag color="arcoblue">核心</a-tag>
-                          </template>
-                        </a-list-item>
-                      </template>
-                    </a-list>
-                  </div>
-                </a-tab-pane>
-
-                <!-- 外部技能 -->
-                <a-tab-pane key="external" title="外部技能">
-                  <div class="external-skills-section">
-                    <!-- 操作栏 -->
-                    <div class="skills-toolbar">
-                      <a-space>
-                        <a-button type="primary" @click="openLoadSkillModal">
-                          <template #icon>
-                            <icon-plus />
-                          </template>
-                          加载技能
-                        </a-button>
-                        <a-button @click="refreshSkillsList">
-                          <template #icon>
-                            <icon-refresh />
-                          </template>
-                          刷新
-                        </a-button>
-                        <a-button status="danger" @click="unloadAllSkills" :disabled="externalSkills.length === 0">
-                          <template #icon>
-                            <icon-delete />
-                          </template>
-                          卸载全部
-                        </a-button>
-                        <a-input-search
-                          v-model="skillSearch"
-                          placeholder="搜索技能"
-                          style="width: 200px;"
-                          @search="filterSkills"
-                        />
-                      </a-space>
-                      <a-space>
-                        <span class="skills-count">
-                          已加载: {{ externalSkills.length }} 个
-                        </span>
-                      </a-space>
-                    </div>
-
-                    <!-- 技能列表 -->
-                    <a-spin :loading="skillsLoading">
-                      <div v-if="externalSkills.length === 0" class="empty-skills">
-                        <a-empty description="暂无外部技能，请点击加载技能添加">
-                          <template #image>
-                            <icon-file :size="64" style="color: #c9cdd4;" />
-                          </template>
-                        </a-empty>
-                      </div>
-                      <a-list v-else :data="filteredExternalSkills" size="small" class="skills-list">
-                        <template #item="{ item }">
-                          <a-list-item @click="showSkillDetail(item)" style="cursor: pointer;">
-                            <a-list-item-meta
-                              :title="item.name || item.skill_id"
-                              :description="item.description || item.skill_id"
-                            >
-                              <template #avatar>
-                                <icon-apps :size="24" :style="{ color: item.enabled ? 'rgb(var(--success-6))' : '#c9cdd4' }" />
-                              </template>
-                            </a-list-item-meta>
-                            <template #actions>
-                              <a-switch
-                                v-model="item.enabled"
-                                :loading="item.switching"
-                                @click.stop="toggleSkill(item)"
-                              />
-                              <a-button
-                                type="text"
-                                status="danger"
-                                size="small"
-                                @click.stop="unloadSkill(item.skill_id)"
-                              >
-                                <template #icon>
-                                  <icon-delete />
-                                </template>
-                              </a-button>
-                            </template>
-                          </a-list-item>
-                        </template>
-                      </a-list>
-                    </a-spin>
-                  </div>
-                </a-tab-pane>
-              </a-tabs>
-            </div>
-          </a-tab-pane>
-
-          <!-- 关于我们 -->
-          <a-tab-pane key="about" title="关于我们">
-            <div class="about-panel">
-              <div class="about-header">
-                <h3>智能问数系统</h3>
-                <p class="version">版本: v1.0.0</p>
-              </div>
-
-              <a-divider />
-
-              <div class="about-content">
-                <h4>系统简介</h4>
-                <p>
-                  智能问数系统是一个基于 LangChain Deep Agents 的数据分析平台，
-                  支持自然语言查询、动态技能加载和流式结果展示。
-                </p>
-
-                <h4>核心功能</h4>
-                <ul>
-                  <li>自然语言查询：用日常语言提问，系统自动转换为查询</li>
-                  <li>流式输出：实时展示查询步骤和结果</li>
-                  <li>动态技能：运行时加载、卸载外部技能</li>
-                  <li>多数据源支持：支持多种数据库和数据源</li>
-                </ul>
-
-                <h4>技术栈</h4>
-                <a-space wrap>
-                  <a-tag color="arcoblue">Vue 3</a-tag>
-                  <a-tag color="arcoblue">TypeScript</a-tag>
-                  <a-tag color="arcoblue">Arco Design</a-tag>
-                  <a-tag color="green">Python</a-tag>
-                  <a-tag color="green">FastAPI</a-tag>
-                  <a-tag color="orange">LangChain</a-tag>
-                  <a-tag color="orange">Deep Agents</a-tag>
-                </a-space>
-              </div>
-
-              <a-divider />
-
-              <div class="about-footer">
-                <p>© 2026 Qoder. All rights reserved.</p>
-              </div>
-            </div>
-          </a-tab-pane>
-        </a-tabs>
-      </div>
-    </div>
-  </a-modal>
-
-  <!-- 加载技能弹窗 -->
-  <a-modal
-    v-model:visible="loadSkillModalVisible"
-    title="加载外部技能"
-    :width="600"
-    @ok="handleLoadSkill"
-    @cancel="closeLoadSkillModal"
-  >
-    <a-form layout="vertical">
-      <a-form-item label="加载方式">
-        <a-radio-group v-model="loadSkillMethod">
-          <a-radio value="directory">从目录加载</a-radio>
-          <a-radio value="url">从URL加载</a-radio>
-        </a-radio-group>
-      </a-form-item>
-
-      <a-form-item v-if="loadSkillMethod === 'directory'" label="目录路径">
-        <a-input
-          v-model="loadSkillForm.directory"
-          placeholder="例如: backend/app/agents/external_skills"
-        />
-      </a-form-item>
-
-      <a-form-item v-if="loadSkillMethod === 'url'" label="技能ID">
-        <a-input v-model="loadSkillForm.skill_id" placeholder="例如: web-search" />
-      </a-form-item>
-
-      <a-form-item v-if="loadSkillMethod === 'url'" label="URL">
-        <a-input
-          v-model="loadSkillForm.url"
-          placeholder="https://example.com/skill/SKILL.md"
-        />
-      </a-form-item>
-
-      <a-form-item>
-        <a-checkbox v-model="loadSkillForm.force_reload">
-          强制重新加载（如果已存在）
-        </a-checkbox>
-      </a-form-item>
-    </a-form>
-  </a-modal>
-
-  <!-- 技能详情弹窗 -->
-  <a-modal
-    v-model:visible="skillDetailVisible"
-    :title="`技能详情 - ${currentSkill?.name || currentSkill?.skill_id}`"
-    :width="800"
-    :footer="false"
-    @cancel="skillDetailVisible = false"
-  >
-    <div v-if="currentSkill" class="skill-detail">
-      <a-descriptions :column="2" bordered>
-        <a-descriptions-item label="技能ID">
-          {{ currentSkill.skill_id }}
-        </a-descriptions-item>
-        <a-descriptions-item label="名称">
-          {{ currentSkill.name }}
-        </a-descriptions-item>
-        <a-descriptions-item label="来源" span="2">
-          <a-tag :color="currentSkill.source === 'url' ? 'blue' : 'green'">
-            {{ currentSkill.source === 'url' ? 'URL加载' : '本地加载' }}
-          </a-tag>
-        </a-descriptions-item>
-        <a-descriptions-item label="描述" span="2">
-          {{ currentSkill.description || '暂无描述' }}
-        </a-descriptions-item>
-        <a-descriptions-item label="加载时间">
-          {{ currentSkill.loaded_at || '未知' }}
-        </a-descriptions-item>
-        <a-descriptions-item label="状态">
-          <a-tag :color="currentSkill.enabled ? 'green' : 'red'">
-            {{ currentSkill.enabled ? '已启用' : '已禁用' }}
-          </a-tag>
-        </a-descriptions-item>
-      </a-descriptions>
-
-      <a-divider />
-
-      <h4>元数据</h4>
-      <a-card size="small" style="background: #f7f8fa;">
-        <pre style="white-space: pre-wrap; word-break: break-all;">{{ JSON.stringify(currentSkill.metadata || {}, null, 2) }}</pre>
-      </a-card>
-    </div>
-  </a-modal>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, onMounted, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { ref, reactive, onMounted } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
+import { Message } from '@arco-design/web-vue'
 import { useAppStore } from '@/stores/app'
 import { useSettingsStore } from '@/stores/settings'
-import { getQueryHistory } from '@/api/query'
-import type { QueryHistory } from '@/api/types'
-import { Message, Modal } from '@arco-design/web-vue'
-import {
-  IconSettings,
-  IconTool,
-  IconApps,
-  IconPlus,
-  IconRefresh,
-  IconDelete,
-  IconFile,
-  IconCheckCircle
-} from '@arco-design/web-vue/es/icon'
+import { startConversation, getQueryHistory, deleteQueryHistory } from '@/api/query'
 
-const route = useRoute()
 const router = useRouter()
+const route = useRoute()
 const appStore = useAppStore()
 const settingsStore = useSettingsStore()
 
-const showAgentSidebar = ref(true)
-const chatHistory = ref<QueryHistory[]>([])
+const chatHistory = ref<any[]>([])
+const sidebarCollapsed = ref(false)
+const profileVisible = ref(false)
+const modelStatusVisible = ref(false)
 
-// ===== 设置相关 =====
-const settingsVisible = ref(false)
-const activeTab = ref('status')
-const userProfile = ref({
-  name: '向云轩',
-  avatar: ''
+const profileForm = reactive({
+  username: '向云轩',
+  email: 'yunxuan@example.com',
+  role: '数据分析师'
 })
 
-// ===== 智能体状态 =====
-const agentStatus = ref({
-  color: 'green',
-  text: '运行中',
-  currentModel: 'gpt-3.5-turbo',
-  loadedSkills: 0,
-  coreTools: 8
+const modelConfig = reactive({
+  provider: '',
+  model_name: '',
+  base_url: ''
 })
 
-const agentInfo = ref({
-  totalTools: 0,
-  skillPaths: [],
-  enabledSkills: 0,
-  healthy: false
-})
-
-const modelConfig = ref({
-  llmModel: 'gpt-3.5-turbo',
-  temperature: 0.7,
-  maxRetries: 3,
-  timeout: 60
-})
-
-// ===== 技能管理 =====
-const skillsTab = ref('external')
-const skillsLoading = ref(false)
-const externalSkills = ref<any[]>([])
-const skillSearch = ref('')
-const coreSkills = ref([
-  { name: '意图分析', description: '分析用户查询的意图和需求' },
-  { name: '元数据检索', description: '检索数据源的元数据信息' },
-  { name: 'MQL生成', description: '将自然语言转换为MQL查询' },
-  { name: 'MQL验证', description: '验证生成的MQL是否正确' },
-  { name: 'MQL修正', description: '自动修正有误的MQL' },
-  { name: 'SQL转换', description: '将MQL转换为可执行的SQL' },
-  { name: '查询执行', description: '执行SQL查询并返回结果' },
-  { name: '结果分析', description: '分析查询结果并提供洞察' }
-])
-
-// ===== 加载技能弹窗 =====
-const loadSkillModalVisible = ref(false)
-const loadSkillMethod = ref('directory')
-const loadSkillForm = ref({
-  directory: 'backend/app/agents/external_skills',
-  skill_id: '',
-  url: '',
-  force_reload: false
-})
-
-// ===== 技能详情弹窗 =====
-const skillDetailVisible = ref(false)
-const currentSkill = ref<any>(null)
-
-async function showSkillDetail(skill: any) {
+// 加载历史对话
+const loadChatHistory = async () => {
   try {
-    const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'}`
-    const response = await fetch(`${API_BASE}/skills/info/${skill.skill_id}`)
-    const data = await response.json()
-    if (data.success) {
-      currentSkill.value = data.skill_info
-      skillDetailVisible.value = true
-    } else {
-      Message.error(`获取技能详情失败: ${data.message}`)
-    }
-  } catch (error: any) {
-    Message.error(`获取技能详情失败: ${error.message}`)
-  }
-}
-
-// ===== 计算属性 =====
-const filteredExternalSkills = computed(() => {
-  if (!skillSearch.value) {
-    return externalSkills.value
-  }
-  const keyword = skillSearch.value.toLowerCase()
-  return externalSkills.value.filter(
-    (skill) =>
-      skill.skill_id.toLowerCase().includes(keyword) ||
-      (skill.name && skill.name.toLowerCase().includes(keyword)) ||
-      (skill.description && skill.description.toLowerCase().includes(keyword))
-  )
-})
-
-async function fetchHistory() {
-  try {
-    const res = await getQueryHistory({ page: 1, page_size: 10 })
-    chatHistory.value = res.items
+    const response = await getQueryHistory({ page: 1, page_size: 50 })
+    chatHistory.value = response.items || []
   } catch (error) {
-    console.error('Failed to fetch history:', error)
+    console.error('加载历史对话失败:', error)
+    Message.error('加载历史对话失败')
   }
 }
 
-async function handleHistoryClick(id: string) {
-  showAgentSidebar.value = true;  // 确保显示Agent侧边栏
-  
-  // 根据当前路由决定跳转到哪个页面
-  const targetRoute = route.name === 'AgentQuery' ? 'AgentQuery' : 'Query'
-  router.push({ name: targetRoute, query: { id } });
-  
-  // 延迟刷新历史记录列表，确保路由变化完成
-  setTimeout(async () => {
-    await fetchHistory();
-  }, 100);
-}
-
-async function handleNewChat() {
-  showAgentSidebar.value = true;  // 确保显示Agent侧边栏
-  
-  // 根据当前路由决定跳转到哪个页面
-  const targetRoute = route.name === 'AgentQuery' ? 'AgentQuery' : 'Query'
-  router.push({ name: targetRoute, query: { t: Date.now() } })
-  
-  // 延迟刷新历史记录列表，确保路由变化完成
-  setTimeout(async () => {
-    await fetchHistory();
-  }, 100);
-}
-
-function toggleSidebarMode() {
-  showAgentSidebar.value = !showAgentSidebar.value
-}
-
-// 当前选中的菜单项
-const selectedKeys = computed(() => {
-  return [route.name as string]
-})
-
-// 展开的子菜单 - 使用ref实现双向绑定
-const openKeys = ref<string[]>([])
-
-// 根据路由自动展开对应的父菜单
-function updateOpenKeys() {
-  const routeName = route.name as string
-  // 定义菜单结构映射
-  const menuMap: Record<string, string> = {
-    'DataSources': 'Semantic',
-    'Datasets': 'Semantic',
-    'Metrics': 'Semantic',
-    'Dimensions': 'Semantic',
-    'Dictionaries': 'Semantic',
-    'Lineage': 'Semantic',
-    'ModelConfig': 'Settings',
-    'QueryConfig': 'Settings',
-    'AgentTest': 'Settings',
-    'Workbook': 'Air',
-    'Integration': 'Air',
-    'Consolidation': 'Air',
-    'AirAcceleration': 'Air',
-    'Catalog': 'Can',
-    'Application': 'Can',
-    'CanAcceleration': 'Can',
-    'CanSettings': 'Can',
-    'OperatorLineage': 'Big'
-  }
-  
-  const parentKey = menuMap[routeName]
-  if (parentKey && !openKeys.value.includes(parentKey)) {
-    openKeys.value = [...openKeys.value, parentKey]
-  }
-}
-
-// 面包屑
-const breadcrumbs = computed(() => {
-  const items: { title: string; path?: string }[] = []
-  route.matched.forEach(item => {
-    if (item.meta?.title) {
-      items.push({
-        title: item.meta.title as string,
-        path: item.path !== route.path ? item.path : undefined
-      })
-    }
-  })
-  return items
-})
-
-// 菜单点击处理
-function handleMenuClick(key: string) {
-  if (key === 'Query' || key === 'AgentQuery') {
-    showAgentSidebar.value = true
-  } else {
-    // 如果切换到非Query页面，重置为显示普通导航菜单
-    showAgentSidebar.value = false
-  }
-  router.push({ name: key })
-}
-
-// 跳转到模型配置页面
-function goToModelConfig() {
-  router.push({ name: 'ModelConfig' })
-}
-
-// ===== 设置相关 =====
-function openSettings() {
-  settingsVisible.value = true
-  refreshSkillsList()
-  loadAgentStatus()
-  loadAgentInfo()
-  checkAgentHealth()
-}
-
-function closeSettings() {
-  settingsVisible.value = false
-}
-
-async function loadAgentStatus() {
+// 加载模型配置
+const loadModelConfig = async () => {
   try {
-    const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'}`
-    const response = await fetch(`${API_BASE}/skills/stats`)
-    const data = await response.json()
-    if (data.success) {
-      agentStatus.value.loadedSkills = data.data?.total || 0
-      agentInfo.value.enabledSkills = data.data?.total || 0
+    await settingsStore.checkModelConfigStatus()
+    if (settingsStore.defaultModelConfig) {
+      modelConfig.provider = settingsStore.defaultModelConfig.provider || ''
+      modelConfig.model_name = settingsStore.defaultModelConfig.model_name || ''
+      modelConfig.base_url = settingsStore.defaultModelConfig.base_url || ''
     }
   } catch (error) {
-    console.error('Failed to load agent status:', error)
+    console.error('加载模型配置失败:', error)
   }
 }
 
-async function loadAgentInfo() {
+// 新建对话
+const handleNewChat = async () => {
   try {
-    const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'}`
-    const response = await fetch(`${API_BASE}/skills/agent/info`)
-    const data = await response.json()
-    if (data.success) {
-      agentInfo.value = {
-        totalTools: data.info?.total_tools || 0,
-        skillPaths: data.info?.skill_paths || [],
-        enabledSkills: data.info?.enabled_skills || 0,
-        healthy: data.info?.healthy || false
-      }
-    }
-  } catch (error) {
-    console.error('Failed to load agent info:', error)
-  }
-}
-
-async function checkAgentHealth() {
-  try {
-    const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'}`
-    const response = await fetch(`${API_BASE}/skills/health`)
-    const data = await response.json()
-    if (data.success) {
-      agentInfo.value.healthy = true
-    } else {
-      agentInfo.value.healthy = false
-      console.warn('Agent health check failed:', data.message)
-    }
-  } catch (error) {
-    agentInfo.value.healthy = false
-    console.error('Agent health check error:', error)
-  }
-}
-
-async function saveModelConfig() {
-  try {
-    // TODO: 调用API保存模型配置
-    Message.success('配置已保存')
-  } catch (error: any) {
-    Message.error(`保存失败: ${error.message}`)
-  }
-}
-
-// ===== 技能管理相关 =====
-async function refreshSkillsList() {
-  skillsLoading.value = true
-  try {
-    const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'}`
-    const response = await fetch(`${API_BASE}/skills/list`)
-    const data = await response.json()
-    if (data.success && data.data) {
-      externalSkills.value = data.data.map((skill: any) => ({
-        ...skill,
-        enabled: skill.enabled !== false
-      }))
-      agentStatus.value.loadedSkills = externalSkills.value.length
-    }
-  } catch (error: any) {
-    Message.error(`加载技能列表失败: ${error.message}`)
-  } finally {
-    skillsLoading.value = false
-  }
-}
-
-function openLoadSkillModal() {
-  loadSkillModalVisible.value = true
-}
-
-function closeLoadSkillModal() {
-  loadSkillModalVisible.value = false
-  loadSkillForm.value = {
-    directory: 'backend/app/agents/external_skills',
-    skill_id: '',
-    url: '',
-    force_reload: false
-  }
-}
-
-async function handleLoadSkill() {
-  if (loadSkillMethod.value === 'directory' && !loadSkillForm.value.directory) {
-    Message.warning('请输入目录路径')
-    return
-  }
-
-  if (loadSkillMethod.value === 'url' && (!loadSkillForm.value.skill_id || !loadSkillForm.value.url)) {
-    Message.warning('请填写技能ID和URL')
-    return
-  }
-
-  skillsLoading.value = true
-  try {
-    const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'}`
-    let url = ''
-    let body: any = {}
-
-    if (loadSkillMethod.value === 'directory') {
-      url = `${API_BASE}/skills/load/directory`
-      body = {
-        directory: loadSkillForm.value.directory,
-        force_reload: loadSkillForm.value.force_reload
-      }
-    } else {
-      url = `${API_BASE}/skills/load/url`
-      body = {
-        skill_id: loadSkillForm.value.skill_id,
-        url: loadSkillForm.value.url,
-        force_reload: loadSkillForm.value.force_reload
-      }
-    }
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body)
+    // 不需要调用 API，直接跳转到新对话页面
+    // 使用 timestamp 参数标识这是一个新对话
+    router.push({
+      path: '/agent-query',
+      query: { t: Date.now().toString() }
     })
-
-    const data = await response.json()
-    if (data.success) {
-      Message.success('技能加载成功')
-      closeLoadSkillModal()
-      await refreshSkillsList()
-    } else {
-      Message.error(`加载失败: ${data.message || '未知错误'}`)
-    }
-  } catch (error: any) {
-    Message.error(`加载失败: ${error.message}`)
-  } finally {
-    skillsLoading.value = false
+    Message.success('已创建新对话')
+  } catch (error) {
+    console.error('创建对话失败:', error)
+    Message.error('创建对话失败')
+    // 即使失败也跳转到新页面
+    router.push('/agent-query')
   }
 }
 
-async function toggleSkill(skill: any) {
-  skill.switching = true
-  try {
-    const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'}`
-    const response = await fetch(`${API_BASE}/agent/skills/toggle`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        skill_name: skill.name || skill.skill_id,
-        enabled: skill.enabled
-      })
-    })
-
-    const data = await response.json()
-    if (data.success) {
-      Message.success(`${skill.name || skill.skill_id} 已${skill.enabled ? '启用' : '禁用'}`)
-      await loadAgentStatus()
-    } else {
-      // 如果后端API调用失败，回滚状态
-      skill.enabled = !skill.enabled
-      Message.error(`操作失败: ${data.message || '未知错误'}`)
-    }
-
-    // 如果禁用，可以提示用户是否要卸载技能
-    if (!skill.enabled) {
-      Modal.confirm({
-        title: '提示',
-        content: '技能已禁用。是否要完全卸载该技能？',
-        okText: '卸载',
-        cancelText: '保留',
-        onOk: async () => {
-          await unloadSkill(skill.skill_id)
-        }
-      })
-    }
-  } catch (error: any) {
-    // 发生错误时回滚状态
-    skill.enabled = !skill.enabled
-    Message.error(`操作失败: ${error.message}`)
-  } finally {
-    skill.switching = false
-  }
-}
-
-async function unloadSkill(skillId: string) {
-  try {
-    const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'}`
-    const response = await fetch(`${API_BASE}/skills/unload/${skillId}`, {
-      method: 'DELETE'
-    })
-
-    const data = await response.json()
-    if (data.success) {
-      Message.success('技能已卸载')
-      await refreshSkillsList()
-    } else {
-      Message.error(`卸载失败: ${data.message || '未知错误'}`)
-    }
-  } catch (error: any) {
-    Message.error(`卸载失败: ${error.message}`)
-  }
-}
-
-async function unloadAllSkills() {
-  if (externalSkills.value.length === 0) {
-    Message.warning('没有可卸载的技能')
-    return
-  }
-
-  Modal.confirm({
-    title: '确认卸载',
-    content: `确定要卸载所有 ${externalSkills.value.length} 个技能吗？`,
-    okText: '确定',
-    cancelText: '取消',
-    onOk: async () => {
-      try {
-        const API_BASE = `${import.meta.env.VITE_API_BASE_URL || 'http://localhost:8011/api/v1'}`
-        const response = await fetch(`${API_BASE}/skills/unload/all`, {
-          method: 'DELETE'
-        })
-
-        const data = await response.json()
-        if (data.success) {
-          Message.success(`已卸载 ${data.unloaded?.length || 0} 个技能`)
-          await refreshSkillsList()
-        } else {
-          Message.error(`卸载失败: ${data.message || '未知错误'}`)
-        }
-      } catch (error: any) {
-        Message.error(`批量卸载失败: ${error.message}`)
-      }
-    }
+// 点击历史对话
+const handleHistoryClick = (id: string) => {
+  router.push({
+    path: '/agent-query',
+    query: { id }
   })
 }
 
-function filterSkills() {
-  // 搜索已在 computed 中处理
+// 删除历史对话
+const handleDeleteHistory = async (id: string) => {
+  try {
+    await deleteQueryHistory(id)
+    chatHistory.value = chatHistory.value.filter(
+      item => (item.conversation_id || item.id) !== id
+    )
+    Message.success('已删除历史对话')
+  } catch (error) {
+    console.error('删除失败:', error)
+    Message.error('删除失败')
+  }
 }
 
-// 初始化时检查模型配置状态
+// 用户菜单选择
+const handleUserMenuSelect = (value: string | number | Record<string, any> | undefined) => {
+  switch (value) {
+    case 'profile':
+      profileVisible.value = true
+      break
+    case 'model-status':
+      modelStatusVisible.value = true
+      break
+    case 'management':
+      router.push('/management')
+      break
+    case 'logout':
+      Message.info('退出登录功能开发中...')
+      break
+  }
+}
+
+// 跳转到模型配置
+const goToModelConfig = () => {
+  modelStatusVisible.value = false
+  router.push('/management/system/model')
+}
+
+// 测试模型连接
+const testModelConnection = async () => {
+  try {
+    Message.info('正在测试模型连接...')
+    await settingsStore.testDefaultModelAvailability()
+    if (settingsStore.isModelAvailable) {
+      Message.success('模型连接正常')
+    } else {
+      Message.error('模型连接失败')
+    }
+  } catch (error) {
+    console.error('模型连接测试失败:', error)
+    Message.error('模型连接测试失败')
+  }
+}
+
 onMounted(() => {
-  settingsStore.checkModelConfigStatus()
-  updateOpenKeys()
-  fetchHistory()
-
-  // 定期检查模型可用性（每5分钟）
-  setInterval(async () => {
-    if (settingsStore.isModelConfigured && settingsStore.defaultModelConfig) {
-      await settingsStore.testDefaultModelAvailability()
-    }
-  }, 5 * 60 * 1000)
+  loadChatHistory()
+  loadModelConfig()
 })
-
-// 路由变化时更新展开的菜单
-watch(() => route.name, () => {
-  updateOpenKeys()
-})
-
-// 监听路由参数变化，当进入查询历史详情时刷新历史列表
-watch(() => route.query, async (newQuery, oldQuery) => {
-  // 如果是Query页面并且有id参数变化，则刷新历史记录
-  if (route.name === 'Query' && newQuery.id && newQuery.id !== oldQuery.id) {
-    await fetchHistory();
-  }
-}, { immediate: false });
-
-// 监听路由路径变化，当进入Query页面时刷新历史记录
-watch(() => route.path, async (newPath, oldPath) => {
-  if (newPath.includes('/query') && !oldPath?.includes('/query')) {
-    await fetchHistory();
-  }
-});
 </script>
 
 <style scoped>
-.sidebar-header-actions {
-  padding: 0 16px 8px;
+/* ========================================
+   极简柔和设计 - Main Layout (纯对话模式)
+   ======================================== */
+
+.main-layout {
+  height: 100vh;
+  background: var(--bg-base);
+  overflow: hidden;
 }
 
-.empty-history {
-  padding: 8px 12px;
-  color: var(--color-text-4);
-  font-size: 12px;
-  text-align: center;
-}
-
+/* ===== 侧边栏 ===== */
 .sidebar-sider {
-  background: #f7f8fa !important;
+  background: var(--bg-elevated) !important;
+  border-right: 1px solid var(--border-light);
+  box-shadow: var(--shadow-sm);
+  transition: all var(--duration-base) var(--ease-smooth);
 }
 
+/* 穿透 Arco LayoutSider 内部容器，使其成为 flex 纵向布局 */
+.sidebar-sider :deep(.arco-layout-sider-children) {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ===== Logo ===== */
 .logo {
-  height: 64px;
+  height: 72px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
-  background: transparent;
-  border-bottom: none;
+  justify-content: center;
+  gap: var(--space-sm);
+  border-bottom: 1px solid var(--border-light);
+  position: relative;
+  flex-shrink: 0;
+}
+
+.logo::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: var(--space-lg);
+  right: var(--space-lg);
+  height: 1px;
+  background: var(--border-light);
+}
+
+.logo-icon {
+  font-size: 24px;
+  color: var(--soft-primary);
+  transition: transform var(--duration-base) var(--ease-smooth);
+}
+
+.sidebar-sider:hover .logo-icon {
+  transform: scale(1.05);
 }
 
 .logo-text {
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 700;
-  color: #1d2129;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
 }
 
-.fold-icon {
-  cursor: pointer;
-  color: #4e5969;
+/* ===== 收起/展开按钮 ===== */
+.toggle-wrapper {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0;
+  flex-shrink: 0;
 }
 
+.toggle-btn {
+  color: var(--text-tertiary);
+  font-size: 14px;
+}
+
+.toggle-btn:hover {
+  color: var(--soft-primary);
+  background: var(--soft-primary-lighter);
+}
+
+/* ===== 新建对话按钮 ===== */
 .new-chat-wrapper {
-  padding: 0 16px 16px;
+  padding: var(--space-sm) var(--space-md);
+  display: flex;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .new-chat-btn {
-  height: 36px;
-  border-radius: 6px;
-  font-weight: 600;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.01em;
+  box-shadow: var(--shadow-xs);
+  transition: all var(--duration-base) var(--ease-smooth);
 }
 
+.new-chat-btn:hover {
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
+}
+
+.new-chat-btn:active {
+  transform: translateY(0);
+}
+
+/* ===== 历史对话列表 ===== */
 .chat-history {
   flex: 1;
-  overflow-y: auto;
-  padding: 0 8px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--space-sm);
+  min-height: 0; /* 重要：允许 flex 子项收缩 */
 }
 
 .history-group {
-  margin-bottom: 24px;
+  flex: 1;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  padding: 0 var(--space-md);
+  min-height: 0; /* 重要：允许 flex 子项收缩 */
+}
+
+.history-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0; /* 重要：允许滚动 */
 }
 
 .group-title {
-  padding: 8px 12px;
+  padding: var(--space-sm) var(--space-md);
   font-size: 12px;
-  color: #86909c;
+  font-weight: 600;
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.history-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+/* 自定义滚动条 */
+.history-list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.history-list::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.history-list::-webkit-scrollbar-thumb {
+  background: var(--border-light);
+  border-radius: var(--radius-full);
+}
+
+.history-list::-webkit-scrollbar-thumb:hover {
+  background: var(--soft-primary-light);
 }
 
 .history-item {
-  padding: 8px 12px;
-  border-radius: 6px;
+  padding: var(--space-sm) var(--space-md);
+  border-radius: var(--radius-md);
   font-size: 13px;
-  color: #4e5969;
+  color: var(--text-secondary);
   cursor: pointer;
-  margin-bottom: 2px;
+  margin-bottom: var(--space-xs);
+  transition: all var(--duration-base) var(--ease-smooth);
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+
+.history-item::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 0;
+  background: var(--soft-primary);
+  border-radius: var(--radius-full);
+  transition: height var(--duration-base) var(--ease-smooth);
 }
 
 .history-item:hover {
-  background: #e5e6eb;
+  background: var(--bg-hover);
+  color: var(--text-primary);
+  padding-left: calc(var(--space-md) + 8px);
+}
+
+.history-item:hover .delete-icon {
+  opacity: 1;
+}
+
+.history-item:hover::before {
+  height: 60%;
 }
 
 .history-item.active {
-  background: #e8f3ff;
-  color: #165dff;
+  background: var(--soft-primary-lighter);
+  color: var(--soft-primary);
   font-weight: 600;
+  padding-left: calc(var(--space-md) + 8px);
 }
 
-.user-info {
-  margin-top: auto;
-  padding: 16px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border-top: 1px solid #e5e6eb;
-  color: #4e5969;
+.history-item.active::before {
+  height: 60%;
 }
 
-.user-name {
+.history-icon {
+  font-size: 11px;
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+
+.history-text {
   flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.settings-btn {
-  padding: 4px 8px;
-  margin-left: auto;
+.delete-icon {
+  font-size: 14px;
+  opacity: 0;
+  color: var(--text-tertiary);
+  transition: all var(--duration-base) var(--ease-smooth);
+  flex-shrink: 0;
 }
 
-.main-layout {
-  height: 100vh;
+.delete-icon:hover {
+  color: var(--color-danger);
+  transform: scale(1.2);
 }
 
-.layout-header {
+/* 空状态 */
+.empty-history {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-xxl);
+  color: var(--text-disabled);
+  gap: var(--space-sm);
+}
+
+.empty-icon {
+  font-size: 32px;
+  opacity: 0.5;
+}
+
+/* ===== 用户信息 ===== */
+.user-info {
+  padding: var(--space-sm) var(--space-md);
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  padding: 0 20px;
-  height: 64px;
-  background: var(--color-bg-1);
-  border-bottom: 1px solid var(--color-border);
+  justify-content: center;
+  gap: var(--space-sm);
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border-light);
+  flex-shrink: 0;
 }
 
-.header-left {
-  display: flex;
-  align-items: center;
+.user-avatar-wrapper {
+  cursor: pointer;
+  position: relative;
+  transition: transform var(--duration-base) var(--ease-smooth);
 }
 
-.header-right {
+.user-avatar-wrapper:hover {
+  transform: scale(1.05);
+}
+
+.user-avatar {
+  background: var(--soft-primary);
+  color: #fff;
+  transition: all var(--duration-base) var(--ease-smooth);
+}
+
+.dropdown-icon {
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  font-size: 10px;
+  background: var(--bg-elevated);
+  border-radius: 50%;
+  padding: 2px;
+  opacity: 0;
+  transition: opacity var(--duration-base) var(--ease-smooth);
+}
+
+.user-avatar-wrapper:hover .dropdown-icon {
+  opacity: 1;
+}
+
+.user-details {
+  flex: 1;
+  overflow: hidden;
+}
+
+.user-name {
+  font-weight: 600;
+  color: var(--text-primary);
+  font-size: 11px;
+  margin-bottom: 2px;
+}
+
+.user-role {
+  color: var(--text-tertiary);
+  font-size: 10px;
+}
+
+/* ===== 下拉菜单样式 ===== */
+::deep(.arco-dropdown-option) {
+  padding: var(--space-sm) var(--space-md);
+  transition: all var(--duration-base) var(--ease-smooth);
+}
+
+::deep(.arco-dropdown-option:hover) {
+  background: var(--soft-primary-lighter);
+}
+
+/* ===== 主内容区 ===== */
+.content-layout {
+  flex: 1;
+  background: var(--bg-base);
+  overflow: hidden;
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
 }
 
 .layout-content {
-  padding: 20px;
-  background: var(--color-bg-2);
-  overflow: auto;
+  flex: 1;
+  overflow: hidden;
+  background: var(--bg-base);
+  display: flex;
+  flex-direction: column;
 }
 
-/* 路由过渡动画 */
+/* ===== 页面切换动画 ===== */
 .fade-enter-active,
 .fade-leave-active {
-  transition: opacity 0.2s ease;
+  transition: opacity var(--duration-slow) var(--ease-smooth);
 }
 
 .fade-enter-from,
@@ -1220,157 +709,62 @@ watch(() => route.path, async (newPath, oldPath) => {
   opacity: 0;
 }
 
-/* 侧边栏样式覆盖 */
-:deep(.arco-layout-sider) {
-  background: var(--color-bg-1);
-  border-right: 1px solid var(--color-border);
+/* ===== 弹窗样式 ===== */
+.profile-modal :deep(.arco-modal-body),
+.model-status-modal :deep(.arco-modal-body) {
+  padding: var(--space-lg);
 }
 
-:deep(.arco-menu) {
-  height: calc(100vh - 64px);
-  overflow: auto;
-}
-
-/* ===== 设置弹窗样式 ===== */
-.settings-modal :deep(.arco-modal-body) {
-  max-height: calc(100vh - 200px);
-  overflow-y: auto;
-}
-
-.settings-content {
+.status-content {
   display: flex;
-  gap: 24px;
-  min-height: 500px;
+  flex-direction: column;
+  gap: var(--space-lg);
 }
 
-/* 左侧通用设置 */
-.settings-left {
-  width: 280px;
-  padding: 24px;
-  background: #f7f8fa;
-  border-radius: 4px;
-  flex-shrink: 0;
-}
-
-.user-profile {
-  text-align: center;
-}
-
-.profile-name {
-  margin: 16px 0 8px 0;
-  font-size: 18px;
-  font-weight: 600;
-  color: #1d2129;
-}
-
-.profile-role {
-  margin: 0;
-  color: #86909c;
-  font-size: 13px;
-}
-
-.profile-settings :deep(.arco-form-item-label-col) {
-  padding-bottom: 4px;
-}
-
-/* 右侧标签页 */
-.settings-right {
-  flex: 1;
-  min-width: 0;
-}
-
-.settings-right :deep(.arco-tabs-content) {
-  padding-top: 16px;
-}
-
-/* 智能体状态 */
-.status-panel h4 {
-  margin: 0 0 16px 0;
-  font-size: 14px;
-  color: #1d2129;
-}
-
-/* 技能管理 */
-.skills-panel {
-  height: 100%;
-}
-
-.skills-list {
-  max-height: 400px;
-  overflow-y: auto;
-}
-
-.skills-toolbar {
+.status-actions {
   display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid #e5e6eb;
+  gap: var(--space-md);
+  justify-content: flex-end;
 }
 
-.skills-count {
-  color: #86909c;
-  font-size: 13px;
-}
-
-.external-skills-section {
-  min-height: 400px;
-}
-
-.empty-skills {
+/* ===== 折叠态新建对话按钮 ===== */
+.new-chat-btn-collapsed {
+  width: 36px !important;
+  height: 36px !important;
+  min-width: 36px !important;
+  max-width: 36px !important;
+  padding: 0 !important;
+  border-radius: 50% !important;
   display: flex;
   align-items: center;
   justify-content: center;
-  height: 300px;
-  color: #c9cdd4;
+  box-shadow: var(--shadow-xs);
+  transition: all var(--duration-base) var(--ease-smooth);
 }
 
-/* 关于我们 */
-.about-panel {
-  padding: 16px;
+.new-chat-btn-collapsed:hover {
+  box-shadow: var(--shadow-sm);
+  transform: translateY(-1px);
 }
 
-.about-header {
-  text-align: center;
-  padding: 24px 0;
+/* ===== 折叠态侧边栏调整 ===== */
+.sidebar-sider :deep(.arco-layout-sider-collapsed) {
+  /* Arco 折叠态内部样式 */
 }
 
-.about-header h3 {
-  margin: 0 0 8px 0;
-  font-size: 20px;
-  color: #1d2129;
-}
+/* ===== 响应式 ===== */
+@media (max-width: 768px) {
+  .sidebar-sider {
+    position: fixed;
+    left: 0;
+    top: 0;
+    height: 100vh;
+    z-index: 1000;
+    transform: translateX(-100%);
+  }
 
-.version {
-  margin: 0;
-  color: #86909c;
-  font-size: 13px;
-}
-
-.about-content h4 {
-  margin: 16px 0 8px 0;
-  font-size: 14px;
-  color: #1d2129;
-}
-
-.about-content p {
-  margin: 8px 0;
-  color: #4e5969;
-  line-height: 1.6;
-}
-
-.about-content ul {
-  margin: 8px 0;
-  padding-left: 20px;
-  color: #4e5969;
-  line-height: 1.8;
-}
-
-.about-footer {
-  text-align: center;
-  margin-top: 24px;
-  color: #86909c;
-  font-size: 13px;
+  .sidebar-sider.mobile-open {
+    transform: translateX(0);
+  }
 }
 </style>

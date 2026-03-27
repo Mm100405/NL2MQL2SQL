@@ -78,15 +78,29 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import type { AnalysisStep } from '@/api/types'
 
 const props = defineProps<{
   steps: AnalysisStep[]
+  autoCollapse?: boolean
 }>()
 
 const expanded = ref(true)
+
+// 监听步骤变化，当所有步骤完成时自动收起
+watch(() => props.steps, (newSteps) => {
+  if (props.autoCollapse && newSteps.length > 0) {
+    const allComplete = newSteps.every(step => step.status === 'success' || step.status === 'error')
+    if (allComplete) {
+      // 延迟1秒后自动收起，让用户看到完成状态
+      setTimeout(() => {
+        expanded.value = false
+      }, 1000)
+    }
+  }
+}, { deep: true })
 
 async function copyToClipboard(text: string) {
   try {
@@ -100,36 +114,37 @@ async function copyToClipboard(text: string) {
 
 <style scoped>
 .analysis-process {
-  margin: 16px 0;
-  border-radius: 8px;
+  margin: 10px 0;
+  border-radius: 6px;
 }
 
 .process-header {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 6px;
+  padding: 6px 10px;
   cursor: pointer;
   color: var(--color-text-2);
-  font-size: 13px;
+  font-size: 12px;
+  font-weight: 500;
   width: fit-content;
   background: var(--color-fill-1);
-  border-radius: 20px;
+  border-radius: 13px;
 }
 
 .process-content {
-  margin-top: 16px;
-  padding-left: 8px;
+  margin-top: 10px;
+  padding-left: 6px;
 }
 
 .process-step {
   display: flex;
-  gap: 16px;
+  gap: 10px;
 }
 
 .step-line {
   position: relative;
-  width: 20px;
+  width: 14px;
   display: flex;
   justify-content: center;
 }
@@ -137,7 +152,7 @@ async function copyToClipboard(text: string) {
 .step-line::before {
   content: '';
   position: absolute;
-  top: 20px;
+  top: 14px;
   bottom: 0;
   width: 1px;
   background: var(--color-border);
@@ -150,58 +165,58 @@ async function copyToClipboard(text: string) {
 .step-dot {
   position: relative;
   z-index: 1;
-  width: 16px;
-  height: 16px;
+  width: 13px;
+  height: 13px;
   background: var(--color-bg-1);
   display: flex;
   align-items: center;
   justify-content: center;
   color: #165dff;
-  font-size: 16px;
+  font-size: 13px;
 }
 
 .dot-inner {
-  width: 8px;
-  height: 8px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: var(--color-border);
 }
 
 .step-main {
-  padding-bottom: 24px;
+  padding-bottom: 14px;
   flex: 1;
 }
 
 .step-title {
   font-weight: 600;
-  font-size: 14px;
+  font-size: 12px;
   color: var(--color-text-1);
-  margin-bottom: 8px;
+  margin-bottom: 5px;
 }
 
 .step-body {
   color: var(--color-text-2);
-  font-size: 13px;
-  line-height: 1.6;
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .content-line {
-  margin-bottom: 4px;
+  margin-bottom: 2px;
 }
 
 .mql-code-wrapper {
-  margin-top: 12px;
+  margin-top: 6px;
   background: #f8f9fb;
   border: 1px solid #e5e6eb;
-  border-radius: 8px;
+  border-radius: 5px;
   position: relative;
-  max-width: 600px;
+  max-width: 400px;
 }
 
 .mql-code-header {
   display: flex;
   justify-content: flex-end;
-  padding: 8px;
+  padding: 5px;
 }
 
 .copy-btn {
@@ -215,9 +230,9 @@ async function copyToClipboard(text: string) {
 
 .mql-code {
   margin: 0;
-  padding: 0 16px 16px;
+  padding: 0 10px 10px;
   font-family: 'Monaco', 'Menlo', monospace;
-  font-size: 12px;
+  font-size: 10px;
   color: #4e5969;
   overflow-x: auto;
   white-space: pre-wrap;
@@ -226,32 +241,32 @@ async function copyToClipboard(text: string) {
 .mql-expand {
   display: flex;
   justify-content: center;
-  padding: 4px;
+  padding: 3px;
   border-top: 1px solid #e5e6eb;
   cursor: pointer;
   color: #165dff;
 }
 
 .sql-code-wrapper {
-  margin-top: 12px;
+  margin-top: 6px;
   background: #f8f9fb;
   border: 1px solid #e5e6eb;
-  border-radius: 8px;
+  border-radius: 5px;
   position: relative;
-  max-width: 600px;
+  max-width: 400px;
 }
 
 .sql-code-header {
   display: flex;
   justify-content: flex-end;
-  padding: 8px;
+  padding: 5px;
 }
 
 .sql-code {
   margin: 0;
-  padding: 0 16px 16px;
+  padding: 0 10px 10px;
   font-family: 'Monaco', 'Menlo', monospace;
-  font-size: 12px;
+  font-size: 10px;
   color: #4e5969;
   overflow-x: auto;
   white-space: pre-wrap;
@@ -259,39 +274,39 @@ async function copyToClipboard(text: string) {
 }
 
 .insights-list {
-  margin-top: 12px;
+  margin-top: 6px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 5px;
 }
 
 .insight-item {
   display: flex;
   align-items: flex-start;
-  gap: 8px;
-  padding: 8px 12px;
+  gap: 6px;
+  padding: 6px 10px;
   background: #f0f5ff;
-  border-radius: 6px;
+  border-radius: 5px;
   color: var(--color-text-2);
-  font-size: 13px;
+  font-size: 11px;
 }
 
 .insight-icon {
   color: #165dff;
-  font-size: 14px;
-  margin-top: 2px;
+  font-size: 12px;
+  margin-top: 1px;
 }
 
 .tags-section {
-  margin-top: 12px;
+  margin-top: 6px;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
+  gap: 5px;
 }
 
 .tag-label {
-  font-size: 12px;
+  font-size: 10px;
   color: var(--color-text-3);
 }
 </style>
