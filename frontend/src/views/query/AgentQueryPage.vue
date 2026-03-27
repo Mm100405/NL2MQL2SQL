@@ -363,7 +363,7 @@
         </a-form-item>
         <a-form-item label="分析维度">
           <a-select v-model="adjustmentForm.dimensions" multiple placeholder="请选择分析维度">
-            <a-option v-for="d in adjustmentMetadata.dimensions" :key="d.id" :value="d.physical_column">{{ d.display_name || d.name }}</a-option>
+            <a-option v-for="d in adjustmentMetadata.dimensions" :key="d.id" :value="d.name">{{ d.display_name || d.name }}</a-option>
           </a-select>
         </a-form-item>
         <a-form-item label="过滤条件">
@@ -576,7 +576,21 @@ async function getViewMetadata(viewId: string): Promise<{ metrics: Metric[], dim
     getDimensions(baseTableId ? { dataset_id: baseTableId } : (viewId ? { view_id: viewId } : {}))
   ])
   
-  const result = { metrics, dimensions }
+  // 按 name 去重，避免重复显示
+  const seenMetricNames = new Set<string>()
+  const seenDimNames = new Set<string>()
+  const result = {
+    metrics: metrics.filter(m => {
+      if (seenMetricNames.has(m.name)) return false
+      seenMetricNames.add(m.name)
+      return true
+    }),
+    dimensions: dimensions.filter(d => {
+      if (seenDimNames.has(d.name)) return false
+      seenDimNames.add(d.name)
+      return true
+    })
+  }
   viewMetadataCache.value[viewId] = result
   return result
 }
@@ -2513,11 +2527,11 @@ function showDrillDown(result: FullQueryResponse) {
 async function showAdjustment(result: FullQueryResponse) {
   activeQueryResult.value = result
   adjustmentVisible.value = true
-  
-  // 提取当前已选的指标和维度
+
+  // 提取当前已选的指标和维度（后端已规范使用 name）
   adjustmentForm.value.metrics = result.mql?.metrics || []
   adjustmentForm.value.dimensions = result.mql?.dimensions || []
-  
+
   // 简单解析现有过滤条件（保留兼容旧格式）
   adjustmentForm.value.filters = flattenFilters(result.mql?.filters).map(f => ({ type: 'condition' as const, ...f }))
 
@@ -2559,20 +2573,24 @@ async function showAdjustment(result: FullQueryResponse) {
   const viewId = result.view_id || activeViewId.value
   if (viewId) {
     try {
-      const metadata = await getViewMetadata(viewId)
-      adjustmentMetadata.value = metadata
+      // getViewMetadata 已按 name 去重
+      adjustmentMetadata.value = await getViewMetadata(viewId)
     } catch (e) {
       console.error('Failed to load view metadata:', e)
-      // 降级使用全局元数据
+      // 降级使用全局元数据（需要去重）
+      const seenMetricNames = new Set<string>()
+      const seenDimNames = new Set<string>()
       adjustmentMetadata.value = {
-        metrics: allMetrics.value,
-        dimensions: allDimensions.value
+        metrics: allMetrics.value.filter(m => !seenMetricNames.has(m.name) && seenMetricNames.add(m.name)),
+        dimensions: allDimensions.value.filter(d => !seenDimNames.has(d.name) && seenDimNames.add(d.name))
       }
     }
   } else {
+    const seenMetricNames = new Set<string>()
+    const seenDimNames = new Set<string>()
     adjustmentMetadata.value = {
-      metrics: allMetrics.value,
-      dimensions: allDimensions.value
+      metrics: allMetrics.value.filter(m => !seenMetricNames.has(m.name) && seenMetricNames.add(m.name)),
+      dimensions: allDimensions.value.filter(d => !seenDimNames.has(d.name) && seenDimNames.add(d.name))
     }
   }
 }
