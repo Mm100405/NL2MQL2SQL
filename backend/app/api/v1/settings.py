@@ -2,6 +2,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from typing import List, Optional, Any
 from pydantic import BaseModel
+import httpx
+import json
+from pathlib import Path
 
 from app.database import get_db
 from app.models.model_config import ModelConfig
@@ -10,6 +13,67 @@ from app.services.llm_client import test_llm_connection
 from app.utils.encryption import encrypt_api_key, decrypt_api_key
 
 router = APIRouter()
+
+# ─── LLM 供应商配置加载 ───────────────────────────────────────────────────
+
+_PROVIDERS_FILE = Path(__file__).resolve().parent.parent.parent / "config" / "llm_providers.json"
+_providers_cache: Optional[dict] = None
+
+# 需要从 LiteLLM model_cost 中自动发现的额外供应商
+# key: 内部供应商标识, value: LiteLLM litellm_provider 名称
+_LITELLM_DISCOVER_PROVIDERS = {
+    "xai": {"litellmProvider": "xai", "label": "xAI (Grok)", "shortLabel": "xAI", "color": "#000000", "group": "international", "needApiKey": True, "showApiBase": False, "apiBase": "", "modelsEndpoint": None, "popularModels": []},
+    "cohere": None,  # 已在 JSON 中定义
+}
+
+
+def _load_providers_config() -> dict:
+    """加载并缓存供应商配置 JSON"""
+    global _providers_cache
+    if _providers_cache is None:
+        with open(_PROVIDERS_FILE, "r", encoding="utf-8") as f:
+            _providers_cache = json.load(f)
+    return _providers_cache
+
+
+def _invalidate_providers_cache():
+    """使供应商配置缓存失效（修改 JSON 后调用）"""
+    global _providers_cache
+    _providers_cache = None
+
+
+def _get_litellm_models_for_provider(litellm_provider: str) -> list[str]:
+    """从 LiteLLM 内置 model_cost 注册表提取指定供应商的模型列表
+
+    LiteLLM 维护了一个包含 2500+ 模型的注册表，无需网络调用即可获取。
+    """
+    try:
+        import litellm
+        models: list[str] = []
+        seen: set[str] = set()
+        for model_name, info in litellm.model_cost.items():
+            if not isinstance(info, dict):
+                continue
+            if info.get("litellm_provider") != litellm_provider:
+                continue
+            # 去除供应商前缀 (如 "azure/gpt-4" → "gpt-4", "xai/grok-2" → "grok-2")
+            clean = model_name
+            if "/" in clean:
+                clean = clean.split("/", 1)[1]
+            # 去除版本后缀标记 (如 "@001", ":0")
+            if "@" in clean or (":0" in clean and clean.count(":") == 1):
+                continue
+            # 过滤掉嵌入类模型和图像模型 (用户通常不需要)
+            lower = clean.lower()
+            if any(kw in lower for kw in ("embed", "tts", "speech", "dall-e", "flux", "image", "whisper", "stable-diffusion")):
+                continue
+            if clean and clean not in seen:
+                seen.add(clean)
+                models.append(clean)
+        models.sort(key=str.lower)
+        return models
+    except Exception:
+        return []
 
 
 # Pydantic Schemas
@@ -249,3 +313,151 @@ def update_system_setting(key: str, data: SystemSettingUpdate, db: Session = Dep
     db.commit()
     db.refresh(setting)
     return SystemSettingResponse(**setting.to_dict())
+
+
+# ─── LLM 供应商 & 模型动态查询 ─────────────────────────────────────────────
+
+
+@router.get("/llm/providers")
+def get_llm_providers():
+    """获取 LLM 供应商列表
+
+    数据来源：
+    1. 本地 JSON 配置文件（UI 元数据：颜色、标签、分组）
+    2. LiteLLM 内置注册表（自动发现未在 JSON 中定义的供应商）
+    3. 每个供应商会附加 LiteLLM 注册表中的模型数量
+    """
+    config = _load_providers_config()
+    providers = dict(config.get("providers", {}))
+
+    # 为 JSON 中的供应商查询 LiteLLM 模型数量
+    for key, cfg in providers.items():
+        litellm_p = cfg.get("litellmProvider")
+        if litellm_p:
+            models = _get_litellm_models_for_provider(litellm_p)
+            cfg["litellmModels"] = models
+            cfg["litellmModelCount"] = len(models)
+
+    # 从 LiteLLM 注册表发现 JSON 中未定义的供应商
+    try:
+        import litellm
+        discovered_providers: set[str] = set()
+        for info in litellm.model_cost.values():
+            if isinstance(info, dict):
+                lp = info.get("litellm_provider", "")
+                if lp and lp not in ("text-completion-openai", "text-completion-azure"):
+                    discovered_providers.add(lp)
+
+        # 排除已在 JSON 中定义的（通过 litellmProvider 映射）
+        mapped = {cfg.get("litellmProvider") for cfg in providers.values() if cfg.get("litellmProvider")}
+        for lp in sorted(discovered_providers - mapped):
+            if lp in ("openai", "anthropic", "azure", "deepseek", "mistral", "gemini", "cohere", "ollama", "bedrock", "vertex_ai"):
+                # 主流供应商已在 JSON 中，跳过
+                if any(cfg.get("litellmProvider") == lp for cfg in providers.values()):
+                    continue
+            # 为发现的供应商创建默认条目
+            label = lp.replace("_", " ").replace("-", " ").title()
+            models = _get_litellm_models_for_provider(lp)
+            if models:  # 只添加有可用模型的供应商
+                providers[f"litellm:{lp}"] = {
+                    "group": "other",
+                    "label": label,
+                    "shortLabel": lp.split("/")[-1][:12],
+                    "color": "#6b7280",
+                    "litellmProvider": lp,
+                    "needApiKey": True,
+                    "showApiBase": True,
+                    "apiBase": "",
+                    "modelsEndpoint": None,
+                    "popularModels": [],
+                    "litellmModels": models,
+                    "litellmModelCount": len(models),
+                    "_discovered": True,
+                }
+    except Exception:
+        pass
+
+    return {
+        "groups": config.get("groups", []),
+        "providers": providers,
+    }
+
+
+class FetchModelsRequest(BaseModel):
+    provider: str
+    api_key: Optional[str] = None
+    api_base: Optional[str] = None
+
+
+@router.post("/llm/models")
+async def fetch_llm_models(req: FetchModelsRequest):
+    """动态查询供应商的可用模型列表
+
+    优先级：
+    1. LiteLLM 内置注册表（瞬时返回，无需网络）
+    2. 供应商 API 端点（需网络，获取最新）
+    3. JSON 配置中的热门模型列表（兜底）
+    """
+    config = _load_providers_config()
+    provider_key = req.provider
+
+    # 处理 LiteLLM 自动发现的供应商（key 格式: "litellm:provider_name"）
+    if provider_key.startswith("litellm:"):
+        litellm_p = provider_key[len("litellm:"):]
+        models = _get_litellm_models_for_provider(litellm_p)
+        if models:
+            return {"models": models, "source": "litellm_registry"}
+        return {"models": [], "source": "empty"}
+
+    provider_cfg = config.get("providers", {}).get(provider_key)
+    if not provider_cfg:
+        raise HTTPException(status_code=404, detail=f"Unknown provider: {req.provider}")
+
+    # 优先级 1: LiteLLM 内置注册表
+    litellm_p = provider_cfg.get("litellmProvider")
+    if litellm_p:
+        litellm_models = _get_litellm_models_for_provider(litellm_p)
+        if litellm_models:
+            return {"models": litellm_models, "source": "litellm_registry"}
+
+    # 优先级 2: 供应商 API 端点
+    api_base = (req.api_base or provider_cfg.get("apiBase", "")).rstrip("/")
+    models_endpoint = provider_cfg.get("modelsEndpoint")
+
+    if api_base and models_endpoint:
+        try:
+            headers = {}
+            if req.api_key:
+                headers["Authorization"] = f"Bearer {req.api_key}"
+
+            url = f"{api_base}{models_endpoint}"
+
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(url, headers=headers)
+                resp.raise_for_status()
+                data = resp.json()
+
+            models: list[str] = []
+
+            if provider_key == "ollama":
+                for m in data.get("models", []):
+                    name = m.get("name", "")
+                    models.append(name.split(":")[0] if ":" in name else name)
+            else:
+                for m in data.get("data", []):
+                    model_id = m.get("id", "")
+                    if model_id and not model_id.startswith("ft:"):
+                        models.append(model_id)
+
+            models.sort(key=str.lower)
+            if models:
+                return {"models": models, "source": "api"}
+
+        except Exception as e:
+            # API 失败，继续到兜底
+            popular = provider_cfg.get("popularModels", [])
+            if popular:
+                return {"models": popular, "source": "fallback", "error": str(e)}
+
+    # 优先级 3: JSON 配置中的热门模型
+    return {"models": provider_cfg.get("popularModels", []), "source": "config"}

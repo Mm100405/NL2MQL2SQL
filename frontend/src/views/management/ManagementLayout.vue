@@ -49,9 +49,27 @@
         <a-sub-menu key="advanced">
           <template #icon><icon-bulb /></template>
           <template #title>高级模块</template>
-          <a-menu-item key="Workbook">AIR - 工作簿</a-menu-item>
-          <a-menu-item key="Catalog">CAN - 指标目录</a-menu-item>
-          <a-menu-item key="OperatorLineage">BIG - 算子血缘</a-menu-item>
+          <a-sub-menu key="air">
+            <template #icon><icon-cloud /></template>
+            <template #title>AIR</template>
+            <a-menu-item key="Workbook">工作簿</a-menu-item>
+            <a-menu-item key="Integration">数据集成</a-menu-item>
+            <a-menu-item key="Consolidation">数据整合</a-menu-item>
+            <a-menu-item key="AirAcceleration">数据加速</a-menu-item>
+          </a-sub-menu>
+          <a-sub-menu key="can">
+            <template #icon><icon-bar-chart /></template>
+            <template #title>CAN</template>
+            <a-menu-item key="Catalog">指标目录</a-menu-item>
+            <a-menu-item key="Application">指标应用</a-menu-item>
+            <a-menu-item key="CanAcceleration">指标加速</a-menu-item>
+            <a-menu-item key="CanSettings">管理设置</a-menu-item>
+          </a-sub-menu>
+          <a-sub-menu key="big">
+            <template #icon><icon-git-branch /></template>
+            <template #title>BIG</template>
+            <a-menu-item key="OperatorLineage">算子级血缘</a-menu-item>
+          </a-sub-menu>
         </a-sub-menu>
       </a-menu>
     </a-layout-sider>
@@ -100,7 +118,7 @@ const route = useRoute()
 
 const sidebarCollapsed = ref(false)
 const selectedKeys = ref<string[]>([])
-const openKeys = ref<string[]>(['data', 'system', 'advanced'])
+const openKeys = ref<string[]>(['data', 'system', 'advanced', 'air', 'can', 'big'])
 
 // 路由映射
 const routeMap: Record<string, { path: string; group: string }> = {
@@ -114,7 +132,13 @@ const routeMap: Record<string, { path: string; group: string }> = {
   QueryConfig: { path: '/management/system/query', group: 'system' },
   Lineage: { path: '/management/system/lineage', group: 'system' },
   Workbook: { path: '/management/advanced/air/workbook', group: 'advanced' },
+  Integration: { path: '/management/advanced/air/integration', group: 'advanced' },
+  Consolidation: { path: '/management/advanced/air/consolidation', group: 'advanced' },
+  AirAcceleration: { path: '/management/advanced/air/acceleration', group: 'advanced' },
   Catalog: { path: '/management/advanced/can/catalog', group: 'advanced' },
+  Application: { path: '/management/advanced/can/application', group: 'advanced' },
+  CanAcceleration: { path: '/management/advanced/can/acceleration', group: 'advanced' },
+  CanSettings: { path: '/management/advanced/can/settings', group: 'advanced' },
   OperatorLineage: { path: '/management/advanced/big/lineage', group: 'advanced' }
 }
 
@@ -130,8 +154,14 @@ const titleMap: Record<string, string> = {
   QueryConfig: '问数配置',
   Lineage: '血缘管理',
   Workbook: 'AIR - 工作簿',
+  Integration: 'AIR - 数据集成',
+  Consolidation: 'AIR - 数据整合',
+  AirAcceleration: 'AIR - 数据加速',
   Catalog: 'CAN - 指标目录',
-  OperatorLineage: 'BIG - 算子血缘'
+  Application: 'CAN - 指标应用',
+  CanAcceleration: 'CAN - 指标加速',
+  CanSettings: 'CAN - 管理设置',
+  OperatorLineage: 'BIG - 算子级血缘'
 }
 
 const currentPageTitle = computed(() => {

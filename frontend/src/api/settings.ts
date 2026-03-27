@@ -69,3 +69,40 @@ export function getSystemSetting(key: string): Promise<SystemSetting> {
 export function updateSystemSetting(key: string, data: { value: any, description?: string }): Promise<SystemSetting> {
   return request.put(`/settings/system/${key}`, data)
 }
+
+// --- LLM 供应商 & 模型动态查询 ---
+
+export interface ProviderGroup {
+  key: string
+  label: string
+}
+
+export interface ProviderConfig {
+  group: string
+  label: string
+  shortLabel: string
+  color: string
+  needApiKey: boolean
+  showApiBase: boolean
+  apiBase: string
+  popularModels: string[]
+}
+
+export interface LLMProvidersResponse {
+  groups: ProviderGroup[]
+  providers: Record<string, ProviderConfig>
+}
+
+// 获取供应商列表
+export function getLLMProviders(): Promise<LLMProvidersResponse> {
+  return request.get('/settings/llm/providers')
+}
+
+// 动态查询供应商可用模型
+export function fetchLLMModels(data: {
+  provider: string
+  api_key?: string
+  api_base?: string
+}): Promise<{ models: string[]; fallback?: boolean; error?: string }> {
+  return request.post('/settings/llm/models', data)
+}

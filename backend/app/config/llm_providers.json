@@ -1,0 +1,179 @@
+{
+  "_comment": "LLM 供应商配置 — UI 元数据（颜色、标签、分组）。模型列表从 LiteLLM 内置注册表动态获取。",
+  "groups": [
+    { "key": "international", "label": "国际主流" },
+    { "key": "domestic", "label": "国内主流" },
+    { "key": "local", "label": "本地部署" },
+    { "key": "other", "label": "其他" }
+  ],
+  "providers": {
+    "openai": {
+      "group": "international",
+      "label": "OpenAI",
+      "shortLabel": "OpenAI",
+      "color": "#10a37f",
+      "litellmProvider": "openai",
+      "needApiKey": true,
+      "showApiBase": false,
+      "apiBase": "https://api.openai.com/v1",
+      "modelsEndpoint": "/models",
+      "popularModels": ["gpt-4o", "gpt-4o-mini", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo", "o1", "o1-mini", "o3-mini"]
+    },
+    "anthropic": {
+      "group": "international",
+      "label": "Anthropic (Claude)",
+      "shortLabel": "Anthropic",
+      "color": "#d4a574",
+      "litellmProvider": "anthropic",
+      "needApiKey": true,
+      "showApiBase": false,
+      "apiBase": "https://api.anthropic.com",
+      "modelsEndpoint": null,
+      "popularModels": ["claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-opus-20240229", "claude-3-haiku-20240307", "claude-3-5-haiku-20241022"]
+    },
+    "gemini": {
+      "group": "international",
+      "label": "Google Gemini",
+      "shortLabel": "Gemini",
+      "color": "#4285f4",
+      "litellmProvider": "gemini",
+      "needApiKey": true,
+      "showApiBase": false,
+      "apiBase": "https://generativelanguage.googleapis.com",
+      "modelsEndpoint": "/v1beta/models",
+      "popularModels": ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-pro", "gemini-1.5-flash"]
+    },
+    "azure": {
+      "group": "international",
+      "label": "Azure OpenAI",
+      "shortLabel": "Azure",
+      "color": "#0078d4",
+      "litellmProvider": "azure",
+      "needApiKey": true,
+      "showApiBase": true,
+      "apiBase": "https://{resource}.openai.azure.com",
+      "modelsEndpoint": null,
+      "popularModels": []
+    },
+    "mistral": {
+      "group": "international",
+      "label": "Mistral AI",
+      "shortLabel": "Mistral",
+      "color": "#ff7000",
+      "litellmProvider": "mistral",
+      "needApiKey": true,
+      "showApiBase": false,
+      "apiBase": "https://api.mistral.ai/v1",
+      "modelsEndpoint": "/models",
+      "popularModels": ["mistral-large-latest", "mistral-medium-latest", "mistral-small-latest", "codestral-latest", "open-mistral-nemo"]
+    },
+    "cohere": {
+      "group": "international",
+      "label": "Cohere",
+      "shortLabel": "Cohere",
+      "color": "#39d353",
+      "litellmProvider": "cohere",
+      "needApiKey": true,
+      "showApiBase": false,
+      "apiBase": "https://api.cohere.ai",
+      "modelsEndpoint": null,
+      "popularModels": ["command-r-plus", "command-r", "command", "command-light"]
+    },
+    "deepseek": {
+      "group": "domestic",
+      "label": "DeepSeek (深度求索)",
+      "shortLabel": "DeepSeek",
+      "color": "#4d6bfe",
+      "litellmProvider": "deepseek",
+      "needApiKey": true,
+      "showApiBase": false,
+      "apiBase": "https://api.deepseek.com",
+      "modelsEndpoint": "/v1/models",
+      "popularModels": ["deepseek-chat", "deepseek-reasoner"]
+    },
+    "qwen": {
+      "group": "domestic",
+      "label": "通义千问 (Qwen)",
+      "shortLabel": "通义千问",
+      "color": "#6236ff",
+      "litellmProvider": null,
+      "needApiKey": true,
+      "showApiBase": true,
+      "apiBase": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      "modelsEndpoint": "/models",
+      "popularModels": ["qwen-max", "qwen-plus", "qwen-turbo", "qwen-long", "qwen-vl-max"]
+    },
+    "zhipu": {
+      "group": "domestic",
+      "label": "智谱AI (GLM)",
+      "shortLabel": "智谱AI",
+      "color": "#3b82f6",
+      "litellmProvider": null,
+      "needApiKey": true,
+      "showApiBase": true,
+      "apiBase": "https://open.bigmodel.cn/api/paas/v4",
+      "modelsEndpoint": "/v1/models",
+      "popularModels": ["glm-4-plus", "glm-4", "glm-4-flash", "glm-3-turbo"]
+    },
+    "moonshot": {
+      "group": "domestic",
+      "label": "Moonshot (月之暗面)",
+      "shortLabel": "Moonshot",
+      "color": "#7c3aed",
+      "litellmProvider": null,
+      "needApiKey": true,
+      "showApiBase": true,
+      "apiBase": "https://api.moonshot.cn/v1",
+      "modelsEndpoint": "/models",
+      "popularModels": ["moonshot-v1-8k", "moonshot-v1-32k", "moonshot-v1-128k"]
+    },
+    "baichuan": {
+      "group": "domestic",
+      "label": "百川智能",
+      "shortLabel": "百川",
+      "color": "#2563eb",
+      "litellmProvider": null,
+      "needApiKey": true,
+      "showApiBase": true,
+      "apiBase": "https://api.baichuan-ai.com/v1",
+      "modelsEndpoint": "/models",
+      "popularModels": ["Baichuan4", "Baichuan3-Turbo", "Baichuan3-Turbo-128k", "Baichuan2-Turbo"]
+    },
+    "yi": {
+      "group": "domestic",
+      "label": "零一万物",
+      "shortLabel": "零一万物",
+      "color": "#8b5cf6",
+      "litellmProvider": null,
+      "needApiKey": true,
+      "showApiBase": true,
+      "apiBase": "https://api.lingyiwanwu.com/v1",
+      "modelsEndpoint": "/models",
+      "popularModels": ["yi-large", "yi-lightning", "yi-large-turbo", "yi-vision"]
+    },
+    "ollama": {
+      "group": "local",
+      "label": "Ollama (本地)",
+      "shortLabel": "Ollama",
+      "color": "#6366f1",
+      "litellmProvider": "ollama",
+      "needApiKey": false,
+      "showApiBase": true,
+      "apiBase": "http://localhost:11434",
+      "modelsEndpoint": "/api/tags",
+      "popularModels": ["llama3.1", "llama3", "mistral", "qwen2.5", "qwen2", "gemma2", "codellama", "deepseek-coder-v2", "phi3"]
+    },
+    "custom": {
+      "group": "other",
+      "label": "自定义 (OpenAI兼容)",
+      "shortLabel": "自定义",
+      "color": "#6b7280",
+      "litellmProvider": null,
+      "needApiKey": true,
+      "showApiBase": true,
+      "apiBase": "",
+      "modelsEndpoint": "/v1/models",
+      "popularModels": []
+    }
+  }
+}

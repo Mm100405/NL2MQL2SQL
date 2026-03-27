@@ -10,7 +10,7 @@ class ModelConfig(Base):
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     name = Column(String(255), nullable=False)
-    provider = Column(String(50), nullable=False)  # openai, ollama, azure, custom
+    provider = Column(String(50), nullable=False)  # openai, anthropic, azure, deepseek, qwen, zhipu, moonshot, ollama, mistral, gemini, custom 等（通过 LiteLLM 统一调用）
     model_name = Column(String(255), nullable=False)  # gpt-4, gpt-3.5-turbo, llama3, etc.
     api_key = Column(Text, nullable=True)  # Encrypted API key
     api_base = Column(String(500), nullable=True)  # Custom API endpoint
