@@ -221,7 +221,7 @@
                 <div class="footer-left">
                   <span class="timestamp">{{ msg.queryResult.query_id }}</span>
                   <span v-if="msg.queryResult.dataFormatConfigId" class="config-id">
-                    API配置ID: {{ msg.queryResult.dataFormatConfigId }}
+                    <icon-code /> {{ msg.queryResult.dataFormatApiName || 'API接口' }}
                   </span>
                 </div>
                 <div class="footer-right">
@@ -1682,14 +1682,15 @@ async function generateDataFormatForQuery(queryResult: FullQueryResponse) {
     
     if (configResult.success) {
       queryResult.dataFormatConfigId = configResult.configId
+      queryResult.dataFormatApiName = configResult.apiName
       if (queryResult.steps) {
         queryResult.steps.push({
           title: '数据格式配置',
-          content: `数据格式配置已生成（ID: ${configResult.configId}），API端点：${configResult.apiEndpoint || '未生成'}`,
+          content: `接口【${configResult.apiName || '未命名'}】已生成，API端点：${configResult.apiEndpoint || '未生成'}`,
           status: 'success'
         })
       }
-      Message.success('数据格式配置已生成')
+      Message.success(`接口【${configResult.apiName || '未命名'}】已生成`)
 
       // 保存到历史记录
       if (conversationId.value) {

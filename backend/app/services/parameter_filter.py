@@ -436,7 +436,8 @@ def save_format_config(
     api_parameters_str: str,
     generation_result: Dict[str, Any],
     used_view_id: Optional[str],
-    db: Session
+    db: Session,
+    api_name: Optional[str] = None
 ) -> Any:
     """
     保存数据格式配置
@@ -448,6 +449,7 @@ def save_format_config(
         generation_result: 大模型生成结果
         used_view_id: 使用的视图ID
         db: 数据库会话
+        api_name: LLM生成的接口名称（可选，优先使用）
 
     Returns:
         保存的配置对象
@@ -459,10 +461,13 @@ def save_format_config(
 
     logger.info(f"[SaveConfig] 开始保存配置，target_format_example type: {type(target_format_example)}")
 
+    # 使用LLM生成的名称，如果没有则使用默认名称
+    config_name = api_name or generation_result.get("apiName") or f"配置_{natural_language[:20]}"
+
     # 创建配置
     config = DataFormatConfig(
         id=str(uuid.uuid4()),
-        name=f"配置_{natural_language[:20]}",
+        name=config_name,
         natural_language=natural_language,
         target_format_example=target_format_example,
         api_parameters_str=api_parameters_str,

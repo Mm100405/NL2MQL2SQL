@@ -1,7 +1,7 @@
 <template>
   <a-modal
     v-model:visible="visible"
-    title="API 调试"
+    :title="apiDocs?.name || 'API 调试'"
     width="1000px"
     @ok="handleClose"
     @cancel="handleClose"
@@ -13,7 +13,10 @@
         <h3>API 端点</h3>
       <a-alert type="info" class="api-endpoint">
         <template #icon><icon-link /></template>
-        <span class="endpoint-text">{{ apiDocs?.api?.endpoint || '未生成' }}</span>
+        <div class="endpoint-info">
+          <span class="api-name" v-if="apiDocs?.name">{{ apiDocs.name }}</span>
+          <span class="endpoint-text">{{ apiDocs?.api?.endpoint || '未生成' }}</span>
+        </div>
         <a-space>
           <a-button type="text" size="mini" @click="handleRegenerate" :loading="regenerating">
             重新生成
@@ -336,10 +339,24 @@ h3 {
     justify-content: space-between;
     gap: 12px;
 
-    .endpoint-text {
-      font-family: 'Monaco', 'Courier New', monospace;
-      font-size: 14px;
-      word-break: break-all;
+    .endpoint-info {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      flex: 1;
+
+      .api-name {
+        font-size: 15px;
+        font-weight: 600;
+        color: #1d2129;
+      }
+
+      .endpoint-text {
+        font-family: 'Monaco', 'Courier New', monospace;
+        font-size: 13px;
+        color: #86909c;
+        word-break: break-all;
+      }
     }
   }
 }
