@@ -1043,7 +1043,7 @@ async def get_external_api_detail(
     # 4. 构建返回结果
     result = {
         "url": config.generated_api.get("endpoint", "") if config.generated_api else "",
-        "sourceType": None,
+        "sourceType": "AI_ASK",
         "sourceId": config.view_id,
         "categoryName": category_name,
         "categoryId": category_id,
@@ -1057,7 +1057,7 @@ async def get_external_api_detail(
         "pathParams": {},
         "body": body_example,
         "parentId": category_id,
-        "timeout": None,
+        "timeout": 6000,
         "createTime": config.created_at.strftime("%Y-%m-%d %H:%M:%S") if config.created_at else None
     }
     

@@ -62,6 +62,7 @@ import { useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { getQueryHistory, deleteQueryHistory } from '@/api/query'
 import type { QueryHistory } from '@/api/types'
+import { sanitizeQueryParam } from '@/utils/sanitize'
 
 const router = useRouter()
 
@@ -117,9 +118,12 @@ function handleView(record: QueryHistory) {
 }
 
 function handleRerun(record: QueryHistory) {
+  // 净化查询参数，防止XSS
+  const sanitizedQuery = sanitizeQueryParam(record.natural_language, 1000)
+  
   router.push({
     name: 'Query',
-    query: { q: record.natural_language }
+    query: { q: sanitizedQuery }
   })
 }
 

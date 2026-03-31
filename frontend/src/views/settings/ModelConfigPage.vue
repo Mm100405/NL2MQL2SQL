@@ -82,7 +82,7 @@
                     :key="key"
                     class="provider-chip"
                     :class="{ active: form.provider === key }"
-                    :style="{ '--chip-color': cfg.color }"
+                    :style="{ '--chip-color': isValidColor(cfg.color) ? cfg.color : '#6b7280' }"
                     @click="selectProvider(key)"
                   >
                     <span class="chip-dot" />
@@ -136,7 +136,7 @@
                     <div
                       class="provider-chip"
                       :class="{ active: form.provider === key }"
-                      :style="{ '--chip-color': cfg.color }"
+                      :style="{ '--chip-color': isValidColor(cfg.color) ? cfg.color : '#6b7280' }"
                       @click="selectProvider(key)"
                     >
                       <span class="chip-dot" />
@@ -240,6 +240,7 @@ import {
   type ProviderConfig,
 } from '@/api/settings'
 import { useSettingsStore } from '@/stores/settings'
+import { isValidColor } from '@/utils/sanitize'
 
 const settingsStore = useSettingsStore()
 

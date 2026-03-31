@@ -487,6 +487,7 @@ import {
   IconApps
 } from '@arco-design/web-vue/es/icon'
 import { useSettingsStore } from '@/stores/settings'
+import { sanitizeText, sanitizeQueryParam } from '@/utils/sanitize'
 import ModelNotConfigured from '@/components/query/ModelNotConfigured.vue'
 import QuerySteps from '@/components/query/QuerySteps.vue'
 import ChartContainer from '@/components/common/ChartContainer.vue'
@@ -1961,11 +1962,11 @@ async function handleQuery() {
             if (eventType === 'step') {
               console.log('Stream step:', data)
               
-              // 将步骤添加到结果中（流式更新界面）
+              // 将步骤添加到结果中（流式更新界面）- 使用净化处理
               if (!res.steps) res.steps = []
               res.steps.push({
-                title: data.skill || data.node || data.title || '处理中',
-                content: data.message || data.description || data.content || '',
+                title: sanitizeText(data.skill || data.node || data.title) || '处理中',
+                content: sanitizeText(data.message || data.description || data.content),
                 status: 'success'
               })
               
