@@ -1269,6 +1269,11 @@ async function generateDataFormatForQuery(queryResult: FullQueryResponse) {
       requestData.existing_query_result = queryResultData
     }
     
+    // 传入视图ID（用于关联配置到特定视图）
+    if (queryResult.view_id) {
+      requestData.view_id = queryResult.view_id
+    }
+    
     console.log('发送数据格式配置请求:', JSON.stringify(requestData, null, 2))
     
     const configResult = await generateDataFormatConfig(requestData)

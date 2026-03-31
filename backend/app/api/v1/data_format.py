@@ -41,6 +41,7 @@ class GenerateConfigRequest(BaseModel):
     existing_mql: Optional[Dict[str, Any]] = None  # 前面 generate-mql 的返回 mql
     existing_sql: Optional[str] = None  # 前面 mql2sql 的返回 sql
     existing_query_result: Optional[ExistingQueryResult] = None  # 前面 execute 的返回结果（包含样本数据）
+    view_id: Optional[str] = None  # 结果面板绑定的视图ID
 
 
 class ValidateScriptRequest(BaseModel):
@@ -68,7 +69,8 @@ async def _process_generation(
     db: Session,
     existing_mql: Optional[Dict[str, Any]] = None,
     existing_sql: Optional[str] = None,
-    existing_query_result: Optional[ExistingQueryResult] = None
+    existing_query_result: Optional[ExistingQueryResult] = None,
+    view_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     处理配置生成的核心逻辑（生成、验证、筛选）
@@ -138,6 +140,11 @@ async def _process_generation(
         api_parameters_str=api_parameters,
         db=db
     )
+    
+    # 如果 filter_result 中没有 used_view_id，使用传入的 view_id
+    if not filter_result.get("used_view_id") and view_id:
+        filter_result["used_view_id"] = view_id
+        logger.info(f"[ProcessGeneration] 使用传入的 view_id: {view_id}")
 
     # 4. 生成动态MQL
     valid_params = filter_result.get("valid_parameters", [])
@@ -194,7 +201,8 @@ async def generate_format_config(
             db=db,
             existing_mql=request.existing_mql,
             existing_sql=request.existing_sql,
-            existing_query_result=request.existing_query_result
+            existing_query_result=request.existing_query_result,
+            view_id=request.view_id
         )
 
         # 验证失败

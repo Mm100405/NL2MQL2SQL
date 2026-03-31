@@ -16,6 +16,7 @@ export interface GenerateConfigRequest {
     total_count: number
     execution_time: number
   }
+  view_id?: string  // 结果面板绑定的视图ID
 }
 
 /**
