@@ -964,17 +964,21 @@ async def get_external_categories(
 
 @router.get("/external/apis")
 async def get_external_apis_by_category(
-    category_id: Optional[str] = None,
+    categoryId: Optional[str] = None,
+    name: Optional[str] = None,
     db: Session = Depends(get_db)
 ):
     """
-    根据分类ID或视图ID获取接口列表（供外部系统对接）
+    根据视图ID获取接口列表（供外部系统对接）
     
     Args:
-        category_id: 分类ID或视图ID（格式：view_xxx），可选
+        categoryId: 视图ID（格式：view_xxx），可选
         - 如果是分类ID：返回空数组（接口在视图级别，不在分类级别）
         - 如果是视图ID（view_xxx）：返回该视图下的接口列表
         - 如果不传：返回所有接口
+        
+        name: 接口名称，可选，支持模糊搜索
+        - 如果提供，则按接口名称模糊匹配
         
     注意：每次只返回下一级，不递归查找
     
@@ -1000,19 +1004,26 @@ async def get_external_apis_by_category(
     """
     from app.models.view import View
     
-    # 1. 如果是分类ID，直接返回空数组（接口在视图级别）
-    if category_id and not category_id.startswith("view_"):
+    # 1. 如果不传categoryId，直接返回空数组
+    if not categoryId:
         return []
     
-    # 2. 查询API配置
+    # 2. 如果是分类ID，直接返回空数组（接口在视图级别）
+    if not categoryId.startswith("view_"):
+        return []
+    
+    # 3. 查询API配置
     query = db.query(DataFormatConfig).filter(
         DataFormatConfig.status == "validated"
     )
     
-    # 3. 如果是视图ID，过滤该视图下的接口
-    if category_id and category_id.startswith("view_"):
-        view_id = category_id.replace("view_", "")
-        query = query.filter(DataFormatConfig.view_id == view_id)
+    # 4. 过滤该视图下的接口
+    view_id = categoryId.replace("view_", "")
+    query = query.filter(DataFormatConfig.view_id == view_id)
+    
+    # 5. 如果提供了name参数，添加模糊搜索条件
+    if name:
+        query = query.filter(DataFormatConfig.name.ilike(f"%{name}%"))
     
     configs = query.all()
     
