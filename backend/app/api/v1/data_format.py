@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from typing import List, Optional, Dict, Any, Union
 from pydantic import BaseModel
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -837,27 +838,29 @@ async def get_available_parameters(
 # ============ External Integration APIs ============
 # 外部系统对接接口，供第三方系统调用
 
-@router.get("/external/tree")
-async def get_external_api_tree(
+@router.get("/external/categories")
+async def get_external_categories(
     db: Session = Depends(get_db)
 ):
     """
-    获取已生成API的树结构（供外部系统对接）
+    获取API分类类别树（供外部系统对接）
     
-    按视图分类组织，返回树形结构
+    返回视图分类和视图组成的树形结构，只包含有实际数据的节点：
+    - 视图节点：只有当该视图下有接口数据时才显示
+    - 分类节点：只有当该分类下有视图或子分类时才显示（递归检查）
     
     Returns:
         [
             {
-                "id": "category_id",
-                "name": "分类名称",
+                "id": "1",
+                "name": "城管接口",
                 "parentId": null,
                 "children": [
                     {
-                        "id": "config_id",
-                        "name": "接口名称",
-                        "parentId": "category_id",
-                        "children": []
+                        "id": "view_xxx",
+                        "name": "事件类型视图",
+                        "parentId": "1",
+                        "children": null
                     }
                 ]
             }
@@ -866,117 +869,204 @@ async def get_external_api_tree(
     from app.models.view import View
     from app.models.view_category import ViewCategory
     
-    # 1. 获取所有已验证的API配置
-    configs = db.query(DataFormatConfig).filter(
+    # 1. 查询所有有接口的视图ID
+    config_view_ids = db.query(DataFormatConfig.view_id).filter(
         DataFormatConfig.status == "validated"
-    ).all()
+    ).distinct().all()
+    valid_view_ids = {str(vid[0]) for vid in config_view_ids if vid[0]}
     
-    # 2. 获取所有视图
-    views = db.query(View).all()
-    view_map = {v.id: v for v in views}
-    
-    # 3. 获取所有分类
+    # 2. 获取所有分类
     categories = db.query(ViewCategory).all()
-    category_map = {c.id: c for c in categories}
     
-    # 4. 构建分类树
+    # 3. 获取所有视图
+    views = db.query(View).all()
+    
+    # 4. 按分类ID组织视图（只保留有接口的视图）
+    views_by_category = {}
+    views_no_category = []
+    
+    for view in views:
+        # 只添加有接口的视图
+        if str(view.id) not in valid_view_ids:
+            continue
+        
+        if view.category_id:
+            if view.category_id not in views_by_category:
+                views_by_category[view.category_id] = []
+            views_by_category[view.category_id].append({
+                "id": f"view_{view.id}",
+                "name": view.display_name or view.name,
+                "parentId": view.category_id,
+                "children": None
+            })
+        else:
+            views_no_category.append({
+                "id": f"view_{view.id}",
+                "name": view.display_name or view.name,
+                "parentId": None,
+                "children": None
+            })
+    
+    # 5. 构建分类树（递归过滤空分类）
     def build_category_tree(categories: list) -> list:
-        """构建分类树"""
+        """构建分类树，只保留有实际数据的分类"""
         # 找出根分类
         root_categories = [c for c in categories if not c.parent_id]
         
         def build_node(category):
+            """构建分类节点，返回 None 表示该分类应该被过滤"""
+            # 找出子分类
+            children_categories = [c for c in categories if c.parent_id == category.id]
+            
+            # 构建子节点：先添加子分类，再添加视图
+            children = []
+            
+            # 添加子分类（递归构建，过滤掉返回 None 的子分类）
+            for child_cat in children_categories:
+                child_node = build_node(child_cat)
+                if child_node:  # 只添加非空的子分类
+                    children.append(child_node)
+            
+            # 添加该分类下的视图
+            if category.id in views_by_category:
+                children.extend(views_by_category[category.id])
+            
+            # 如果没有任何子节点，返回 None（表示该分类应该被过滤）
+            if not children:
+                return None
+            
             node = {
                 "id": category.id,
                 "name": category.name,
                 "parentId": category.parent_id,
-                "children": []
+                "children": children if children else None
             }
-            # 找出子分类
-            children = [c for c in categories if c.parent_id == category.id]
-            for child in children:
-                node["children"].append(build_node(child))
+            
             return node
         
         tree = []
         for root in root_categories:
-            tree.append(build_node(root))
+            node = build_node(root)
+            if node:  # 只添加非空的根分类
+                tree.append(node)
         
         return tree
     
-    # 5. 按分类组织API配置
-    config_by_category = {}
-    config_no_category = []
-    
-    for config in configs:
-        view = view_map.get(config.view_id)
-        if view and view.category_id:
-            if view.category_id not in config_by_category:
-                config_by_category[view.category_id] = []
-            config_by_category[view.category_id].append({
-                "id": config.id,
-                "name": config.name,
-                "parentId": view.category_id,
-                "children": []
-            })
-        else:
-            # 没有分类的配置，使用视图名称作为一级分类
-            if view:
-                category_name = view.category_name or view.display_name or view.name
-                # 使用视图ID作为虚拟分类ID
-                virtual_category_id = f"view_{view.id}"
-                if virtual_category_id not in config_by_category:
-                    config_by_category[virtual_category_id] = []
-                config_by_category[virtual_category_id].append({
-                    "id": config.id,
-                    "name": config.name,
-                    "parentId": virtual_category_id,
-                    "children": []
-                })
-            else:
-                config_no_category.append({
-                    "id": config.id,
-                    "name": config.name,
-                    "parentId": None,
-                    "children": []
-                })
-    
-    # 6. 构建最终树结构
+    # 6. 构建最终结果
     result = build_category_tree(categories)
     
-    # 7. 将配置添加到对应分类节点
-    def add_configs_to_tree(nodes: list):
-        """递归将配置添加到树节点"""
-        for node in nodes:
-            # 添加当前分类下的配置
-            if node["id"] in config_by_category:
-                node["children"].extend(config_by_category[node["id"]])
-            # 递归处理子节点
-            if node["children"]:
-                add_configs_to_tree(node["children"])
+    # 7. 添加没有分类的视图作为一级节点
+    if views_no_category:
+        result.extend(views_no_category)
     
-    add_configs_to_tree(result)
+    return result
+
+
+@router.get("/external/apis")
+async def get_external_apis_by_category(
+    category_id: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    根据分类ID或视图ID获取接口列表（供外部系统对接）
     
-    # 8. 处理虚拟分类（视图分类）
-    for virtual_id, configs_list in config_by_category.items():
-        if virtual_id.startswith("view_"):
-            view_id = virtual_id.replace("view_", "")
-            view = view_map.get(view_id)
-            if view:
-                result.append({
-                    "id": virtual_id,
-                    "name": view.category_name or view.display_name or view.name,
-                    "parentId": None,
-                    "children": configs_list
-                })
+    Args:
+        category_id: 分类ID或视图ID（格式：view_xxx），可选
+        - 如果是分类ID：返回空数组（接口在视图级别，不在分类级别）
+        - 如果是视图ID（view_xxx）：返回该视图下的接口列表
+        - 如果不传：返回所有接口
+        
+    注意：每次只返回下一级，不递归查找
     
-    # 9. 添加没有分类的配置
-    if config_no_category:
+    Returns:
+        [
+            {
+                "id": "23cce64e5ce808b7036fe82726b5f120",
+                "url": "/api/v1/data-format/custom/xxx",
+                "categoryName": "事件类型接口",
+                "categoryId": "17660cdc67933d6accf4561f4b504e7d",
+                "name": "事件类型树接口",
+                "method": 1,
+                "header": null,
+                "bodyType": 1,
+                "queryParams": null,
+                "pathParams": null,
+                "body": null,
+                "parentId": null,
+                "timeout": null,
+                "docUrl": null
+            }
+        ]
+    """
+    from app.models.view import View
+    
+    # 1. 如果是分类ID，直接返回空数组（接口在视图级别）
+    if category_id and not category_id.startswith("view_"):
+        return []
+    
+    # 2. 查询API配置
+    query = db.query(DataFormatConfig).filter(
+        DataFormatConfig.status == "validated"
+    )
+    
+    # 3. 如果是视图ID，过滤该视图下的接口
+    if category_id and category_id.startswith("view_"):
+        view_id = category_id.replace("view_", "")
+        query = query.filter(DataFormatConfig.view_id == view_id)
+    
+    configs = query.all()
+    
+    # 3. 获取视图和分类信息
+    views = db.query(View).all()
+    view_map = {v.id: v for v in views}
+    
+    # 4. 构建返回结果
+    result = []
+    for config in configs:
+        view = view_map.get(config.view_id)
+        
+        # 处理 parameter_mappings（可能是JSON字符串或列表）
+        parameter_mappings = config.parameter_mappings
+        if isinstance(parameter_mappings, str):
+            try:
+                parameter_mappings = json.loads(parameter_mappings)
+            except:
+                parameter_mappings = []
+        elif parameter_mappings is None:
+            parameter_mappings = []
+        
+        # 构建请求体示例
+        body_example = {}
+        if parameter_mappings:
+            for mapping in parameter_mappings:
+                if isinstance(mapping, dict):
+                    param_name = mapping.get("param_name", "")
+                    if param_name:
+                        body_example[param_name] = ""
+        
+        # 处理 generated_api（可能是JSON字符串或字典）
+        generated_api = config.generated_api
+        if isinstance(generated_api, str):
+            try:
+                generated_api = json.loads(generated_api)
+            except:
+                generated_api = None
+        
         result.append({
-            "id": "uncategorized",
-            "name": "未分类",
+            "id": config.id,
+            "url": generated_api.get("endpoint") if isinstance(generated_api, dict) else None,
+            "categoryName": view.display_name or view.name if view else None,
+            "categoryId": f"view_{view.id}" if view else None,
+            "name": config.name,
+            "method": 1,  # POST
+            "header": {"Content-Type": "application/json"} if body_example else None,
+            "bodyType": 1 if body_example else None,  # JSON
+            "queryParams": None,
+            "pathParams": None,
+            "body": body_example if body_example else None,
             "parentId": None,
-            "children": config_no_category
+            "timeout": None,
+            "docUrl": None
         })
     
     return result
@@ -1031,14 +1121,8 @@ async def get_external_api_detail(
             "totalCount": 0
         }
     
-    # 2. 获取关联的视图和分类
+    # 2. 获取关联的视图
     view = db.query(View).filter(View.id == config.view_id).first() if config.view_id else None
-    
-    category_id = None
-    category_name = None
-    if view:
-        category_id = view.category_id
-        category_name = view.category_name or view.display_name
     
     # 3. 构建请求体示例
     body_example = {}
@@ -1053,8 +1137,8 @@ async def get_external_api_detail(
         "url": config.generated_api.get("endpoint", "") if config.generated_api else "",
         "sourceType": "AI_ASK",
         "sourceId": config.view_id,
-        "categoryName": category_name,
-        "categoryId": category_id,
+        "categoryName": view.display_name or view.name if view else None,
+        "categoryId": f"view_{view.id}" if view else None,
         "name": config.name,
         "method": "POST",
         "bodyType": "JSON",
@@ -1064,7 +1148,7 @@ async def get_external_api_detail(
         "queryParams": {},
         "pathParams": {},
         "body": body_example,
-        "parentId": category_id,
+        "parentId": f"view_{view.id}" if view else None,
         "timeout": 6000,
         "createTime": config.created_at.strftime("%Y-%m-%d %H:%M:%S") if config.created_at else None
     }
