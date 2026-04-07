@@ -1,9 +1,20 @@
+# ⚠️ 关键：必须在所有其他导入之前加载环境变量
+from dotenv import load_dotenv
+load_dotenv()
+
+# 配置日志系统（必须在其他导入之前）
+from app.core.logging_config import setup_logging
+setup_logging()
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import logging
 import socket
 import os
+
+# 创建 logger
+logger = logging.getLogger(__name__)
 
 from app.config import settings
 from app.database import engine, Base
@@ -38,23 +49,10 @@ def get_cors_origins():
     local_ip = get_local_ip()
     if local_ip and local_ip not in origins:
         origins.append(f"http://{local_ip}:5173")
-        print(f"[CORS] 动态添加内网 IP: http://{local_ip}:5173")
+        logger.info(f"动态添加内网 IP: http://{local_ip}:5173")
     
     return origins
 
-
-# 配置日志系统
-log_dir = os.path.join(os.path.dirname(__file__), '..', 'logs')
-os.makedirs(log_dir, exist_ok=True)
-
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),  # 输出到控制台
-        logging.FileHandler(os.path.join(log_dir, 'app.log'), encoding='utf-8')  # 输出到文件
-    ]
-)
 
 app = FastAPI(
     title="NL2MQL2SQL API",
@@ -68,9 +66,7 @@ app = FastAPI(
 # 全局异常处理器
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    print(f"[GLOBAL ERROR] {type(exc).__name__}: {exc}")
-    import traceback
-    traceback.print_exc()
+    logger.exception(f"全局异常: {type(exc).__name__}: {exc}")
     return JSONResponse(
         status_code=500,
         content={"detail": str(exc)}
@@ -79,23 +75,25 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 @app.on_event("startup")
 async def startup_event():
-    print("=" * 60)
-    print("Application startup initiated")
-    print("=" * 60)
+    # ⚠️ 关键：uvicorn 启动后覆盖了日志配置，必须在此重新应用
+    setup_logging()
+
+    logger.info("=" * 60)
+    logger.info("Application startup initiated")
+    logger.info("=" * 60)
     
     # 显示 CORS 配置
     cors_origins = get_cors_origins()
-    print(f"[CORS] 允许的源地址：")
+    logger.info("CORS 允许的源地址：")
     for origin in cors_origins:
-        print(f"  - {origin}")
-    print()
+        logger.info(f"  - {origin}")
     
     # 自动创建数据库（如果不存在）
     from urllib.parse import urlparse, urlunparse
     from sqlalchemy import create_engine, text
     
     try:
-        print("Checking database existence...")
+        logger.info("Checking database existence...")
         # 解析数据库 URL
         parsed_url = urlparse(settings.DATABASE_URL)
         db_name = parsed_url.path.lstrip('/')
@@ -109,16 +107,14 @@ async def startup_event():
             # 检查数据库是否存在
             result = conn.execute(text(f"SHOW DATABASES LIKE '{db_name}'"))
             if result.fetchone() is None:
-                print(f"Creating database '{db_name}'...")
+                logger.info(f"Creating database '{db_name}'...")
                 conn.execute(text(f"CREATE DATABASE {db_name} DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"))
-                print(f"Database '{db_name}' created successfully")
+                logger.info(f"Database '{db_name}' created successfully")
             else:
-                print(f"Database '{db_name}' already exists")
+                logger.info(f"Database '{db_name}' already exists")
         engine.dispose()
     except Exception as e:
-        print(f"Database creation check failed: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"Database creation check failed: {e}")
         # 即使创建失败也继续，可能数据库已存在
     
     # 数据库迁移
@@ -126,7 +122,7 @@ async def startup_event():
     from alembic import command
     
     try:
-        print("Starting database migration...")
+        logger.info("Starting database migration...")
         # 设置alembic配置
         alembic_cfg = Config(os.path.join(os.path.dirname(__file__), "..", "alembic.ini"))
         alembic_cfg.set_main_option("script_location", os.path.join(os.path.dirname(__file__), "..", "alembic"))
@@ -137,18 +133,20 @@ async def startup_event():
         
         # 运行迁移至最新版本
         command.upgrade(alembic_cfg, "head")
-        print("Database migration completed successfully")
+        logger.info("Database migration completed successfully")
     except Exception as e:
-        print(f"Database migration failed: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"Database migration failed: {e}")
         # 即使迁移失败也不影响应用启动
         pass
+
+    # ⚠️ 关键：Alembic 的 command.upgrade() 会读取 alembic.ini 中的
+    # [logger_root] level=WARN，通过 logging.config.fileConfig() 覆盖
+    # root logger 的级别。必须在此重新应用我们的日志配置。
+    setup_logging()
     
-    print()
-    print("=" * 60)
-    print("Application startup completed - ready to serve requests")
-    print("=" * 60)
+    logger.info("=" * 60)
+    logger.info("Application startup completed - ready to serve requests")
+    logger.info("=" * 60)
 
 
 # CORS middleware

@@ -4,9 +4,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy import create_engine, text
 from decimal import Decimal
 import urllib.parse
+import logging
 
 from app.models.datasource import DataSource
 from app.utils.encryption import decrypt_api_key
+
+logger = logging.getLogger(__name__)
 
 
 def convert_decimal(value: Any) -> Any:
@@ -42,7 +45,7 @@ async def execute_query(
     
     if not datasource:
         # Return error if no datasource
-        print(f"[QueryExecutor] 数据源不存在: {datasource_id}")
+        logger.error(f"数据源不存在: {datasource_id}")
         return {
             "error": f"数据源不存在: {datasource_id}",
             "success": False
@@ -51,8 +54,8 @@ async def execute_query(
     # Build connection string
     connection_string = build_connection_string(datasource)
     
-    print(f"[QueryExecutor] 执行查询: {sql}")
-    print(f"[QueryExecutor] 数据源: {datasource.name} ({datasource.type})")
+    logger.info(f"执行查询: {sql}")
+    logger.info(f"数据源: {datasource.name} ({datasource.type})")
     
     try:
         # Execute query
@@ -62,13 +65,13 @@ async def execute_query(
             if "LIMIT" not in sql.upper():
                 sql = f"{sql} LIMIT {limit}"
 
-            print(f"[QueryExecutor] 连接成功，执行 SQL...")
+            logger.debug("连接成功，执行 SQL...")
             result = conn.execute(text(sql))
             columns = list(result.keys())
             data = [list(row) for row in result.fetchall()]
 
-            print(f"[QueryExecutor] 查询成功，返回 {len(data)} 行数据")
-            print(f"[QueryExecutor] 列名: {columns}")
+            logger.info(f"查询成功，返回 {len(data)} 行数据")
+            logger.debug(f"列名: {columns}")
 
             # 转换Decimal类型为float，便于JSON序列化
             data = convert_decimal(data)
@@ -82,9 +85,7 @@ async def execute_query(
             }
     except Exception as e:
         # Return error on exception
-        print(f"[QueryExecutor] 查询执行错误: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"查询执行错误: {e}")
         return {
             "error": f"查询执行失败: {str(e)}",
             "success": False

@@ -12,6 +12,7 @@ import asyncio
 import json
 from datetime import datetime
 import time
+import logging
 
 from app.database import get_db
 from app.models.model_config import ModelConfig
@@ -20,19 +21,20 @@ from app.agents.mql_agent import MQLAgent
 from app.utils.encryption import decrypt_api_key
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 # 全局存储查询步骤
 _query_steps_store = {}
 
 def print_query_steps_store():
     """打印步骤存储状态（用于调试）"""
-    print(f"\n=== Query Steps Store Debug ===")
-    print(f"Total queries: {len(_query_steps_store)}")
+    logger.debug(f"\n=== Query Steps Store Debug ===")
+    logger.debug(f"Total queries: {len(_query_steps_store)}")
     for qid, steps in _query_steps_store.items():
-        print(f"  Query {qid}: {len(steps)} steps")
+        logger.debug(f"  Query {qid}: {len(steps)} steps")
         for step in steps:
-            print(f"    - {step.get('title')}: {step.get('status')}")
-    print(f"===============================\n")
+            logger.debug(f"    - {step.get('title')}: {step.get('status')}")
+    logger.debug(f"===============================\n")
 
 
 # ============ Schemas ============
@@ -192,8 +194,7 @@ async def agent_query_stream(
     """
     import os
     query_id = str(uuid.uuid4())
-
-    print(f"[SSE Query] Received request: natural_language={request.natural_language}")
+    logger.info(f"SSE Query received: natural_language={request.natural_language}")
 
     async def event_stream():
         try:
@@ -228,7 +229,7 @@ async def agent_query_stream(
             # 定义步骤回调函数（直接推送到步骤存储）
             def step_callback(step_info):
                 """步骤回调，推送到步骤存储"""
-                print(f"[Step Callback] Node: {step_info.get('node')}, Title: {step_info.get('title')}")
+                logger.debug(f"Step Callback: Node: {step_info.get('node')}, Title: {step_info.get('title')}")
                 
                 if query_id not in _query_steps_store:
                     _query_steps_store[query_id] = []
@@ -330,7 +331,7 @@ async def agent_query_stream(
                     # 推送新步骤
                     while last_step_count < len(current_steps):
                         step = current_steps[last_step_count]
-                        print(f"[Pushing Step] {step.get('node')}: {step.get('title')}")
+                        logger.debug(f"Pushing Step: {step.get('node')}: {step.get('title')}")
                         yield format_sse_event("step", step)
                         last_step_count += 1
 
@@ -343,7 +344,7 @@ async def agent_query_stream(
                 current_steps = _query_steps_store[query_id]
                 while last_step_count < len(current_steps):
                     step = current_steps[last_step_count]
-                    print(f"[Pushing Remaining Step] {step.get('node')}: {step.get('title')}")
+                    logger.debug(f"Pushing Remaining Step: {step.get('node')}: {step.get('title')}")
                     yield format_sse_event("step", step)
                     last_step_count += 1
 
@@ -373,9 +374,7 @@ async def agent_query_stream(
                 })
 
         except Exception as e:
-            print(f"[Query Stream Error] {e}")
-            import traceback
-            traceback.print_exc()
+            logger.exception(f"Query Stream Error: {e}")
             yield format_sse_event("error", {"message": str(e)})
 
     return StreamingResponse(
@@ -483,7 +482,7 @@ async def event_stream_generator(
                 db.add(history)
                 db.commit()
             except Exception as e:
-                print(f"Failed to save query history: {e}")
+                logger.warning(f"Failed to save query history: {e}")
 
             yield format_sse_event("result", {
                 "natural_language": result.get('natural_language'),
@@ -495,7 +494,7 @@ async def event_stream_generator(
             })
 
     except Exception as e:
-        print(f"[Query Stream Error] {e}")
+        logger.exception(f"Query Stream Error: {e}")
         yield format_sse_event("error", {"message": str(e)})
 
 
@@ -836,8 +835,7 @@ async def parse_time_ranges(request: TimeRangeRequest, db: Session = Depends(get
         )
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"Failed to parse time ranges: {e}")
         return TimeRangeResponse(
             success=False,
             message=f"Failed to parse time ranges: {str(e)}",

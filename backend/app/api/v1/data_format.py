@@ -300,7 +300,6 @@ async def generate_format_config(
         import traceback
         error_detail = traceback.format_exc()
         logger.error(f"生成配置时出错: {str(e)}\n{error_detail}")
-        print(f"[ERROR] 生成配置时出错: {str(e)}\n{error_detail}")
         return {
             "success": False,
             "error": f"生成配置时出错: {str(e)}",
@@ -476,7 +475,6 @@ async def regenerate_config(
         import traceback
         error_detail = traceback.format_exc()
         logger.error(f"重新生成配置时出错: {str(e)}\n{error_detail}")
-        print(f"[ERROR] 重新生成配置时出错: {str(e)}\n{error_detail}")
         return {
             "success": False,
             "error": f"重新生成配置时出错: {str(e)}",

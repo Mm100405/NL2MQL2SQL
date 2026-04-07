@@ -15,6 +15,9 @@ from sqlalchemy.orm import Session
 import asyncio
 import json
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 # ============== 意图分析工具 ==============
@@ -47,7 +50,7 @@ async def analyze_intent(
     from app.agents.deep_agents.config import deep_agents_config
     
     if not deep_agents_config.enable_intent_analysis:
-        print(f"[analyze_intent] INFO 意图识别已禁用，返回默认值")
+        logger.info("意图识别已禁用，返回默认值")
         return {
             "success": True,
             "intent": {
@@ -67,7 +70,7 @@ async def analyze_intent(
 
         
         if not model_config["api_key"]:
-            print(f"[analyze_intent] WARN 未配置 API Key，返回默认意图")
+            logger.warning("未配置 API Key，返回默认意图")
             return {
                 "success": True,
                 "intent": {
@@ -99,7 +102,7 @@ async def analyze_intent(
         # 解析意图
         intent = _parse_intent_response(response)
         
-        print(f"[analyze_intent] OK 意图分析完成: {intent.get('intent_type')}, 复杂度: {intent.get('complexity')}")
+        logger.info(f"意图分析完成: {intent.get('intent_type')}, 复杂度: {intent.get('complexity')}")
         
         return {
             "success": True,
@@ -108,9 +111,7 @@ async def analyze_intent(
             "complexity": intent.get("complexity", "low")
         }
     except Exception as e:
-        print(f"[analyze_intent] WARN 意图分析失败: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"意图分析失败: {e}")
         # 失败时返回默认意图
         return {
             "success": True,
@@ -341,9 +342,7 @@ async def generate_mql(
             "interpretation": result.get("interpretation", f"生成的 MQL 用于查询: {natural_language}")
         }
     except Exception as e:
-        print(f"generate_mql 错误: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"generate_mql 错误: {e}")
         return {
             "success": False,
             "mql": None,
@@ -437,7 +436,7 @@ async def correct_mql_auto(
     """
     # 如果 MQL 为 None 或空，跳过修正
     if not mql or not isinstance(mql, dict):
-        print(f"[correct_mql_auto] MQL 为空或无效，跳过修正")
+        logger.warning("MQL 为空或无效，跳过修正")
         return {
             "success": False,
             "mql": {},
@@ -492,7 +491,7 @@ async def correct_mql_auto(
         # 生成修正说明
         corrections = [f"{e.code}: {e.message} -> {e.suggestion}" for e in errors if e.suggestion]
 
-        print(f"[correct_mql_auto] 修正完成，修正项: {len(corrections)}")
+        logger.info(f"修正完成，修正项: {len(corrections)}")
 
         return {
             "success": True,
@@ -501,9 +500,7 @@ async def correct_mql_auto(
             "validation_result": validation_result
         }
     except Exception as e:
-        print(f"[correct_mql_auto] 修正失败: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"修正失败: {e}")
         return {
             "success": False,
             "mql": mql,
@@ -547,7 +544,7 @@ async def correct_mql(
     
     # 如果 MQL 为 None 或空，跳过修正
     if not mql or not isinstance(mql, dict):
-        print(f"[correct_mql] WARN MQL 为空或无效，跳过修正")
+        logger.warning("MQL 为空或无效，跳过修正")
         return {
             "success": True,
             "mql": {},
@@ -560,7 +557,7 @@ async def correct_mql(
         model_config = _get_model_config(db_session)
         
         if not model_config["api_key"]:
-            print(f"[correct_mql] WARN 未配置 API Key，返回原始 MQL")
+            logger.warning("未配置 API Key，返回原始 MQL")
             return {
                 "success": True,
                 "mql": mql,
@@ -586,7 +583,7 @@ async def correct_mql(
         # 解析修正后的 MQL
         corrected_mql, corrections = _parse_correction_response(response)
         
-        print(f"[correct_mql] OK 修正完成，修正项: {len(corrections)}")
+        logger.info(f"修正完成，修正项: {len(corrections)}")
         
         return {
             "success": True,
@@ -594,9 +591,7 @@ async def correct_mql(
             "corrections": corrections
         }
     except Exception as e:
-        print(f"[correct_mql] WARN 修正失败: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"修正失败: {e}")
         # 失败时返回原始 MQL
         return {
             "success": False,
@@ -668,12 +663,10 @@ async def translate_to_sql(
                 },
             }
         except Exception as v2_err:
-            print(f"[translate_to_sql] V2 引擎失败: {v2_err}")
+            logger.error(f"V2 引擎失败: {v2_err}")
             raise
     except Exception as e:
-        print(f"translate_to_sql 错误: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"translate_to_sql 错误: {e}")
         return {
             "success": False,
             "sql": "",
@@ -731,14 +724,14 @@ async def execute_query(
         if datasources and len(datasources) > 0:
             # 使用传入的 datasources
             datasource_id = datasources[0]
-            print(f"[execute_query] 使用传入的数据源 ID: {datasource_id}")
+            logger.debug(f"使用传入的数据源 ID: {datasource_id}")
         else:
             # 回退到查询数据库获取第一个数据源
             from app.models.datasource import DataSource
             datasource = db_session.query(DataSource).first()
             
             if not datasource:
-                print(f"[execute_query] 没有可用的数据源")
+                logger.error("没有可用的数据源")
                 return {
                     "success": False,
                     "columns": [],
@@ -748,7 +741,7 @@ async def execute_query(
                 }
             
             datasource_id = datasource.id
-            print(f"[execute_query] 使用数据库查询的数据源: {datasource.name} (ID: {datasource.id})")
+            logger.info(f"使用数据库查询的数据源: {datasource.name} (ID: {datasource.id})")
         
         # 调用查询执行服务
         from app.services.query_executor import execute_query as exec_query
@@ -763,7 +756,7 @@ async def execute_query(
         # 检查执行结果
         if not result.get("success", True):
             error_msg = result.get("error", "查询执行失败")
-            print(f"[execute_query] 查询执行失败: {error_msg}")
+            logger.error(f"查询执行失败: {error_msg}")
             return {
                 "success": False,
                 "columns": [],
@@ -779,9 +772,7 @@ async def execute_query(
             "total_count": result.get("total_count", 0)
         }
     except Exception as e:
-        print(f"[execute_query] 错误: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"execute_query 错误: {e}")
         return {
             "success": False,
             "columns": [],
@@ -821,7 +812,7 @@ async def analyze_result(
     from app.agents.deep_agents.config import deep_agents_config
     
     if not deep_agents_config.enable_insight_analysis:
-        print(f"[analyze_result] INFO 洞察分析已禁用，返回默认值")
+        logger.info("洞察分析已禁用，返回默认值")
         return {
             "success": True,
             "interpretation": f"查询返回 {query_result.get('total_count', 0)} 条结果",
@@ -876,9 +867,7 @@ async def analyze_result(
             "visualization_suggestion": visualization
         }
     except Exception as e:
-        print(f"[analyze_result] 分析失败: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"analyze_result 分析失败: {e}")
         # 失败时返回简单总结
         return {
             "success": True,
@@ -894,7 +883,7 @@ async def analyze_result(
 def _get_model_config(db_session: Optional[Any]) -> Dict[str, Any]:
     """获取模型配置（使用系统配置）"""
     if not db_session:
-        print(f"[_get_model_config] WARN 数据库会话为空，返回默认配置")
+        logger.warning("数据库会话为空，返回默认配置")
         return {
             "provider": "openai",
             "model_name": "gpt-3.5-turbo",
@@ -914,16 +903,16 @@ def _get_model_config(db_session: Optional[Any]) -> Dict[str, Any]:
         ).first()
         
         if model_config:
-            print(f"[_get_model_config] OK 找到系统配置模型: {model_config.provider}/{model_config.model_name}")
+            logger.info(f"找到系统配置模型: {model_config.provider}/{model_config.model_name}")
             
             # 解密 API Key
             api_key = None
             if model_config.api_key:
                 try:
                     api_key = decrypt_api_key(model_config.api_key)
-                    print(f"[_get_model_config] OK API Key 解密成功")
+                    logger.debug("API Key 解密成功")
                 except Exception as e:
-                    print(f"[_get_model_config] WARN 解密 API Key 失败: {e}")
+                    logger.warning(f"解密 API Key 失败: {e}")
             
             config = {
                 "provider": model_config.provider,
@@ -934,15 +923,13 @@ def _get_model_config(db_session: Optional[Any]) -> Dict[str, Any]:
             }
             
             # 打印配置信息（隐藏敏感信息）
-            print(f"[_get_model_config] 模型配置: provider={config['provider']}, model={config['model_name']}, api_key={'已设置' if api_key else '未设置'}, api_base={config['api_base']}")
+            logger.debug(f"模型配置: provider={config['provider']}, model={config['model_name']}, api_key={'已设置' if api_key else '未设置'}, api_base={config['api_base']}")
             
             return config
         else:
-            print(f"[_get_model_config] WARN 未找到默认且激活的模型配置，返回默认配置")
+            logger.warning("未找到默认且激活的模型配置，返回默认配置")
     except Exception as e:
-        print(f"[_get_model_config] WARN 获取模型配置失败: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"获取模型配置失败: {e}")
     
     # 返回默认配置
     return {
@@ -1027,7 +1014,7 @@ def _parse_analysis_response(response: str) -> tuple:
             
             return summary, insights, viz_suggestion
     except Exception as e:
-        print(f"[_parse_analysis_response] 解析失败: {e}")
+        logger.warning(f"_parse_analysis_response 解析失败: {e}")
     
     # 解析失败，返回默认值
     return "", [], {"type": "table", "description": ""}
@@ -1082,15 +1069,13 @@ def _parse_correction_response(response: str) -> tuple:
             corrected_mql = data.get("mql", {})
             corrections = data.get("corrections", [])
             
-            print(f"[_parse_correction_response] 解析成功")
-            print(f"  - 修正项数量: {len(corrections)}")
-            print(f"  - 修正内容: {corrections}")
+            logger.debug(f"_parse_correction_response 解析成功")
+            logger.debug(f"  - 修正项数量: {len(corrections)}")
+            logger.debug(f"  - 修正内容: {corrections}")
             
             return corrected_mql, corrections
     except Exception as e:
-        print(f"[_parse_correction_response] 解析失败: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"_parse_correction_response 解析失败: {e}")
     
     # 解析失败，返回原始 MQL
     return {}, []
@@ -1154,17 +1139,15 @@ def _parse_intent_response(response: str) -> dict:
                 "complexity": data.get("complexity", "low")
             }
             
-            print(f"[_parse_intent_response] 解析成功")
-            print(f"  - 意图类型: {intent['intent_type']}")
-            print(f"  - 复杂度: {intent['complexity']}")
-            print(f"  - 建议指标: {intent['suggested_metrics']}")
-            print(f"  - 建议维度: {intent['suggested_dimensions']}")
+            logger.debug(f"_parse_intent_response 解析成功")
+            logger.debug(f"  - 意图类型: {intent['intent_type']}")
+            logger.debug(f"  - 复杂度: {intent['complexity']}")
+            logger.debug(f"  - 建议指标: {intent['suggested_metrics']}")
+            logger.debug(f"  - 建议维度: {intent['suggested_dimensions']}")
             
             return intent
     except Exception as e:
-        print(f"[_parse_intent_response] 解析失败: {e}")
-        import traceback
-        traceback.print_exc()
+        logger.exception(f"_parse_intent_response 解析失败: {e}")
     
     # 返回默认值
     return {

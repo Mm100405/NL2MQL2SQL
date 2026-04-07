@@ -18,11 +18,14 @@ MQL V2 完整字段（10个）：
 from re import S
 from typing import Optional, List, Dict, Any
 from sqlalchemy.orm import Session
+import logging
 
 from app.services.llm_client import call_llm
 from app.models.metric import Metric
 from app.models.dimension import Dimension
 from app.models.settings import SystemSetting
+
+logger = logging.getLogger(__name__)
 
 
 # Few-shot prompt template
@@ -630,7 +633,7 @@ def _build_metadata_strings(
             elif isinstance(val, list):
                 time_formats = val
     except Exception as e:
-        print(f"Error fetching time_formats from DB: {e}")
+        logger.warning(f"Error fetching time_formats from DB: {e}")
     
     # 格式：展示名 [name:逻辑名]，LLM 理解时用展示名，输出 MQL 时用逻辑名
     metrics_list = [f"- {m.display_name or m.name} [name:{m.name}]" for m in metrics]
@@ -777,7 +780,7 @@ async def parse_natural_language(
             query=natural_language,
             error_info=(f"\n上次生成的错误信息：\n{error_info}\n请根据错误信息修复后再输出全量 JSON。\n" if error_info else "") + quoted_mql_str
         )
-        print(prompt)
+        logger.debug(f"Prompt: {prompt}")
         try:
             response = await call_llm(
                 prompt=prompt,
@@ -863,12 +866,12 @@ async def parse_natural_language(
                 error_messages = [f"{e.code}: {e.message}" for e in result.errors]
                 error_info = "; ".join(error_messages)
                 current_attempt += 1
-                print(f"MQL Validation failed (Attempt {current_attempt}): {error_info}")
+                logger.warning(f"MQL Validation failed (Attempt {current_attempt}): {error_info}")
                 
         except Exception as e:
             error_info = f"JSON 解析或系统错误: {str(e)}"
             current_attempt += 1
-            print(f"MQL Parsing error (Attempt {current_attempt}): {str(e)}")
+            logger.warning(f"MQL Parsing error (Attempt {current_attempt}): {str(e)}")
 
     # 4. Final fallback or error return
     final_mql = last_mql or {
