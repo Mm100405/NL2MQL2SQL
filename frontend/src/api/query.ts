@@ -47,12 +47,31 @@ export function getConversationHistory(conversation_id: string): Promise<any> {
   return request.get(`/query/conversation/${conversation_id}`)
 }
 
-// 获取查询历史
+
+// 获取查询历史列表
 export function getQueryHistory(params?: {
   page?: number
   page_size?: number
 }): Promise<PaginatedResponse<QueryHistory>> {
   return request.get('/query/history', { params })
+}
+
+// 获取会话列表（兼容别名接口）
+export function getConversationList(params?: {
+  page?: number
+  page_size?: number
+}): Promise<PaginatedResponse<QueryHistory>> {
+  return request.get('/query/conversation/list', { params })
+}
+
+// 根据 query 参数获取对话历史（兼容别名接口）
+export function getConversationHistoryByQuery(conversation_id: string): Promise<QueryHistory> {
+  return request.get('/query/conversation/history', { params: { conversation_id } })
+}
+
+// 获取单条会话详情（兼容别名接口）
+export function getConversationDetail(id: string): Promise<QueryHistory> {
+  return request.get(`/query/conversation/detail/${id}`)
 }
 
 // 获取单条查询历史详情

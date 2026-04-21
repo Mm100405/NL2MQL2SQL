@@ -339,31 +339,23 @@ async def attribution_analysis(request: AttributionRequest, db: Session = Depend
     return {"message": "Attribution analysis feature coming soon"}
 
 
-@router.get("/history")
-def get_query_history(
-    page: int = 1,
-    page_size: int = 20,
-    db: Session = Depends(get_db)
-):
-    """获取查询历史（按对话ID分组，每个对话只显示一条最新记录）"""
+def _fetch_query_history_page(db: Session, page: int, page_size: int):
     from sqlalchemy import func
-    
-    # 子查询：获取每个conversation_id的最新记录ID
+
     subquery = db.query(
         QueryHistory.conversation_id,
         func.max(QueryHistory.created_at).label('max_created_at')
     ).group_by(QueryHistory.conversation_id).subquery()
-    
-    # 主查询：关联获取完整记录
+
     query = db.query(QueryHistory).join(
         subquery,
         (QueryHistory.conversation_id == subquery.c.conversation_id) &
         (QueryHistory.created_at == subquery.c.max_created_at)
     ).order_by(QueryHistory.created_at.desc())
-    
+
     total = query.count()
     items = query.offset((page - 1) * page_size).limit(page_size).all()
-    
+
     return {
         "items": [h.to_dict() for h in items],
         "total": total,
@@ -373,13 +365,68 @@ def get_query_history(
     }
 
 
-@router.get("/history/{id}")
-def get_query_history_detail(id: str, db: Session = Depends(get_db)):
-    """获取查询历史详情"""
+def _fetch_query_history_detail(db: Session, id: str):
     history = db.query(QueryHistory).filter(QueryHistory.id == id).first()
     if not history:
         raise HTTPException(status_code=404, detail="Query history not found")
     return history.to_dict()
+
+
+def _fetch_conversation_history(db: Session, conversation_id: str):
+    history = db.query(QueryHistory).filter(
+        QueryHistory.conversation_id == conversation_id
+    ).first()
+
+    if not history:
+        history = db.query(QueryHistory).filter(
+            QueryHistory.id == conversation_id
+        ).first()
+        if history and not history.conversation_id:
+            history.conversation_id = conversation_id
+            db.commit()
+
+    if not history:
+        raise HTTPException(status_code=404, detail="Conversation history not found")
+
+    return history.to_dict()
+
+
+@router.get("/history")
+def get_query_history(
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db)
+):
+    """获取查询历史（按对话ID分组，每个对话只显示一条最新记录）"""
+    return _fetch_query_history_page(db, page, page_size)
+
+
+@router.get("/history/{id}")
+def get_query_history_detail(id: str, db: Session = Depends(get_db)):
+    """获取查询历史详情"""
+    return _fetch_query_history_detail(db, id)
+
+
+@router.get("/conversation/list")
+def get_conversation_list(
+    page: int = 1,
+    page_size: int = 20,
+    db: Session = Depends(get_db)
+):
+    """获取会话列表（兼容别名，返回每个对话最新一条记录）"""
+    return _fetch_query_history_page(db, page, page_size)
+
+
+@router.get("/conversation/history")
+def get_conversation_history_by_query(conversation_id: str, db: Session = Depends(get_db)):
+    """根据 conversation_id 获取完整对话历史（兼容别名）"""
+    return _fetch_conversation_history(db, conversation_id)
+
+
+@router.get("/conversation/detail/{id}")
+def get_conversation_detail(id: str, db: Session = Depends(get_db)):
+    """获取单条会话记录详情（兼容别名，参数为 query_history.id）"""
+    return _fetch_query_history_detail(db, id)
 
 
 @router.delete("/history/{id}")
@@ -413,19 +460,19 @@ def save_conversation_history(
     """保存完整的对话历史记录"""
     messages = request.messages
     logger.info(f"保存对话历史, conversation_id: {conversation_id}, 消息数: {len(messages)}")
-    
+
     # 查找是否已存在该对话的历史记录
     existing_history = db.query(QueryHistory).filter(
         QueryHistory.conversation_id == conversation_id
     ).first()
-    
+
     if not existing_history:
         # 调试：查看数据库中最近的记录
         recent = db.query(QueryHistory).order_by(QueryHistory.created_at.desc()).limit(3).all()
         logger.debug(f"未找到，按conversation_id查询无结果。最近记录:")
         for h in recent:
             logger.debug(f"  id={h.id}, conv_id={h.conversation_id}")
-    
+
     # 如果没找到，尝试按记录ID查找（兼容旧记录）
     if not existing_history:
         logger.debug(f"按 conversation_id 未找到，尝试按 id 查找: {conversation_id}")
@@ -437,7 +484,7 @@ def save_conversation_history(
             logger.info(f"找到旧记录 {existing_history.id}，更新 conversation_id 为: {conversation_id}")
             existing_history.conversation_id = conversation_id
             db.commit()
-    
+
     if existing_history:
         logger.info(f"更新现有记录: {existing_history.id}")
         # 更新现有记录
@@ -464,21 +511,4 @@ def save_conversation_history(
 @router.get("/conversation/{conversation_id}")
 def get_conversation_history(conversation_id: str, db: Session = Depends(get_db)):
     """获取完整对话历史记录"""
-    history = db.query(QueryHistory).filter(
-        QueryHistory.conversation_id == conversation_id
-    ).first()
-    
-    # 如果没找到，尝试按记录ID查找（兼容旧记录没有conversation_id的情况）
-    if not history:
-        history = db.query(QueryHistory).filter(
-            QueryHistory.id == conversation_id
-        ).first()
-        # 如果找到旧记录，更新其conversation_id以保持一致性
-        if history and not history.conversation_id:
-            history.conversation_id = conversation_id
-            db.commit()
-    
-    if not history:
-        raise HTTPException(status_code=404, detail="Conversation history not found")
-    
-    return history.to_dict()
+    return _fetch_conversation_history(db, conversation_id)
