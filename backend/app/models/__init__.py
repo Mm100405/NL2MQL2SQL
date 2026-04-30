@@ -9,6 +9,10 @@ from app.models.settings import SystemSetting
 from app.models.air import Workbook, IntegrationTask, ConsolidationRule, DataAcceleration
 from app.models.can import MetricCatalog, MetricApplication, MetricAcceleration, SystemRole, AuditLog
 from app.models.big import LineageNode, LineageConnection, SQLAnalysis
+from app.models.view import View
+from app.models.view_category import ViewCategory
+from app.models.field_dict import FieldDictionary
+from app.models.data_format_config import DataFormatConfig
 
 __all__ = [
     "DataSource",
@@ -31,4 +35,8 @@ __all__ = [
     "LineageNode",
     "LineageConnection",
     "SQLAnalysis",
+    "View",
+    "ViewCategory",
+    "FieldDictionary",
+    "DataFormatConfig",
 ]

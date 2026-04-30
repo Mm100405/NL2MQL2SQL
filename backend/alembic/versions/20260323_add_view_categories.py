@@ -16,14 +16,34 @@ branch_labels = None
 depends_on = None
 
 
+def _inspector():
+    return sa.inspect(op.get_bind())
+
+
+def _has_table(name: str) -> bool:
+    return name in _inspector().get_table_names()
+
+
+def _has_column(table: str, column: str) -> bool:
+    if not _has_table(table):
+        return False
+    return column in {col['name'] for col in _inspector().get_columns(table)}
+
+
+def _has_index(table: str, index_name: str) -> bool:
+    if not _has_table(table):
+        return False
+    return index_name in {idx['name'] for idx in _inspector().get_indexes(table)}
+
+
 def upgrade() -> None:
-    op.add_column('views', sa.Column('category_id', sa.String(36), nullable=True))
-    op.add_column('views', sa.Column('category_name', sa.String(255), nullable=True))
-    # Create index on category_id
-    op.create_index('ix_views_category_id', 'views', ['category_id'])
+    if _has_table('views') and not _has_column('views', 'category_id'):
+        op.add_column('views', sa.Column('category_id', sa.String(36), nullable=True))
+    if _has_table('views') and not _has_column('views', 'category_name'):
+        op.add_column('views', sa.Column('category_name', sa.String(255), nullable=True))
+    if _has_table('views') and not _has_index('views', 'ix_views_category_id'):
+        op.create_index('ix_views_category_id', 'views', ['category_id'])
 
 
 def downgrade() -> None:
-    op.drop_index('ix_views_category_id', 'views')
-    op.drop_column('views', 'category_name')
-    op.drop_column('views', 'category_id')
+    pass

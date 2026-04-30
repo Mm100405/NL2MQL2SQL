@@ -13,6 +13,16 @@ import logging
 import socket
 import os
 
+if os.getenv("DISABLE_FASTAPI_THREADPOOL", "false").lower() == "true":
+    import fastapi.routing
+    import starlette.concurrency
+
+    async def run_sync_directly(func, *args, **kwargs):
+        return func(*args, **kwargs)
+
+    fastapi.routing.run_in_threadpool = run_sync_directly
+    starlette.concurrency.run_in_threadpool = run_sync_directly
+
 # 创建 logger
 logger = logging.getLogger(__name__)
 
@@ -126,18 +136,17 @@ async def startup_event():
         # 设置alembic配置
         alembic_cfg = Config(os.path.join(os.path.dirname(__file__), "..", "alembic.ini"))
         alembic_cfg.set_main_option("script_location", os.path.join(os.path.dirname(__file__), "..", "alembic"))
-        
+
         # 处理 Alembic 的 % 转义：将 % 替换为 %%
         db_url_for_alembic = settings.DATABASE_URL.replace('%', '%%')
         alembic_cfg.set_main_option("sqlalchemy.url", db_url_for_alembic)
-        
+
         # 运行迁移至最新版本
         command.upgrade(alembic_cfg, "head")
         logger.info("Database migration completed successfully")
     except Exception as e:
         logger.exception(f"Database migration failed: {e}")
-        # 即使迁移失败也不影响应用启动
-        pass
+        raise
 
     # ⚠️ 关键：Alembic 的 command.upgrade() 会读取 alembic.ini 中的
     # [logger_root] level=WARN，通过 logging.config.fileConfig() 覆盖

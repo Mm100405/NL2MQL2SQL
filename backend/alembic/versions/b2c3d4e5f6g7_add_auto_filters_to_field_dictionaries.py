@@ -16,11 +16,17 @@ branch_labels = None
 depends_on = None
 
 
+def _has_column(table: str, column: str) -> bool:
+    inspector = sa.inspect(op.get_bind())
+    if table not in inspector.get_table_names():
+        return False
+    return column in {col['name'] for col in inspector.get_columns(table)}
+
+
 def upgrade() -> None:
-    # 添加 auto_filters 列到 field_dictionaries 表
-    op.add_column('field_dictionaries', sa.Column('auto_filters', sa.JSON, nullable=True))
+    if not _has_column('field_dictionaries', 'auto_filters'):
+        op.add_column('field_dictionaries', sa.Column('auto_filters', sa.JSON, nullable=True))
 
 
 def downgrade() -> None:
-    # 删除 auto_filters 列
-    op.drop_column('field_dictionaries', 'auto_filters')
+    pass

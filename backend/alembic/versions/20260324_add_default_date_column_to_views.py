@@ -16,14 +16,20 @@ branch_labels = None
 depends_on = None
 
 
+def _has_column(table: str, column: str) -> bool:
+    inspector = sa.inspect(op.get_bind())
+    if table not in inspector.get_table_names():
+        return False
+    return column in {col['name'] for col in inspector.get_columns(table)}
+
+
 def upgrade() -> None:
-    # 添加 default_date_column_id 到 views 表
-    op.add_column(
-        'views',
-        sa.Column('default_date_column_id', mysql.VARCHAR(36), nullable=True)
-    )
+    if not _has_column('views', 'default_date_column_id'):
+        op.add_column(
+            'views',
+            sa.Column('default_date_column_id', mysql.VARCHAR(36), nullable=True)
+        )
 
 
 def downgrade() -> None:
-    # 移除 default_date_column_id
-    op.drop_column('views', 'default_date_column_id')
+    pass
