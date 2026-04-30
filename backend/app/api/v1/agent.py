@@ -458,31 +458,41 @@ async def event_stream_generator(
 
         # 发送结果事件
         if result:
-            # 保存查询历史
-            try:
-                history = QueryHistory(
-                    conversation_id=str(uuid.uuid4()),
-                    natural_language=natural_language,
-                    mql_query=result.get('mql'),
-                    sql_query=result.get('sql'),
-                    execution_time=execution_time,
-                    result_count=result.get('result', {}).get('total_count', 0) if result.get('result') else 0,
-                    status="success",
-                    messages=[
-                        {
-                            "role": "user",
-                            "content": natural_language
-                        },
-                        {
-                            "role": "assistant",
-                            "content": result.get('interpretation', '')
-                        }
-                    ]
-                )
-                db.add(history)
-                db.commit()
-            except Exception as e:
-                logger.warning(f"Failed to save query history: {e}")
+            result_payload = result.get('result') if isinstance(result.get('result'), dict) else None
+            is_success = bool(
+                result_payload
+                and result_payload.get('success', True)
+                and result_payload.get('columns') is not None
+                and result_payload.get('data') is not None
+            )
+
+            if is_success:
+                try:
+                    history = QueryHistory(
+                        conversation_id=str(uuid.uuid4()),
+                        natural_language=natural_language,
+                        mql_query=result.get('mql'),
+                        sql_query=result.get('sql'),
+                        execution_time=execution_time,
+                        result_count=result_payload.get('total_count', 0),
+                        status="success",
+                        messages=[
+                            {
+                                "role": "user",
+                                "content": natural_language
+                            },
+                            {
+                                "role": "assistant",
+                                "content": result.get('interpretation', '')
+                            }
+                        ]
+                    )
+                    db.add(history)
+                    db.commit()
+                except Exception as e:
+                    logger.warning(f"Failed to save query history: {e}")
+            else:
+                logger.info("Skip saving failed query history: %s", result.get('sql'))
 
             yield format_sse_event("result", {
                 "natural_language": result.get('natural_language'),

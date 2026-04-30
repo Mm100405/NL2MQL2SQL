@@ -361,6 +361,10 @@ def _fetch_query_history_page(db: Session, page: int, page_size: int):
     subquery = db.query(
         QueryHistory.conversation_id,
         func.max(QueryHistory.created_at).label('max_created_at')
+    ).filter(
+        QueryHistory.status == "success",
+        QueryHistory.sql_query.isnot(None),
+        QueryHistory.result_count.isnot(None)
     ).group_by(QueryHistory.conversation_id).subquery()
 
     query = db.query(QueryHistory).join(
@@ -382,7 +386,12 @@ def _fetch_query_history_page(db: Session, page: int, page_size: int):
 
 
 def _fetch_query_history_detail(db: Session, id: str):
-    history = db.query(QueryHistory).filter(QueryHistory.id == id).first()
+    history = db.query(QueryHistory).filter(
+        QueryHistory.id == id,
+        QueryHistory.status == "success",
+        QueryHistory.sql_query.isnot(None),
+        QueryHistory.result_count.isnot(None)
+    ).first()
     if not history:
         raise HTTPException(status_code=404, detail="Query history not found")
     return history.to_dict()
@@ -390,12 +399,18 @@ def _fetch_query_history_detail(db: Session, id: str):
 
 def _fetch_conversation_history(db: Session, conversation_id: str):
     history = db.query(QueryHistory).filter(
-        QueryHistory.conversation_id == conversation_id
+        QueryHistory.conversation_id == conversation_id,
+        QueryHistory.status == "success",
+        QueryHistory.sql_query.isnot(None),
+        QueryHistory.result_count.isnot(None)
     ).first()
 
     if not history:
         history = db.query(QueryHistory).filter(
-            QueryHistory.id == conversation_id
+            QueryHistory.id == conversation_id,
+            QueryHistory.status == "success",
+            QueryHistory.sql_query.isnot(None),
+            QueryHistory.result_count.isnot(None)
         ).first()
         if history and not history.conversation_id:
             history.conversation_id = conversation_id
