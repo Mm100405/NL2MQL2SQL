@@ -2,7 +2,7 @@
 # 后端 Dockerfile - FastAPI + Python 3.11
 # ================================================
 
-ARG PYTHON_IMAGE=docker.m.daocloud.io/library/python:3.11-slim-bookworm
+ARG PYTHON_IMAGE=docker.m.daocloud.io/library/python:3.11-slim-bullseye
 FROM ${PYTHON_IMAGE}
 
 WORKDIR /app
