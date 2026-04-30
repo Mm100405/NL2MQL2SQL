@@ -237,18 +237,6 @@ async def nl_to_result(request: QueryRequest, db: Session = Depends(get_db)):
     if datasource_id:
         query_result = await execute_query(sql, datasource_id, limit=1000, db=db)
         if not query_result.get("success", True):
-            execution_time = int((time.time() - start_time) * 1000)
-            history = QueryHistory(
-                natural_language=request.natural_language,
-                mql_query=mql,
-                sql_query=sql,
-                execution_time=execution_time,
-                result_count=0,
-                status="failed",
-                error_message=query_result.get("error", "查询执行失败")
-            )
-            db.add(history)
-            db.commit()
             raise HTTPException(status_code=400, detail=query_result.get("error", "查询执行失败"))
     else:
         # Use demo data if no datasource
@@ -361,10 +349,6 @@ def _fetch_query_history_page(db: Session, page: int, page_size: int):
     subquery = db.query(
         QueryHistory.conversation_id,
         func.max(QueryHistory.created_at).label('max_created_at')
-    ).filter(
-        QueryHistory.status == "success",
-        QueryHistory.sql_query.isnot(None),
-        QueryHistory.result_count.isnot(None)
     ).group_by(QueryHistory.conversation_id).subquery()
 
     query = db.query(QueryHistory).join(
@@ -386,12 +370,7 @@ def _fetch_query_history_page(db: Session, page: int, page_size: int):
 
 
 def _fetch_query_history_detail(db: Session, id: str):
-    history = db.query(QueryHistory).filter(
-        QueryHistory.id == id,
-        QueryHistory.status == "success",
-        QueryHistory.sql_query.isnot(None),
-        QueryHistory.result_count.isnot(None)
-    ).first()
+    history = db.query(QueryHistory).filter(QueryHistory.id == id).first()
     if not history:
         raise HTTPException(status_code=404, detail="Query history not found")
     return history.to_dict()
@@ -399,18 +378,12 @@ def _fetch_query_history_detail(db: Session, id: str):
 
 def _fetch_conversation_history(db: Session, conversation_id: str):
     history = db.query(QueryHistory).filter(
-        QueryHistory.conversation_id == conversation_id,
-        QueryHistory.status == "success",
-        QueryHistory.sql_query.isnot(None),
-        QueryHistory.result_count.isnot(None)
+        QueryHistory.conversation_id == conversation_id
     ).first()
 
     if not history:
         history = db.query(QueryHistory).filter(
-            QueryHistory.id == conversation_id,
-            QueryHistory.status == "success",
-            QueryHistory.sql_query.isnot(None),
-            QueryHistory.result_count.isnot(None)
+            QueryHistory.id == conversation_id
         ).first()
         if history and not history.conversation_id:
             history.conversation_id = conversation_id
