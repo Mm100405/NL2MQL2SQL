@@ -436,10 +436,13 @@ def get_conversation_detail(id: str, db: Session = Depends(get_db)):
 @router.delete("/history/{id}")
 def delete_query_history(id: str, db: Session = Depends(get_db)):
     """删除查询历史"""
-    history = db.query(QueryHistory).filter(QueryHistory.id == id).first()
-    if not history:
+    histories = db.query(QueryHistory).filter(QueryHistory.id == id).all()
+    if not histories:
+        histories = db.query(QueryHistory).filter(QueryHistory.conversation_id == id).all()
+    if not histories:
         raise HTTPException(status_code=404, detail="Query history not found")
-    db.delete(history)
+    for history in histories:
+        db.delete(history)
     db.commit()
     return {"message": "Deleted successfully"}
 
