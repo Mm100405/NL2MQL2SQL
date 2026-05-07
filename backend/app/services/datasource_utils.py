@@ -48,7 +48,7 @@ def build_connection_string(datasource_type: str, connection_config: Dict[str, A
     if datasource_type == DataSourceType.clickhouse.value:
         return f"clickhouse://{username}:{password}@{host}:{port}/{database}"
     if datasource_type == DataSourceType.dameng.value:
-        return f"dm://{username}:{password}@{host}:{port}/{database}"
+        return f"dm://{username}:{password}@{host}:{port}"
 
     raise ValueError(f"Unsupported database type: {datasource_type}")
 
