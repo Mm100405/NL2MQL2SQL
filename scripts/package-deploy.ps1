@@ -47,6 +47,7 @@ $excludeDirNames = @(
     ".cov",
     "coverage",
     "downloads",
+    "dmdbms",
     "eggs",
     ".eggs",
     "lib",

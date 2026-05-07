@@ -51,6 +51,7 @@ Thumbs.db
 /backend/logs/
 /backend/log/
 /backend/*.db
+/backend/vendor/dameng/dmdbms/
 
 # Frontend
 /frontend/dist/
