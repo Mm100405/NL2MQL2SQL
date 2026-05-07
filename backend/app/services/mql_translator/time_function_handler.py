@@ -72,6 +72,9 @@ class TimeFunctionHandler:
         "mysql": "mysql",
         "postgresql": "postgres",
         "postgres": "postgres",
+        "highgo": "postgres",
+        "dameng": "oracle",
+        "dm": "oracle",
         "clickhouse": "clickhouse",
         "duckdb": "duckdb",
         "sqlite": "sqlite",
@@ -275,7 +278,7 @@ class TimeFunctionHandler:
             # 使用对应方言的渲染方法处理占位符
             if self._ibis_dialect == "mysql":
                 return self._render_mysql(ibis_expr)
-            elif self._ibis_dialect in ("postgres", "postgresql"):
+            elif self._ibis_dialect in ("postgres", "postgresql", "oracle"):
                 return self._render_postgres(ibis_expr)
             elif self._ibis_dialect == "clickhouse":
                 return self._render_clickhouse(ibis_expr)
@@ -287,11 +290,10 @@ class TimeFunctionHandler:
             # 方法1：使用 ibis 内置编译
             # 创建一个内存表来编译表达式
             if self._ibis_dialect == "clickhouse":
-                # ClickHouse 特殊处理
                 return self._render_clickhouse(ibis_expr)
             elif self._ibis_dialect == "mysql":
                 return self._render_mysql(ibis_expr)
-            elif self._ibis_dialect in ("postgres", "postgresql"):
+            elif self._ibis_dialect in ("postgres", "postgresql", "oracle"):
                 return self._render_postgres(ibis_expr)
             elif self._ibis_dialect == "duckdb":
                 return self._render_duckdb(ibis_expr)
@@ -445,6 +447,22 @@ class TimeFunctionHandler:
                 "YYYY-MM-DD HH:mm": f"DATE_FORMAT({column}, '%Y-%m-%d %H:%i')",
             },
             "postgresql": {
+                "YYYY-MM-DD": f"TO_CHAR({column}, 'YYYY-MM-DD')",
+                "YYYY-MM": f"TO_CHAR({column}, 'YYYY-MM')",
+                "YYYY": f"TO_CHAR({column}, 'YYYY')",
+                "YYYY-WW": f"TO_CHAR({column}, 'IYYY-IW')",
+                "YYYY-MM-DD HH:mm:ss": f"TO_CHAR({column}, 'YYYY-MM-DD HH24:MI:SS')",
+                "YYYY-MM-DD HH:mm": f"TO_CHAR({column}, 'YYYY-MM-DD HH24:MI')",
+            },
+            "highgo": {
+                "YYYY-MM-DD": f"TO_CHAR({column}, 'YYYY-MM-DD')",
+                "YYYY-MM": f"TO_CHAR({column}, 'YYYY-MM')",
+                "YYYY": f"TO_CHAR({column}, 'YYYY')",
+                "YYYY-WW": f"TO_CHAR({column}, 'IYYY-IW')",
+                "YYYY-MM-DD HH:mm:ss": f"TO_CHAR({column}, 'YYYY-MM-DD HH24:MI:SS')",
+                "YYYY-MM-DD HH:mm": f"TO_CHAR({column}, 'YYYY-MM-DD HH24:MI')",
+            },
+            "oracle": {
                 "YYYY-MM-DD": f"TO_CHAR({column}, 'YYYY-MM-DD')",
                 "YYYY-MM": f"TO_CHAR({column}, 'YYYY-MM')",
                 "YYYY": f"TO_CHAR({column}, 'YYYY')",

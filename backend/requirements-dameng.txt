@@ -1,0 +1,10 @@
+# 达梦 Dameng 可选驱动依赖
+#
+# 用法：在确认现场 Python 版本、CPU 架构、达梦客户端版本与包源可用后执行：
+#   pip install -r requirements-dameng.txt
+#
+# 注意：不同现场提供的达梦 Python/SQLAlchemy 包名和版本可能不同；
+# 若下列包无法从当前 pip 源安装，请使用现场达梦安装介质提供的 wheel 包替代。
+
+SQLAlchemy-Dm
+dmPython

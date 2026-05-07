@@ -23,6 +23,8 @@ from sqlglot import exp, dialects
 DATASOURCE_TO_DIALECT: Dict[str, str] = {
     "mysql": "mysql",
     "postgresql": "postgres",
+    "highgo": "postgres",
+    "dameng": "oracle",
     "clickhouse": "clickhouse",
     "bigquery": "bigquery",
     "snowflake": "snowflake",
@@ -34,6 +36,7 @@ DATASOURCE_TO_DIALECT: Dict[str, str] = {
     "pg": "postgres",
     "postgres": "postgres",
     "postgre": "postgres",
+    "dm": "oracle",
 }
 
 

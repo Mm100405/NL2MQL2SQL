@@ -134,6 +134,8 @@
               <a-select v-model="createForm.sourceType" placeholder="请选择">
                 <a-option value="mysql">MySQL</a-option>
                 <a-option value="postgresql">PostgreSQL</a-option>
+                <a-option value="highgo">瀚高 HighGo</a-option>
+                <a-option value="dameng">达梦 Dameng</a-option>
                 <a-option value="oracle">Oracle</a-option>
                 <a-option value="sqlserver">SQL Server</a-option>
                 <a-option value="mongodb">MongoDB</a-option>
@@ -147,6 +149,8 @@
               <a-select v-model="createForm.targetType" placeholder="请选择">
                 <a-option value="clickhouse">ClickHouse</a-option>
                 <a-option value="postgresql">PostgreSQL</a-option>
+                <a-option value="highgo">瀚高 HighGo</a-option>
+                <a-option value="dameng">达梦 Dameng</a-option>
                 <a-option value="mysql">MySQL</a-option>
                 <a-option value="hive">Hive</a-option>
                 <a-option value="doris">Doris</a-option>
@@ -276,6 +280,8 @@ function getSourceColor(type: string) {
   const colors: Record<string, string> = {
     mysql: '#4479A1',
     postgresql: '#336791',
+    highgo: '#336791',
+    dameng: '#7A1FA2',
     oracle: '#F80000',
     kafka: '#231F20',
     api: '#165DFF',

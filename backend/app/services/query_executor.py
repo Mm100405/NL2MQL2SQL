@@ -1,13 +1,12 @@
 """Query Executor - Execute SQL queries on data sources"""
 from typing import Dict, List, Any, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from decimal import Decimal
-import urllib.parse
 import logging
 
-from app.models.datasource import DataSource
-from app.utils.encryption import decrypt_api_key
+from app.models.datasource import DataSource, DataSourceType
+from app.services.datasource_utils import create_datasource_engine, get_datasource_connection_config, normalize_datasource_type
 
 logger = logging.getLogger(__name__)
 
@@ -51,19 +50,13 @@ async def execute_query(
             "success": False
         }
     
-    # Build connection string
-    connection_string = build_connection_string(datasource)
-    
     logger.info(f"执行查询: {sql}")
     logger.info(f"数据源: {datasource.name} ({datasource.type})")
-    
+
     try:
-        # Execute query
-        engine = create_engine(connection_string)
+        engine = create_datasource_engine(datasource.type, get_datasource_connection_config(datasource))
         with engine.connect() as conn:
-            # Add LIMIT if not present
-            if "LIMIT" not in sql.upper():
-                sql = f"{sql} LIMIT {limit}"
+            sql = append_limit_clause(sql, limit, datasource.type)
 
             logger.debug("连接成功，执行 SQL...")
             result = conn.execute(text(sql))
@@ -92,38 +85,14 @@ async def execute_query(
         }
 
 
-def build_connection_string(datasource: DataSource) -> str:
-    """Build SQLAlchemy connection string from datasource config"""
-    
-    config = datasource.connection_config
-    db_type = datasource.type
-    
-    if db_type == "postgresql":
-        host = config.get("host", "localhost")
-        port = config.get("port", 5432)
-        database = config.get("database", "")
-        username = urllib.parse.quote_plus(config.get("username", ""))
-        password = urllib.parse.quote_plus(config.get("password", ""))
-        return f"postgresql://{username}:{password}@{host}:{port}/{database}"
-    
-    elif db_type == "mysql":
-        host = config.get("host", "localhost")
-        port = config.get("port", 3306)
-        database = config.get("database", "")
-        username = urllib.parse.quote_plus(config.get("username", ""))
-        password = urllib.parse.quote_plus(config.get("password", ""))
-        return f"mysql+pymysql://{username}:{password}@{host}:{port}/{database}"
-    
-    elif db_type == "clickhouse":
-        host = config.get("host", "localhost")
-        port = config.get("port", 8123)
-        database = config.get("database", "")
-        username = urllib.parse.quote_plus(config.get("username", ""))
-        password = urllib.parse.quote_plus(config.get("password", ""))
-        return f"clickhouse://{username}:{password}@{host}:{port}/{database}"
-    
-    else:
-        raise ValueError(f"Unsupported database type: {db_type}")
+def append_limit_clause(sql: str, limit: int, datasource_type: str) -> str:
+    normalized_type = normalize_datasource_type(datasource_type)
+    upper_sql = sql.upper()
+    if "LIMIT" in upper_sql or "FETCH FIRST" in upper_sql:
+        return sql
+    if normalized_type == DataSourceType.dameng.value:
+        return f"{sql} FETCH FIRST {limit} ROWS ONLY"
+    return f"{sql} LIMIT {limit}"
 
 
 def recommend_chart_type(columns: List[str], data: List[List]) -> str:

@@ -404,7 +404,14 @@ class SemanticContext:
         """获取 SQL 方言"""
         if datasource_id and datasource_id in self._datasources:
             ds = self._datasources[datasource_id]
-            return ds.type or "mysql"
+            datasource_type = (ds.type or "mysql").lower()
+            if datasource_type == "highgo":
+                return "postgresql"
+            if datasource_type in ("dameng", "dm"):
+                return "oracle"
+            if datasource_type in ("pg", "postgres"):
+                return "postgresql"
+            return datasource_type
         return "mysql"
 
     def get_datasource(self, datasource_id: str) -> Optional[DataSource]:

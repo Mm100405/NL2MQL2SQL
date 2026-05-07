@@ -10,6 +10,7 @@ from app.models.metric import Metric
 from app.models.dimension import Dimension
 from app.models.relation import DataRelation
 from app.models.view import View
+from app.services.datasource_utils import fetch_tables_and_columns, get_datasource_connection_config, normalize_datasource_type, test_connection
 
 router = APIRouter()
 
@@ -102,10 +103,11 @@ def get_datasource(id: str, db: Session = Depends(get_db)):
 def create_datasource(data: DataSourceCreate, db: Session = Depends(get_db)):
     source = DataSource(
         name=data.name,
-        type=data.type,
-        connection_config=data.connection_config,
+        type=normalize_datasource_type(data.type),
+        connection_config={},
         status="inactive"
     )
+    source.set_connection_config(data.connection_config)
     db.add(source)
     db.commit()
     db.refresh(source)
@@ -120,15 +122,14 @@ def update_datasource(id: str, data: DataSourceUpdate, db: Session = Depends(get
 
     update_data = data.model_dump(exclude_unset=True)
 
-    # 特殊处理 connection_config：如果 password 为 "******" 或空，则保留原密码
-    if "connection_config" in update_data:
-        connection_config = update_data["connection_config"]
-        if connection_config.get("password") in [None, "", "******"]:
-            # 保留原密码
-            connection_config["password"] = source.connection_config.get("password")
+    if "type" in update_data:
+        source.type = normalize_datasource_type(update_data["type"])
 
-    for key, value in update_data.items():
-        setattr(source, key, value)
+    if "name" in update_data:
+        source.name = update_data["name"]
+
+    if "connection_config" in update_data:
+        source.set_connection_config(update_data["connection_config"], preserve_existing_password=True)
 
     db.commit()
     db.refresh(source)
@@ -140,6 +141,15 @@ def delete_datasource(id: str, db: Session = Depends(get_db)):
     source = db.query(DataSource).filter(DataSource.id == id).first()
     if not source:
         raise HTTPException(status_code=404, detail="DataSource not found")
+
+    dataset_count = db.query(Dataset).filter(Dataset.datasource_id == id).count()
+    view_count = db.query(View).filter(View.datasource_id == id).count()
+    if dataset_count or view_count:
+        raise HTTPException(
+            status_code=400,
+            detail=f"DataSource is in use: {dataset_count} datasets, {view_count} views. Please delete dependent resources first."
+        )
+
     db.delete(source)
     db.commit()
     return {"message": "Deleted successfully"}
@@ -151,41 +161,8 @@ async def test_datasource_connection(id: str, db: Session = Depends(get_db)):
     if not source:
         raise HTTPException(status_code=404, detail="DataSource not found")
 
-    # Test connection based on database type
     try:
-        if source.type == "postgresql":
-            import psycopg2
-            conn = psycopg2.connect(
-                host=source.connection_config.get("host", "localhost"),
-                port=source.connection_config.get("port", 5432),
-                database=source.connection_config["database"],
-                user=source.connection_config.get("username", ""),
-                password=source.connection_config.get("password", "")
-            )
-            conn.close()
-        elif source.type == "mysql":
-            import pymysql
-            conn = pymysql.connect(
-                host=source.connection_config.get("host", "localhost"),
-                port=source.connection_config.get("port", 3306),
-                database=source.connection_config["database"],
-                user=source.connection_config.get("username", ""),
-                password=source.connection_config.get("password", "")
-            )
-            conn.close()
-        elif source.type == "clickhouse":
-            import clickhouse_driver
-            client = clickhouse_driver.Client(
-                host=source.connection_config.get("host", "localhost"),
-                port=source.connection_config.get("port", 9000),
-                database=source.connection_config["database"],
-                user=source.connection_config.get("username", "default"),
-                password=source.connection_config.get("password", "")
-            )
-            client.disconnect()
-        else:
-            raise HTTPException(status_code=400, detail=f"Unsupported database type: {source.type}")
-
+        test_connection(source.type, get_datasource_connection_config(source))
         source.status = "active"
         db.commit()
         return {"success": True, "message": "Connection successful"}
@@ -204,39 +181,7 @@ class ConnectionConfigTest(BaseModel):
 async def test_connection_config(data: ConnectionConfigTest):
     """测试连接配置，不需要先创建数据源"""
     try:
-        if data.type == "postgresql":
-            import psycopg2
-            conn = psycopg2.connect(
-                host=data.connection_config.get("host", "localhost"),
-                port=data.connection_config.get("port", 5432),
-                database=data.connection_config.get("database"),
-                user=data.connection_config.get("username", ""),
-                password=data.connection_config.get("password", "")
-            )
-            conn.close()
-        elif data.type == "mysql":
-            import pymysql
-            conn = pymysql.connect(
-                host=data.connection_config.get("host", "localhost"),
-                port=data.connection_config.get("port", 3306),
-                database=data.connection_config.get("database"),
-                user=data.connection_config.get("username", ""),
-                password=data.connection_config.get("password", "")
-            )
-            conn.close()
-        elif data.type == "clickhouse":
-            import clickhouse_driver
-            client = clickhouse_driver.Client(
-                host=data.connection_config.get("host", "localhost"),
-                port=data.connection_config.get("port", 9000),
-                database=data.connection_config.get("database"),
-                user=data.connection_config.get("username", "default"),
-                password=data.connection_config.get("password", "")
-            )
-            client.disconnect()
-        else:
-            raise HTTPException(status_code=400, detail=f"Unsupported database type: {data.type}")
-
+        test_connection(data.type, data.connection_config)
         return {"success": True, "message": "Connection successful"}
     except Exception as e:
         return {"success": False, "message": f"Connection failed: {str(e)}"}
@@ -245,131 +190,26 @@ async def test_connection_config(data: ConnectionConfigTest):
 @router.post("/datasources/{datasource_id}/sync")
 async def sync_physical_tables(datasource_id: str, db: Session = Depends(get_db)):
     """从数据源同步所有物理表到数据库"""
-    # 获取数据源
     datasource = db.query(DataSource).filter(DataSource.id == datasource_id).first()
     if not datasource:
         raise HTTPException(status_code=404, detail="DataSource not found")
 
-    tables = []
     try:
-        # 连接数据库获取表列表
-        if datasource.type == "postgresql":
-            import psycopg2
-            conn = psycopg2.connect(
-                host=datasource.connection_config.get("host", "localhost"),
-                port=datasource.connection_config.get("port", 5432),
-                database=datasource.connection_config["database"],
-                user=datasource.connection_config.get("username", ""),
-                password=datasource.connection_config.get("password", "")
-            )
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT table_name, table_schema
-                FROM information_schema.tables
-                WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-            """)
-            for table_name, schema_name in cursor.fetchall():
-                cursor.execute("""
-                    SELECT column_name, data_type, is_nullable
-                    FROM information_schema.columns
-                    WHERE table_name = %s AND table_schema = %s
-                    ORDER BY ordinal_position
-                """, (table_name, schema_name))
-                columns = [
-                    {
-                        "name": col[0],
-                        "type": col[1],
-                        "nullable": col[2] == "YES",
-                        "comment": ""
-                    }
-                    for col in cursor.fetchall()
-                ]
-                tables.append({
-                    "name": table_name,
-                    "physical_name": table_name,
-                    "schema_name": schema_name,
-                    "columns": columns
-                })
-            conn.close()
+        tables = fetch_tables_and_columns(datasource.type, get_datasource_connection_config(datasource))
 
-        elif datasource.type == "mysql":
-            import pymysql
-            conn = pymysql.connect(
-                host=datasource.connection_config.get("host", "localhost"),
-                port=datasource.connection_config.get("port", 3306),
-                database=datasource.connection_config["database"],
-                user=datasource.connection_config.get("username", ""),
-                password=datasource.connection_config.get("password", "")
-            )
-            cursor = conn.cursor()
-            cursor.execute("SHOW TABLES")
-            for (table_name,) in cursor.fetchall():
-                cursor.execute(f"SHOW FULL COLUMNS FROM `{table_name}`")
-                columns = [
-                    {
-                        "name": col[0],
-                        "type": col[1],
-                        "nullable": col[3] == "YES",
-                        "comment": col[8] or ""
-                    }
-                    for col in cursor.fetchall()
-                ]
-                tables.append({
-                    "name": table_name,
-                    "physical_name": table_name,
-                    "schema_name": datasource.connection_config["database"],
-                    "columns": columns
-                })
-            conn.close()
-
-        elif datasource.type == "clickhouse":
-            import clickhouse_driver
-            client = clickhouse_driver.Client(
-                host=datasource.connection_config.get("host", "localhost"),
-                port=datasource.connection_config.get("port", 9000),
-                database=datasource.connection_config["database"],
-                user=datasource.connection_config.get("username", "default"),
-                password=datasource.connection_config.get("password", "")
-            )
-            result = client.execute("SHOW TABLES")
-            for (table_name,) in result:
-                desc = client.execute(f"DESCRIBE TABLE {table_name}")
-                columns = [
-                    {
-                        "name": col[0],
-                        "type": col[1],
-                        "nullable": "Nullable" in col[1],
-                        "comment": col[4] if len(col) > 4 else ""
-                    }
-                    for col in desc
-                ]
-                tables.append({
-                    "name": table_name,
-                    "physical_name": table_name,
-                    "schema_name": datasource.connection_config["database"],
-                    "columns": columns
-                })
-            client.disconnect()
-        else:
-            raise HTTPException(status_code=400, detail=f"Unsupported database type: {datasource.type}")
-
-        # 保存或更新表到数据库
         sync_count = 0
         for table_data in tables:
-            # 检查是否已存在
             existing = db.query(Dataset).filter(
                 Dataset.datasource_id == datasource_id,
                 Dataset.physical_name == table_data["physical_name"]
             ).first()
 
             if existing:
-                # 更新现有表
                 existing.name = table_data["name"]
                 existing.schema_name = table_data["schema_name"]
                 existing.columns = table_data["columns"]
                 sync_count += 1
             else:
-                # 创建新表
                 new_dataset = Dataset(
                     datasource_id=datasource_id,
                     name=table_data["name"],
@@ -449,102 +289,24 @@ async def sync_datasets_from_source(request: dict, db: Session = Depends(get_db)
     datasource_id = request.get("datasource_id")
     if not datasource_id:
         raise HTTPException(status_code=400, detail="datasource_id is required")
-    
+
     datasource = db.query(DataSource).filter(DataSource.id == datasource_id).first()
     if not datasource:
         raise HTTPException(status_code=404, detail="DataSource not found")
-    
-    tables = []
+
     try:
-        if datasource.type == "postgresql":
-            import psycopg2
-            conn = psycopg2.connect(
-                host=datasource.connection_config.get("host", "localhost"),
-                port=datasource.connection_config.get("port", 5432),
-                database=datasource.connection_config["database"],
-                user=datasource.connection_config.get("username", ""),
-                password=datasource.connection_config.get("password", "")
-            )
-            cursor = conn.cursor()
-            cursor.execute("""
-                SELECT table_name, table_schema 
-                FROM information_schema.tables 
-                WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
-            """)
-            for table_name, schema_name in cursor.fetchall():
-                cursor.execute("""
-                    SELECT column_name, data_type, is_nullable
-                    FROM information_schema.columns
-                    WHERE table_name = %s AND table_schema = %s
-                    ORDER BY ordinal_position
-                """, (table_name, schema_name))
-                columns = [
-                    {
-                        "name": col[0],
-                        "type": col[1],
-                        "nullable": col[2] == "YES",
-                        "comment": ""
-                    }
-                    for col in cursor.fetchall()
-                ]
-                tables.append({"name": table_name, "schema": schema_name, "columns": columns})
-            conn.close()
-            
-        elif datasource.type == "mysql":
-            import pymysql
-            conn = pymysql.connect(
-                host=datasource.connection_config.get("host", "localhost"),
-                port=datasource.connection_config.get("port", 3306),
-                database=datasource.connection_config["database"],
-                user=datasource.connection_config.get("username", ""),
-                password=datasource.connection_config.get("password", "")
-            )
-            cursor = conn.cursor()
-            cursor.execute("SHOW TABLES")
-            for (table_name,) in cursor.fetchall():
-                cursor.execute(f"SHOW FULL COLUMNS FROM `{table_name}`")
-                columns = [
-                    {
-                        "name": col[0],
-                        "type": col[1],
-                        "nullable": col[3] == "YES",
-                        "comment": col[8] or ""
-                    }
-                    for col in cursor.fetchall()
-                ]
-                tables.append({"name": table_name, "schema": datasource.connection_config["database"], "columns": columns})
-            conn.close()
-            
-        elif datasource.type == "clickhouse":
-            import clickhouse_driver
-            client = clickhouse_driver.Client(
-                host=datasource.connection_config.get("host", "localhost"),
-                port=datasource.connection_config.get("port", 9000),
-                database=datasource.connection_config["database"],
-                user=datasource.connection_config.get("username", "default"),
-                password=datasource.connection_config.get("password", "")
-            )
-            result = client.execute("SHOW TABLES")
-            for (table_name,) in result:
-                desc = client.execute(f"DESCRIBE TABLE {table_name}")
-                columns = [
-                    {
-                        "name": col[0],
-                        "type": col[1],
-                        "nullable": "Nullable" in col[1],
-                        "comment": col[4] if len(col) > 4 else ""
-                    }
-                    for col in desc
-                ]
-                tables.append({"name": table_name, "schema": datasource.connection_config["database"], "columns": columns})
-            client.disconnect()
-        else:
-            raise HTTPException(status_code=400, detail=f"Unsupported database type: {datasource.type}")
-            
+        tables = fetch_tables_and_columns(datasource.type, get_datasource_connection_config(datasource))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to sync tables: {str(e)}")
-    
-    return tables
+
+    return [
+        {
+            "name": table["name"],
+            "schema": table["schema_name"],
+            "columns": table["columns"],
+        }
+        for table in tables
+    ]
 
 
 # ============ Metric Routes ============

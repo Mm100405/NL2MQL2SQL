@@ -58,6 +58,8 @@
             <a-option value="postgresql">PostgreSQL</a-option>
             <a-option value="mysql">MySQL</a-option>
             <a-option value="clickhouse">ClickHouse</a-option>
+            <a-option value="highgo">瀚高 HighGo</a-option>
+            <a-option value="dameng">达梦 Dameng</a-option>
           </a-select>
         </a-form-item>
         <template v-if="true">
@@ -97,7 +99,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue'
+import { ref, reactive, onMounted, watch } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import type { FormInstance } from '@arco-design/web-vue'
 import { IconThunderbolt, IconPlus, IconEdit, IconDelete } from '@arco-design/web-vue/es/icon'
@@ -152,7 +154,9 @@ function getDefaultPort() {
   const ports: Record<string, string> = {
     postgresql: '5432',
     mysql: '3306',
-    clickhouse: '8123'
+    clickhouse: '8123',
+    highgo: '5866',
+    dameng: '5236'
   }
   return ports[form.type] || ''
 }
@@ -173,6 +177,13 @@ function getStatusText(status: string) {
     error: '错误'
   }
   return texts[status] || status
+}
+
+function normalizePortByType() {
+  const defaultPort = Number(getDefaultPort())
+  if (defaultPort && form.connection_config.port !== defaultPort) {
+    form.connection_config.port = defaultPort
+  }
 }
 
 async function fetchDataSources() {
@@ -327,6 +338,10 @@ async function handleDelete(id: string) {
     Message.error('删除失败')
   }
 }
+
+watch(() => form.type, () => {
+  normalizePortByType()
+})
 
 onMounted(() => {
   fetchDataSources()

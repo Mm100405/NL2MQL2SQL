@@ -224,7 +224,7 @@ class ExpressionParser:
         if self.dialect == "mysql":
             mysql_fmt = self._to_mysql_date_format(fmt)
             return exp.Anonymous(this="DATE_FORMAT", expressions=[col_node, exp.Literal.string(mysql_fmt)])
-        elif self.dialect == "postgresql":
+        elif self.dialect in ("postgresql", "oracle"):
             pg_fmt = self._to_postgresql_date_format(fmt)
             return exp.Anonymous(this="TO_CHAR", expressions=[col_node, exp.Literal.string(pg_fmt)])
         elif self.dialect == "clickhouse":

@@ -6,10 +6,9 @@ python-multipart==0.0.9
 # Database
 sqlalchemy==2.0.35
 alembic==1.13.2
-psycopg2-binary==2.9.9
+psycopg2-binary==2.9.9  # PostgreSQL / 瀚高 HighGo
 pymysql==1.1.1
-clickhouse-driver==0.2.9
-
+# 达梦驱动通常由现场环境或厂商介质提供；如可联网安装，可另见 requirements-dameng.txt
 
 # Validation and Serialization
 pydantic==2.9.2
