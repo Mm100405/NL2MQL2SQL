@@ -3,6 +3,7 @@
 """
 from typing import Dict, Any, List, Optional, Union
 from sqlalchemy.orm import Session
+import copy
 import re
 
 
@@ -288,12 +289,14 @@ def generate_dynamic_mql(
 
     logger.info(f"[DynamicMQL] 开始生成，base_mql keys: {list(base_mql.keys()) if base_mql else 'None'}")
 
+    base_filters = copy.deepcopy(base_mql.get("filters", []))
+
     # 复制基础MQL
     mql = {
-        "metrics": base_mql.get("metrics", []),
-        "metricDefinitions": base_mql.get("metricDefinitions", {}),
-        "dimensions": base_mql.get("dimensions", []),
-        "filters": list(base_mql.get("filters", [])),
+        "metrics": copy.deepcopy(base_mql.get("metrics", [])),
+        "metricDefinitions": copy.deepcopy(base_mql.get("metricDefinitions", {})),
+        "dimensions": copy.deepcopy(base_mql.get("dimensions", [])),
+        "filters": base_filters,
         "timeConstraint": base_mql.get("timeConstraint", "true"),
         "limit": base_mql.get("limit", 1000),
         "queryResultType": base_mql.get("queryResultType", "DATA")
@@ -301,13 +304,23 @@ def generate_dynamic_mql(
 
     logger.info(f"[DynamicMQL] MQL 构建完成，keys: {list(mql.keys())}")
 
+    def append_filter(filter_condition: Any) -> None:
+        filters = mql.get("filters")
+        if isinstance(filters, dict):
+            filters.setdefault("operator", "AND")
+            filters.setdefault("conditions", [])
+            filters["conditions"].append(filter_condition)
+        elif isinstance(filters, list):
+            filters.append(filter_condition)
+        else:
+            mql["filters"] = [filter_condition]
+
     # 为每个API参数生成过滤条件
     for param_name, mapping in parameter_mappings.items():
         source_field = mapping.get("source_field")
         if source_field:
             # 使用源字段名生成过滤条件
-            filter_condition = f"[{source_field}] = {{{{{param_name}}}}}"
-            mql["filters"].append(filter_condition)
+            append_filter(f"[{source_field}] = {{{{{param_name}}}}}")
 
     return mql
 
