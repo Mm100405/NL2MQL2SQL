@@ -112,7 +112,8 @@ GENERATE_TRANSFORM_PROMPT = """你是一个数据转换专家。请根据以下�
 4. MQL模板要能正确执行查询
 5. 考虑数据类型转换和边界情况
 6. 如果某个参数在原数据中没有对应字段，需要在parameterMappings中使用sourceField为null，并在mqlTemplate中使用静态值或排除该过滤条件
-7. 在生成代码后，请再次检查变量名是否正确拼写
+7. 如果“API所需参数”为空，parameterMappings 必须返回空数组 []，不要臆造参数
+8. 在生成代码后，请再次检查变量名是否正确拼写
 
 ## 正确的代码示例
 ```javascript
@@ -299,7 +300,7 @@ async def generate_transform_config(
             }
 
         # 7. 验证生成结果
-        validation_result = _validate_generation(generation, target_format_example, source_data_sample)
+        validation_result = _validate_generation(generation, target_format_example, source_data_sample, api_parameters)
 
         if not validation_result["valid"]:
             return {
@@ -369,7 +370,8 @@ def _parse_llm_response(response: str) -> Optional[Dict[str, Any]]:
 def _validate_generation(
     generation: Dict[str, Any],
     target_format: Dict[str, Any],
-    source_data: Dict[str, Any]
+    source_data: Dict[str, Any],
+    api_parameters: str = ""
 ) -> Dict[str, Any]:
     """
     验证生成结果的正确性
@@ -388,7 +390,8 @@ def _validate_generation(
             errors.append("转换脚本必须包含 transformData 函数")
 
     # 验证参数映射
-    if not generation.get("parameterMappings"):
+    has_api_parameters = any(p.strip() for p in (api_parameters or "").split("、"))
+    if has_api_parameters and not generation.get("parameterMappings"):
         errors.append("缺少参数映射")
 
     # 验证MQL模板
