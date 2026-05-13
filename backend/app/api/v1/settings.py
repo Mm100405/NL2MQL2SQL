@@ -239,7 +239,8 @@ async def test_model_connection_endpoint(id: str, db: Session = Depends(get_db))
         provider=config.provider,
         model_name=config.model_name,
         api_key=api_key,
-        api_base=config.api_base
+        api_base=config.api_base,
+        config_params=config.config_params
     )
     
     return {"success": success, "message": message}
