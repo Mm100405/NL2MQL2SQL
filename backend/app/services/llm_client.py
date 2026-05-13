@@ -58,6 +58,14 @@ def _build_kwargs(
     return kwargs
 
 
+def _normalize_completion_params(model_name: str, params: dict) -> dict:
+    normalized = dict(params)
+    normalized_model = (model_name or "").lower()
+    if normalized_model.startswith("gpt-5") and normalized.get("temperature") not in (None, 1, 1.0):
+        normalized["temperature"] = 1
+    return normalized
+
+
 # ─── 公共接口（保持签名不变，调用方零改动） ────────────────────────────────
 
 
@@ -102,16 +110,16 @@ async def call_llm(
 ) -> str:
     """调用 LLM 并返回文本响应"""
     config = config_params or {}
-    temperature = config.get("temperature", 0.7)
-    max_tokens = config.get("max_tokens", 4096)
-    timeout = timeout or config.get("timeout", 120.0)
+    completion_params = _normalize_completion_params(model_name, {
+        "temperature": config.get("temperature", 0.7),
+        "max_tokens": config.get("max_tokens", 4096),
+        "timeout": timeout or config.get("timeout", 120.0),
+    })
 
     kwargs = _build_kwargs(
         provider, model_name, api_key, api_base,
         messages=[{"role": "user", "content": prompt}],
-        temperature=temperature,
-        max_tokens=max_tokens,
-        timeout=timeout,
+        **completion_params,
     )
 
     response = await litellm.acompletion(**kwargs)
