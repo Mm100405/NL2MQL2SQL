@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     PORT: int = 8011
     
     # Database
-    DATABASE_URL: str = "mysql+pymysql://root:123456@localhost:3306/nlqdb"
+    DATABASE_URL: str = "mysql+pymysql://root:change-me@localhost:3306/nlqdb"
     
     # CORS
     # 注意：应用启动时会自动添加当前内网 IP 到允许列表

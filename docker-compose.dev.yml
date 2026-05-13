@@ -11,7 +11,7 @@ services:
     container_name: nl2mql2sql-dev-db
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: 123456
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-dev-password}
       MYSQL_DATABASE: nlqdb
     ports:
       - "3306:3306"
@@ -27,7 +27,7 @@ services:
     container_name: nl2mql2sql-dev-backend
     restart: unless-stopped
     environment:
-      DATABASE_URL: mysql+pymysql://root:123456@db:3306/nlqdb?charset=utf8mb4
+      DATABASE_URL: mysql+pymysql://root:${DB_PASSWORD:-dev-password}@db:3306/nlqdb?charset=utf8mb4
       DEBUG: True
     ports:
       - "8011:8011"

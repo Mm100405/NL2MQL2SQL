@@ -11,7 +11,7 @@ services:
     container_name: nl2mql2sql-db
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-123456}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-change-me}
       MYSQL_DATABASE: ${DB_NAME:-nlqdb}
     ports:
       - "${DB_PORT:-3306}:3306"
@@ -40,7 +40,7 @@ services:
         soft: 65535
         hard: 65535
     environment:
-      DATABASE_URL: mysql+pymysql://${DB_USER:-root}:${DB_PASSWORD:-123456}@db:3306/${DB_NAME:-nlqdb}?charset=utf8mb4
+      DATABASE_URL: mysql+pymysql://${DB_USER:-root}:${DB_PASSWORD:-change-me}@db:3306/${DB_NAME:-nlqdb}?charset=utf8mb4
       APP_NAME: NL2MQL2SQL
       DEBUG: ${DEBUG:-False}
       SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}

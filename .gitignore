@@ -92,6 +92,10 @@ __pycache__/
 
 #codebuddy
 /.codebuddy/
+
+# Claude local state
+/.claude/
+
 /otherproj/
 /CODEBUDDY.md
 /docs/

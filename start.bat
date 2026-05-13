@@ -38,10 +38,10 @@ echo 启动完成！
 echo ========================================
 echo 访问地址：
 echo   - 本地访问：http://localhost:5173
-echo   - 内网访问：http://192.168.42.208:5173（请替换为你的实际 IP）
+echo   - 内网访问：http://你的内网IP:5173（请替换为你的实际 IP）
 echo.
 echo 后端 API 文档：http://localhost:8011/docs
-echo 内网访问文档：http://192.168.42.208:8011/docs
+echo 内网访问文档：http://你的内网IP:8011/docs
 echo.
 echo 按任意键关闭此窗口（不会关闭前后端服务）...
 pause >nul

@@ -255,7 +255,7 @@ const notificationSettings = ref({
 
 const integrationSettings = ref({
   apiUrl: 'https://api.example.com/v1/metrics',
-  apiKey: 'sk-xxxxxxxxxxxxxxxxxxxx',
+  apiKey: 'example-api-key',
   rateLimit: 1000,
   scheduler: 'airflow',
   schedulerUrl: ''

@@ -680,7 +680,7 @@ cat backup_20260324_120000.sql | \
 BACKUP_DIR="/backups"
 DATE=$(date +%Y%m%d_%H%M%S)
 DB_NAME="nlqdb"
-DB_PASSWORD="123456"
+DB_PASSWORD="your-strong-password-here"
 
 mkdir -p ${BACKUP_DIR}
 
