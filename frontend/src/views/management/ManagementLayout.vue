@@ -30,6 +30,7 @@
           <template #title>数据管理</template>
           <a-menu-item key="DataSources">数据源管理</a-menu-item>
           <a-menu-item key="Datasets">物理表管理</a-menu-item>
+          <a-menu-item key="SemanticModeling">AI语义建模</a-menu-item>
           <a-menu-item key="Metrics">指标管理</a-menu-item>
           <a-menu-item key="Dimensions">维度管理</a-menu-item>
           <a-menu-item key="Views">视图管理</a-menu-item>
@@ -124,6 +125,7 @@ const openKeys = ref<string[]>(['data', 'system', 'advanced', 'air', 'can', 'big
 const routeMap: Record<string, { path: string; group: string }> = {
   DataSources: { path: '/management/data/datasources', group: 'data' },
   Datasets: { path: '/management/data/datasets', group: 'data' },
+  SemanticModeling: { path: '/management/data/semantic-modeling', group: 'data' },
   Metrics: { path: '/management/data/metrics', group: 'data' },
   Dimensions: { path: '/management/data/dimensions', group: 'data' },
   Views: { path: '/management/data/views', group: 'data' },
@@ -146,6 +148,7 @@ const routeMap: Record<string, { path: string; group: string }> = {
 const titleMap: Record<string, string> = {
   DataSources: '数据源管理',
   Datasets: '物理表管理',
+  SemanticModeling: 'AI语义建模',
   Metrics: '指标管理',
   Dimensions: '维度管理',
   Views: '视图管理',

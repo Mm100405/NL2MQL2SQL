@@ -61,6 +61,12 @@ const routes: RouteRecordRaw[] = [
         meta: { title: '维度管理' }
       },
       {
+        path: 'data/semantic-modeling',
+        name: 'SemanticModeling',
+        component: () => import('@/views/semantic/SemanticModelingAssistant.vue'),
+        meta: { title: 'AI语义建模' }
+      },
+      {
         path: 'data/views',
         name: 'Views',
         component: () => import('@/views/semantic/ViewList.vue'),

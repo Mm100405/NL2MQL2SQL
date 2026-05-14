@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 from app.config import settings
 from app.database import engine, Base
-from app.api.v1 import query, semantic, settings as settings_api, air, can, big, views, dictionaries, data_format, agent, skills
+from app.api.v1 import query, semantic, semantic_modeling, settings as settings_api, air, can, big, views, dictionaries, data_format, agent, skills
 
 
 def get_local_ip():
@@ -170,6 +170,7 @@ app.add_middleware(
 # Include routers
 app.include_router(query.router, prefix="/api/v1/query", tags=["智能问数"])
 app.include_router(semantic.router, prefix="/api/v1/semantic", tags=["语义层管理"])
+app.include_router(semantic_modeling.router, prefix="/api/v1/semantic-modeling", tags=["AI语义建模"])
 app.include_router(views.router, prefix="/api/v1/views", tags=["视图管理"])
 app.include_router(dictionaries.router, prefix="/api/v1/dictionaries", tags=["字典管理"])
 app.include_router(settings_api.router, prefix="/api/v1/settings", tags=["系统设置"])
