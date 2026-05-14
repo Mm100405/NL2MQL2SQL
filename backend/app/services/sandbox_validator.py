@@ -32,7 +32,8 @@ class SandboxValidator:
     # 禁止的模式
     FORBIDDEN_PATTERNS = [
         (r'eval\s*\(', "禁止使用 eval()"),
-        (r'Function\s*\(', "禁止使用 Function()"),
+        (r'\bnew\s+Function\s*\(', "禁止使用 new Function()"),
+        (r'\bFunction\s*\(', "禁止使用 Function()"),
         (r'import\s+', "禁止使用 import"),
         (r'require\s*\(', "禁止使用 require()"),
         (r'fetch\s*\(', "禁止使用 fetch()"),
@@ -129,7 +130,7 @@ class SandboxValidator:
         安全性检查
         """
         for pattern, reason in self.FORBIDDEN_PATTERNS:
-            if re.search(pattern, script, re.IGNORECASE):
+            if re.search(pattern, script):
                 return {
                     "passed": False,
                     "reason": reason

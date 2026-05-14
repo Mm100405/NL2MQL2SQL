@@ -17,7 +17,6 @@ export interface GenerateConfigRequest {
     execution_time: number
   }
   view_id?: string  // 结果面板绑定的视图ID
-  repair_context?: Record<string, any>
 }
 
 /**

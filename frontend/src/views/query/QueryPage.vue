@@ -379,6 +379,7 @@ const dataFormatConfig = ref<{
   targetFormat: any
   apiParameters: string[]
 } | undefined>(undefined)
+const generatingDataFormatQueryIds = new Set<string>()
 
 // API 调试弹窗
 const apiDebugVisible = ref(false)
@@ -1191,23 +1192,37 @@ function openApiDebug(configId: string) {
 // 处理数据格式配置保存
 async function handleDataFormatSave(config: { targetFormat: any, apiParameters: string[] }) {
   dataFormatConfig.value = config
-  
+  const queryResult = activeQueryResult.value
+  activeQueryResult.value = null
+
   // 如果是从"生成API"按钮触发的，立即生成配置
-  if (activeQueryResult.value) {
-    await generateDataFormatForQuery(activeQueryResult.value)
+  if (queryResult) {
+    await generateDataFormatForQuery(queryResult)
   }
 }
 
 // 为指定查询结果生成数据格式配置
 async function generateDataFormatForQuery(queryResult: FullQueryResponse) {
+  if (queryResult.dataFormatConfigId) {
+    return
+  }
+
+  const generationKey = queryResult.query_id || queryResult.sql || queryResult.natural_language || '__current__'
+  if (generatingDataFormatQueryIds.has(generationKey)) {
+    return
+  }
+  generatingDataFormatQueryIds.add(generationKey)
+
   if (!dataFormatConfig.value) {
+    generatingDataFormatQueryIds.delete(generationKey)
     Message.warning('请先配置数据格式')
     return
   }
-  
+
   // 验证目标格式
   const targetFormat = dataFormatConfig.value.targetFormat
   if (!targetFormat) {
+    generatingDataFormatQueryIds.delete(generationKey)
     Message.error('目标格式不能为空')
     return
   }
@@ -1218,6 +1233,7 @@ async function generateDataFormatForQuery(queryResult: FullQueryResponse) {
     try {
       parsedTargetFormat = JSON.parse(targetFormat)
     } catch (e) {
+      generatingDataFormatQueryIds.delete(generationKey)
       Message.error('目标格式JSON解析失败')
       return
     }
@@ -1225,6 +1241,7 @@ async function generateDataFormatForQuery(queryResult: FullQueryResponse) {
   
   // 确保是数组
   if (!Array.isArray(parsedTargetFormat)) {
+    generatingDataFormatQueryIds.delete(generationKey)
     Message.error('目标格式必须是数组')
     return
   }
@@ -1361,6 +1378,8 @@ async function generateDataFormatForQuery(queryResult: FullQueryResponse) {
         })
       }
     }
+  } finally {
+    generatingDataFormatQueryIds.delete(generationKey)
   }
 }
 

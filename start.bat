@@ -1,8 +1,15 @@
 @echo off
 chcp 65001 >nul
+setlocal
+
 echo ========================================
 echo NL2MQL2SQL 本地启动脚本（Windows）
 echo ========================================
+echo.
+
+echo [0/3] 清理可能残留的本地服务进程...
+call "%~dp0stop-clean.bat" >nul 2>&1
+echo ✅ 残留进程清理完成
 echo.
 
 echo [1/3] 检查后端环境...
@@ -17,7 +24,7 @@ echo.
 
 echo [2/3] 启动后端服务...
 echo 正在启动 FastAPI 后端（端口 8011）...
-start "NL2MQL2SQL Backend" cmd /k "pip install -r requirements.txt && uvicorn app.main:app --host 0.0.0.0 --port 8011 --reload"
+start "NL2MQL2SQL Backend" cmd /k "pip install -r requirements.txt && python -m uvicorn app.main:app --host 0.0.0.0 --port 8011"
 echo ✅ 后端服务启动中...
 echo.
 

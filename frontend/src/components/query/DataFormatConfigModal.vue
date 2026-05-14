@@ -2,7 +2,6 @@
   <a-modal
     v-model:visible="visible"
     title="配置输出格式"
-    @ok="handleSave"
     @cancel="handleClose"
     width="700px"
   >
@@ -54,7 +53,7 @@
             placeholder="从可过滤字段中选择"
             allow-create
             filterable
-            :options="filterableFields.map(f => ({ label: f.display_name || f.name, value: f.name }))"
+            :options="(filterableFields || []).map(f => ({ label: f.display_name || f.name, value: f.name }))"
             @press-enter="addParam"
           />
           <a-button type="primary" @click="addParam">

@@ -114,10 +114,26 @@ async def _process_generation(
     )
 
     if not generation_result.get("success"):
+        transform_script = generation_result.get("transformScript")
+        logger.warning(
+            "[DataFormat] 生成结果验证失败，phase=generation_validation, has_script=%s, details=%s",
+            bool(transform_script),
+            generation_result.get("details"),
+        )
         return {
             "success": False,
             "error": generation_result.get("error", "生成失败"),
-            "details": generation_result.get("details")
+            "details": generation_result.get("details"),
+            "validationError": "；".join(generation_result.get("details") or []),
+            "phase": "generation_validation",
+            "transformScript": transform_script,
+            "repairContext": {
+                "previous_script": transform_script,
+                "previous_generation": generation_result.get("llm_output") or generation_result,
+                "phase": "generation_validation",
+                "validation_error": "；".join(generation_result.get("details") or []) or generation_result.get("error", "生成失败"),
+                "suggestion": None,
+            } if transform_script else None,
         }
 
     transform_script = generation_result.get("transformScript")
@@ -130,6 +146,11 @@ async def _process_generation(
     )
 
     if not validation_result.get("valid"):
+        logger.warning(
+            "[DataFormat] 转换脚本沙箱校验失败，phase=%s, error=%s, has_repair_context=True",
+            validation_result.get("phase"),
+            validation_result.get("error"),
+        )
         return {
             "success": False,
             "error": "转换脚本验证失败",
@@ -233,12 +254,19 @@ async def generate_format_config(
                 db.add(config)
                 db.commit()
 
+                logger.warning(
+                    "[DataFormat] 返回转换脚本验证失败，phase=%s, has_repair_context=%s",
+                    result.get("phase"),
+                    bool(result.get("repairContext")),
+                )
                 return {
                     "success": False,
                     "error": result.get("error"),
                     "validationError": result.get("validationError"),
                     "suggestion": result.get("suggestion"),
-                    "phase": result.get("phase")
+                    "phase": result.get("phase"),
+                    "transformScript": result.get("transformScript"),
+                    "repairContext": result.get("repairContext")
                 }
             else:
                 return {

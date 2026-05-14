@@ -372,7 +372,10 @@ async def generate_transform_config(
                 "success": False,
                 "error": "生成结果验证失败",
                 "details": validation_result["errors"],
-                "llm_output": generation
+                "llm_output": generation,
+                "transformScript": generation.get("transformScript", ""),
+                "baseMql": base_mql,
+                "sourceDataSample": source_data_sample,
             }
 
         return {
