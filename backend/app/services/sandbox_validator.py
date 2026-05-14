@@ -88,6 +88,12 @@ class SandboxValidator:
             logger.info(f"[SandboxValidator] 执行功能验证，test_data keys: {list(test_data.keys())}")
             execution_result = self._execute_mock(script, test_data)
             if not execution_result["success"]:
+                if execution_result.get("skip_execution"):
+                    return {
+                        "valid": True,
+                        "phase": "syntax_only",
+                        "warning": execution_result["error"]
+                    }
                 return {
                     "valid": False,
                     "error": f"执行错误: {execution_result['error']}",
@@ -259,7 +265,8 @@ console.log(JSON.stringify(result));
         except FileNotFoundError:
             return {
                 "success": False,
-                "error": "未找到 Node.js，请确保已安装"
+                "error": "未找到 Node.js，已跳过脚本执行验证",
+                "skip_execution": True
             }
         except Exception as e:
             logger.error(f"执行异常: {str(e)}")

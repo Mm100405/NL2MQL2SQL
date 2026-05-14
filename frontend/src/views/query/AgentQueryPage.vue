@@ -1677,15 +1677,38 @@ async function generateDataFormatForQuery(queryResult: FullQueryResponse) {
       requestData.view_id = queryResult.view_id
     }
     
+    const generationStep = queryResult.steps?.[queryResult.steps.length - 1]
+    if (generationStep) {
+      generationStep.content = '正在生成转换脚本和接口配置...'
+    }
+
     console.log('发送数据格式配置请求:', JSON.stringify(requestData, null, 2))
-    
-    const configResult = await generateDataFormatConfig(requestData)
-    
+
+    let configResult = await generateDataFormatConfig(requestData)
+
+    if (!configResult.success && configResult.repairContext) {
+      if (generationStep) {
+        generationStep.content = `首次生成未通过校验（${configResult.phase || 'unknown'}），正在结合错误信息重新生成...`
+      }
+      queryResult.steps?.push({
+        title: '修复转换脚本',
+        content: `校验失败：${configResult.validationError || configResult.error || '未知错误'}，正在让模型修复脚本...`,
+        status: 'loading'
+      })
+      configResult = await generateDataFormatConfig({
+        ...requestData,
+        repair_context: configResult.repairContext
+      })
+      if (queryResult.steps?.length) {
+        queryResult.steps.pop()
+      }
+    }
+
     // 移除loading步骤
     if (queryResult.steps) {
       queryResult.steps.pop()
     }
-    
+
     if (configResult.success) {
       queryResult.dataFormatConfigId = configResult.configId
       queryResult.dataFormatApiName = configResult.apiName
@@ -1713,10 +1736,10 @@ async function generateDataFormatForQuery(queryResult: FullQueryResponse) {
       }
     } else {
       if (queryResult.steps) {
-        queryResult.steps.push({ 
-          title: '数据格式配置', 
-          content: `配置生成失败：${configResult.error || '未知错误'}`, 
-          status: 'error' 
+        queryResult.steps.push({
+          title: '数据格式配置',
+          content: `配置生成失败：${configResult.validationError || configResult.error || '未知错误'}`,
+          status: 'error'
         })
       }
       console.error('数据格式配置生成失败:', configResult)

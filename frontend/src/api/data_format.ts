@@ -5,7 +5,7 @@ import { request } from './request'
  */
 export interface GenerateConfigRequest {
   natural_language: string
-  target_format_example: Record<string, any>
+  target_format_example: Record<string, any> | Array<Record<string, any>>
   api_parameters: string
   // 可选的前置查询结果，避免重复执行
   existing_mql?: Record<string, any>  // 前面 generate-mql 的返回 mql
@@ -17,6 +17,7 @@ export interface GenerateConfigRequest {
     execution_time: number
   }
   view_id?: string  // 结果面板绑定的视图ID
+  repair_context?: Record<string, any>
 }
 
 /**

@@ -43,6 +43,7 @@ class GenerateConfigRequest(BaseModel):
     existing_sql: Optional[str] = None  # 前面 mql2sql 的返回 sql
     existing_query_result: Optional[ExistingQueryResult] = None  # 前面 execute 的返回结果（包含样本数据）
     view_id: Optional[str] = None  # 结果面板绑定的视图ID
+    repair_context: Optional[Dict[str, Any]] = None  # 上一次生成失败的修复上下文
 
 
 class ValidateScriptRequest(BaseModel):
@@ -71,7 +72,8 @@ async def _process_generation(
     existing_mql: Optional[Dict[str, Any]] = None,
     existing_sql: Optional[str] = None,
     existing_query_result: Optional[ExistingQueryResult] = None,
-    view_id: Optional[str] = None
+    view_id: Optional[str] = None,
+    repair_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     处理配置生成的核心逻辑（生成、验证、筛选）
@@ -107,7 +109,8 @@ async def _process_generation(
         db=db,
         existing_mql=existing_mql,
         existing_sql=existing_sql,
-        existing_query_result=existing_query_result_dict
+        existing_query_result=existing_query_result_dict,
+        repair_context=repair_context,
     )
 
     if not generation_result.get("success"):
@@ -133,7 +136,14 @@ async def _process_generation(
             "validationError": validation_result.get("error"),
             "suggestion": validation_result.get("suggestion"),
             "phase": validation_result.get("phase"),
-            "transformScript": transform_script
+            "transformScript": transform_script,
+            "repairContext": {
+                "previous_script": transform_script,
+                "previous_generation": generation_result,
+                "phase": validation_result.get("phase"),
+                "validation_error": validation_result.get("error"),
+                "suggestion": validation_result.get("suggestion")
+            }
         }
 
     # 3. 筛选API参数
@@ -203,7 +213,8 @@ async def generate_format_config(
             existing_mql=request.existing_mql,
             existing_sql=request.existing_sql,
             existing_query_result=request.existing_query_result,
-            view_id=request.view_id
+            view_id=request.view_id,
+            repair_context=request.repair_context,
         )
 
         # 验证失败
