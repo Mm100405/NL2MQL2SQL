@@ -36,7 +36,7 @@ class ExistingQueryResult(BaseModel):
 class GenerateConfigRequest(BaseModel):
     """生成配置请求"""
     natural_language: str
-    target_format_example: Union[Dict[str, Any], List[Dict[str, Any]]]  # 支持对象或数组
+    target_format_example: Any  # 支持对象、数组或嵌套数组
     api_parameters: str  # 用"、"分隔的字符串
     api_name: Optional[str] = None  # 用户手动填写的接口名称
     overwrite_config_id: Optional[str] = None  # 覆盖已有接口配置
