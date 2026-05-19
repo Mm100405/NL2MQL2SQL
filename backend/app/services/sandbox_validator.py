@@ -52,7 +52,12 @@ class SandboxValidator:
     def __init__(self, timeout: int = 5):
         self.timeout = timeout
 
-    def validate_script(self, script: str, test_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def validate_script(
+        self,
+        script: str,
+        test_data: Optional[Dict[str, Any]] = None,
+        expected_format: Any = None,
+    ) -> Dict[str, Any]:
         """
         验证脚本的安全性、语法和功能
 
@@ -105,7 +110,7 @@ class SandboxValidator:
             # 4. 验证输出格式
             if execution_result.get("result") is not None:
                 logger.info(f"[SandboxValidator] 检查输出格式，result type: {type(execution_result['result'])}")
-                format_check = self._check_output_format(execution_result["result"])
+                format_check = self._check_output_format(execution_result["result"], expected_format)
                 if not format_check["valid"]:
                     return {
                         "valid": False,
@@ -299,27 +304,42 @@ console.log(JSON.stringify(result));
 
         return None
 
-    def _check_output_format(self, result: Any) -> Dict[str, Any]:
+    def _check_output_format(self, result: Any, expected_format: Any = None) -> Dict[str, Any]:
         """
         检查输出格式
         """
-        # 检查是否为数组
-        if not isinstance(result, list):
-            return {
-                "valid": False,
-                "error": f"输出必须是数组，实际为: {type(result).__name__}"
-            }
-
-        # 空数组直接通过
-        if len(result) == 0:
+        if expected_format is None:
             return {"valid": True}
 
-        # 检查数组元素
-        first_item = result[0]
-        if not isinstance(first_item, dict):
+        return self._check_json_shape(result, expected_format)
+
+    def _check_json_shape(self, result: Any, expected: Any, path: str = "输出") -> Dict[str, Any]:
+        if expected is None:
+            return {"valid": True}
+
+        if isinstance(expected, dict):
+            if not isinstance(result, dict):
+                return {
+                    "valid": False,
+                    "error": f"{path} 必须是对象，实际为: {type(result).__name__}"
+                }
+            return {"valid": True}
+
+        if isinstance(expected, list):
+            if not isinstance(result, list):
+                return {
+                    "valid": False,
+                    "error": f"{path} 必须是数组，实际为: {type(result).__name__}"
+                }
+            if not expected or not result:
+                return {"valid": True}
+            return self._check_json_shape(result[0], expected[0], f"{path}[0]")
+
+        expected_type = type(expected)
+        if expected_type in (str, int, float, bool) and not isinstance(result, expected_type):
             return {
                 "valid": False,
-                "error": f"数组元素必须是对象，实际为: {type(first_item).__name__}"
+                "error": f"{path} 类型不匹配，期望 {expected_type.__name__}，实际为: {type(result).__name__}"
             }
 
         return {"valid": True}
@@ -327,7 +347,8 @@ console.log(JSON.stringify(result));
 
 def validate_transform_script(
     script: str,
-    test_data: Optional[Dict[str, Any]] = None
+    test_data: Optional[Dict[str, Any]] = None,
+    expected_format: Any = None,
 ) -> Dict[str, Any]:
     """
     便捷函数：验证转换脚本
@@ -340,4 +361,4 @@ def validate_transform_script(
         验证结果
     """
     validator = SandboxValidator()
-    return validator.validate_script(script, test_data)
+    return validator.validate_script(script, test_data, expected_format)

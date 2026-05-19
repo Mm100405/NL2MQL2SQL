@@ -144,7 +144,8 @@ async def _process_generation(
     # 2. 沙箱验证转换脚本
     validation_result = validate_transform_script(
         script=transform_script,
-        test_data=generation_result.get("sourceDataSample")
+        test_data=generation_result.get("sourceDataSample"),
+        expected_format=target_format_example,
     )
 
     if not validation_result.get("valid"):
