@@ -167,16 +167,23 @@ class MQLTranslator:
         if not mql:
             raise ValueError("MQL is empty")
 
+        query_result_type = str(mql.get("queryResultType", "DATA") or "DATA").upper()
+
+        if query_result_type == "DETAIL":
+            if not mql.get("fields"):
+                raise ValueError("DETAIL MQL must have at least one field")
+            return True
+
         if "metrics" not in mql and "dimensions" not in mql:
             raise ValueError("MQL must have at least metrics or dimensions")
 
         # 检查指标定义是否完整
         metrics = mql.get("metrics", [])
-        metric_defs = mql.get("metricDefinitions", {})
+        metric_defs = mql.setdefault("metricDefinitions", {})
         for metric_name in metrics:
             if metric_name not in metric_defs:
                 # 自动补全空的定义
-                mql["metricDefinitions"][metric_name] = {"refMetric": metric_name}
+                metric_defs[metric_name] = {"refMetric": metric_name}
 
         return True
 

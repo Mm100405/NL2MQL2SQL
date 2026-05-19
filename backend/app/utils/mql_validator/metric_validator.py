@@ -27,6 +27,11 @@ class MetricValidator(BaseMQLValidator):
     def validate(self, value: Any, mql: Dict[str, Any]) -> ValidationResult:
         result = ValidationResult()
 
+        # DETAIL 模式不使用 metrics
+        query_result_type = str(mql.get("queryResultType", "DATA") or "DATA").upper()
+        if query_result_type == "DETAIL":
+            return result
+
         # 1. 校验 metrics 列表
         metrics = value if isinstance(value, list) else mql.get("metrics", [])
         if not metrics:

@@ -126,6 +126,25 @@ export interface MQLFilterGroup {
 // MQL filters 类型：可以是结构化分组或空对象
 export type MQLFilters = MQLFilterGroup | Record<string, never>
 
+export interface MQLQuery {
+  metrics?: string[]
+  metricDefinitions?: Record<string, any>
+  dimensions?: string[]
+  fields?: string[]
+  filters?: MQLFilters
+  having?: any[]
+  orderBy?: Array<{ field: string; direction: string }>
+  distinct?: boolean
+  limit?: number
+  windowFunctions?: any[]
+  union?: any
+  cte?: any
+  from_cte?: any
+  timeConstraint?: string
+  queryResultType?: 'DATA' | 'CHART' | 'DETAIL' | string
+  [key: string]: any
+}
+
 // 维度类型
 export type DimensionType = 'time' | 'geo' | 'normal' | 'categorical' | 'numerical' | 'user_defined'
 
@@ -278,7 +297,7 @@ export interface QueryExecuteResponse {
 // 完整查询响应
 export interface FullQueryResponse {
   natural_language: string
-  mql: any
+  mql: MQLQuery
   sql: string
   result: QueryExecuteResponse
   steps: AnalysisStep[]

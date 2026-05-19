@@ -45,7 +45,7 @@
               <template #title>
                 <div class="result-card-header">
                   <div class="result-info">
-                    <span class="metrics-name">{{ getMetricsFromCols(msg.queryResult).join(', ') }}</span>
+                    <span class="metrics-name">{{ getResultTitle(msg.queryResult) }}</span>
                   </div>
                   <div class="result-actions">
                     <a-space>
@@ -142,11 +142,11 @@
                     </div>
                   </div>
 
-                  <!-- 维度 -->
+                  <!-- 维度 / 返回字段 -->
                   <div v-if="getDimensionsFromCols(msg.queryResult).length > 0" class="meta-row">
                     <div class="meta-label">
                       <icon-apps />
-                      <span>维度</span>
+                      <span>{{ String(msg.queryResult?.mql?.queryResultType || 'DATA').toUpperCase() === 'DETAIL' ? '返回字段' : '维度' }}</span>
                     </div>
                     <div class="meta-content">
                       <a-space size="small" wrap>
@@ -2237,12 +2237,30 @@ function findDimension(name: string) {
 
 function getMetricsFromCols(res: FullQueryResponse) {
   if (!res || !res.result || !res.result.columns) return []
+  const queryResultType = String(res.mql?.queryResultType || 'DATA').toUpperCase()
+  if (queryResultType === 'DETAIL') return []
   const mqlMetrics = res.mql?.metrics || []
   return res.result.columns.filter(col => mqlMetrics.includes(col))
 }
 
+function getResultTitle(res: FullQueryResponse) {
+  if (!res || !res.result) return ''
+  const queryResultType = String(res.mql?.queryResultType || 'DATA').toUpperCase()
+  if (queryResultType === 'DETAIL') {
+    const detailFields = res.mql?.fields || []
+    return detailFields.length > 0 ? `明细列表（${detailFields.length}列）` : '明细列表'
+  }
+  const metrics = getMetricsFromCols(res)
+  return metrics.join(', ')
+}
+
 function getDimensionsFromCols(res: FullQueryResponse) {
   if (!res || !res.result || !res.result.columns) return []
+  const queryResultType = String(res.mql?.queryResultType || 'DATA').toUpperCase()
+  if (queryResultType === 'DETAIL') {
+    const detailFields = res.mql?.fields || []
+    return res.result.columns.filter(col => detailFields.includes(col))
+  }
   const mqlDims = res.mql?.dimensions || []
   return res.result.columns.filter(col => mqlDims.includes(col))
 }

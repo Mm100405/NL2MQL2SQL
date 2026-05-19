@@ -48,9 +48,15 @@ class MQLValidator:
         valid_labels = {f["label"] for f in time_formats}
             
         # 0. Validate queryResultType
-        result_type = mql.get("queryResultType", "DATA")
-        if result_type not in ["DATA", "CHART"]:
-            return False, f"Invalid queryResultType '{result_type}'. Must be 'DATA' or 'CHART'."
+        result_type = str(mql.get("queryResultType", "DATA") or "DATA").upper()
+        if result_type not in ["DATA", "CHART", "DETAIL"]:
+            return False, f"Invalid queryResultType '{result_type}'. Must be 'DATA', 'CHART', or 'DETAIL'."
+
+        if result_type == "DETAIL":
+            fields = mql.get("fields", [])
+            if not isinstance(fields, list) or not fields:
+                return False, "DETAIL 模式下 fields 列表不能为空。"
+            return True, "MQL 合规性校验通过"
         
         # 1. Validate Dimensions
         dimensions = mql.get("dimensions", [])

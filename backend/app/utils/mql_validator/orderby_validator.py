@@ -45,6 +45,7 @@ class OrderByValidator(BaseMQLValidator):
         select_fields = set()
         select_fields.update(mql.get("metrics", []))
         select_fields.update(mql.get("dimensions", []))
+        select_fields.update(mql.get("fields", []))
 
         for i, order_spec in enumerate(value):
             if not isinstance(order_spec, dict):

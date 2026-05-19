@@ -33,6 +33,10 @@ class DimensionValidator(BaseMQLValidator):
     def validate(self, value: Any, mql: Dict[str, Any]) -> ValidationResult:
         result = ValidationResult()
 
+        query_result_type = str(mql.get("queryResultType", "DATA") or "DATA").upper()
+        if query_result_type == "DETAIL":
+            return result
+
         dimensions = value if isinstance(value, list) else mql.get("dimensions", [])
 
         for dim_name in dimensions:

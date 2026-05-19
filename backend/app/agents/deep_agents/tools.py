@@ -218,8 +218,8 @@ def retrieve_metadata(
 
             # 预构建 prompt 字符串（直接传入已查询的 ORM 对象，避免重复查 DB）
             from app.services.nl_parser import _build_metadata_strings
-            metrics_str, dimensions_str, filterable_fields_str = _build_metadata_strings(
-                db_session, 
+            metrics_str, dimensions_str, filterable_fields_str, detail_fields_str = _build_metadata_strings(
+                db_session,
                 metrics_objs=metrics,
                 dimensions_objs=dimensions
             )
@@ -231,6 +231,7 @@ def retrieve_metadata(
                     "metrics_str": metrics_str,
                     "dimensions_str": dimensions_str,
                     "filterable_fields_str": filterable_fields_str,
+                    "detail_fields_str": detail_fields_str,
                 },
                 "suggested_metrics": [m["display_name"] for m in metrics_list[:10]],
                 "suggested_dimensions": [d["display_name"] for d in dimensions_list[:10]],
@@ -316,6 +317,7 @@ async def generate_mql(
                 prompt_strings.get("metrics_str", ""),
                 prompt_strings.get("dimensions_str", ""),
                 prompt_strings.get("filterable_fields_str", ""),
+                prompt_strings.get("detail_fields_str", ""),
             )
         
         # MQL 生成任务需要较长时间，配置 300 秒超时
@@ -1032,7 +1034,7 @@ def _build_correction_prompt(mql: dict, errors: list, db_session, prompt_strings
     else:
         # 兜底：如果没有预构建的，从 DB 查询
         from app.services.nl_parser import _build_metadata_strings
-        metrics_str, dimensions_str, filterable_fields_str = _build_metadata_strings(db_session)
+        metrics_str, dimensions_str, filterable_fields_str, _detail_fields_str = _build_metadata_strings(db_session)
     
     # 格式化错误信息
     errors_str = "\n".join([f"- {err}" for err in errors])

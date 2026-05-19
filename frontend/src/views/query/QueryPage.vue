@@ -27,7 +27,7 @@
               <template #title>
                 <div class="result-card-header">
                   <div class="result-info">
-                    <span class="metrics-name">{{ getMetricsFromCols(msg.queryResult).join(', ') }}</span>
+                    <span class="metrics-name">{{ getResultTitle(msg.queryResult) }}</span>
                   </div>
                   <div class="result-actions">
                     <a-space>
@@ -72,7 +72,7 @@
               <div class="result-body-container">
                 <div class="result-meta-tags">
                   <span>时间范围: {{ formatTimeRange(msg.queryResult.mql) }}</span>
-                  <span>指标: 
+                  <span v-if="getMetricsFromCols(msg.queryResult).length > 0">指标:
                     <a-space size="mini">
                       <a-popover v-for="col in getMetricsFromCols(msg.queryResult)" :key="col" position="bottom">
                         <span class="meta-tag-link">{{ findMetric(col)?.display_name || col }}</span>
@@ -89,7 +89,7 @@
                       </a-popover>
                     </a-space>
                   </span>
-                  <span>维度: 
+                  <span v-if="getDimensionsFromCols(msg.queryResult).length > 0">{{ String(msg.queryResult?.mql?.queryResultType || 'DATA').toUpperCase() === 'DETAIL' ? '返回字段' : '维度' }}:
                     <a-space size="mini">
                       <a-popover v-for="col in getDimensionsFromCols(msg.queryResult)" :key="col" position="bottom">
                         <span class="meta-tag-link">
@@ -1600,12 +1600,30 @@ function findDimension(name: string) {
 
 function getMetricsFromCols(res: FullQueryResponse) {
   if (!res || !res.result || !res.result.columns) return []
+  const queryResultType = String(res.mql?.queryResultType || 'DATA').toUpperCase()
+  if (queryResultType === 'DETAIL') return []
   const mqlMetrics = res.mql?.metrics || []
   return res.result.columns.filter(col => mqlMetrics.includes(col))
 }
 
+function getResultTitle(res: FullQueryResponse) {
+  if (!res || !res.result) return ''
+  const queryResultType = String(res.mql?.queryResultType || 'DATA').toUpperCase()
+  if (queryResultType === 'DETAIL') {
+    const detailFields = res.mql?.fields || []
+    return detailFields.length > 0 ? `明细列表（${detailFields.length}列）` : '明细列表'
+  }
+  const metrics = getMetricsFromCols(res)
+  return metrics.join(', ')
+}
+
 function getDimensionsFromCols(res: FullQueryResponse) {
   if (!res || !res.result || !res.result.columns) return []
+  const queryResultType = String(res.mql?.queryResultType || 'DATA').toUpperCase()
+  if (queryResultType === 'DETAIL') {
+    const detailFields = res.mql?.fields || []
+    return res.result.columns.filter(col => detailFields.includes(col))
+  }
   const mqlDims = res.mql?.dimensions || []
   return res.result.columns.filter(col => mqlDims.includes(col))
 }

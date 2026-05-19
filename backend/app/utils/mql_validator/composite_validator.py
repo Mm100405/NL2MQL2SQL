@@ -23,6 +23,7 @@ from app.utils.mql_validator.window_func_validator import WindowFuncValidator
 from app.utils.mql_validator.union_validator import UnionValidator
 from app.utils.mql_validator.cte_validator import CTEValidator
 from app.utils.mql_validator.time_constraint_validator import TimeConstraintValidator
+from app.utils.mql_validator.detail_validator import DetailValidator
 
 
 class MQLCompositeValidator:
@@ -49,6 +50,7 @@ class MQLCompositeValidator:
             UnionValidator(db),
             CTEValidator(db),
             TimeConstraintValidator(db),
+            DetailValidator(db),
         ]
 
         # 注入上下文

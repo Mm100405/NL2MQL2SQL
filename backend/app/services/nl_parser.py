@@ -2,18 +2,19 @@ import json
 """
 Natural Language Parser - Convert NL to MQL V2
 
-MQL V2 完整字段（10个）：
+MQL V2 完整字段：
 1. metrics: 指标别名列表
 2. metricDefinitions: 指标定义
 3. dimensions: 维度列表
-4. filters: WHERE 过滤（聚合前）- 维度/时间过滤
-5. having: HAVING 过滤（聚合后）- 指标过滤
-6. orderBy: 排序
-7. distinct: 去重
-8. limit: 结果限制
-9. windowFunctions: 窗口函数
-10. union: UNION 查询
-11. cte: CTE 公共表表达式
+4. fields: 明细模式返回字段列表
+5. filters: WHERE 过滤（聚合前）- 维度/时间过滤
+6. having: HAVING 过滤（聚合后）- 指标过滤
+7. orderBy: 排序
+8. distinct: 去重
+9. limit: 结果限制
+10. windowFunctions: 窗口函数
+11. union: UNION 查询
+12. cte: CTE 公共表表达式
 """
 from re import S
 from typing import Optional, List, Dict, Any
@@ -24,6 +25,8 @@ from app.services.llm_client import call_llm
 from app.models.metric import Metric
 from app.models.dimension import Dimension
 from app.models.settings import SystemSetting
+from app.models.view import View
+from app.models.field_dict import FieldDictionary
 
 logger = logging.getLogger(__name__)
 
@@ -568,6 +571,98 @@ MQL：
 用户：{query}
 MQL："""
 
+DETAIL_TO_MQL_PROMPT = """你是一个专业的数据分析师，负责将自然语言查询转换为明细列表查询 MQL JSON。
+
+当用户要“列出、查看明细、返回记录、展示列表、查询案件、导出名单、最近N条记录”时，应输出 DETAIL 模式。
+
+DETAIL 模式 JSON 结构：
+{{
+  "fields": ["返回字段逻辑名"],
+  "filters": {{
+    "operator": "AND",
+    "conditions": [
+      {{"field": "字段逻辑名", "op": "=", "value": "值"}}
+    ]
+  }},
+  "orderBy": [
+    {{"field": "字段逻辑名", "direction": "ASC|DESC"}}
+  ],
+  "distinct": false,
+  "limit": 100,
+  "queryResultType": "DETAIL"
+}}
+
+重要规则：
+1. DETAIL 模式只允许使用 fields、filters、orderBy、distinct、limit、queryResultType。
+2. DETAIL 模式禁止使用 metrics、metricDefinitions、dimensions、having、windowFunctions。
+3. fields 必须从下方“可返回字段列表”中选择逻辑名。
+4. filters 中的字段必须从下方“可过滤字段列表”中选择逻辑名。
+5. orderBy 字段必须来自 fields 或可返回字段列表。
+6. 如果用户要求“最近/最新/倒序”，优先按时间字段 DESC 排序。
+7. limit 默认 100；如果用户明确要求条数，使用用户指定值。
+8. 只返回 JSON，不要解释。
+
+可返回字段列表（格式：展示名 [name:逻辑名] | 类型 | 说明）:
+{detail_fields}
+
+可过滤字段列表（格式：展示名 [name:逻辑名] | 类型 | 说明 | 可选值）:
+{filterable_fields}
+
+示例1：
+用户：列出最近30天已归档案件明细，返回案件编号、街道、上报时间、状态
+MQL：
+{{
+  "fields": ["case_id", "street_name", "report_time", "status"],
+  "filters": {{
+    "operator": "AND",
+    "conditions": [
+      {{"field": "report_time", "op": ">=", "value": "LAST_N_DAYS(30)"}},
+      {{"field": "status", "op": "=", "value": "已归档"}}
+    ]
+  }},
+  "orderBy": [{{"field": "report_time", "direction": "DESC"}}],
+  "distinct": false,
+  "limit": 100,
+  "queryResultType": "DETAIL"
+}}
+
+示例2：
+用户：查询未处理案件列表，按上报时间倒序，返回前50条
+MQL：
+{{
+  "fields": ["case_id", "report_time", "street_name", "status"],
+  "filters": {{
+    "operator": "AND",
+    "conditions": [
+      {{"field": "status", "op": "=", "value": "未处理"}}
+    ]
+  }},
+  "orderBy": [{{"field": "report_time", "direction": "DESC"}}],
+  "distinct": false,
+  "limit": 50,
+  "queryResultType": "DETAIL"
+}}
+
+请将以下自然语言转换为 DETAIL 模式 MQL JSON。
+注意：如果这是修复尝试，请参考下方的错误信息进行修正。
+{error_info}
+用户：{query}
+MQL："""
+
+
+def _is_detail_query(natural_language: str) -> bool:
+    q = (natural_language or "").lower()
+    detail_keywords = [
+        "列出", "明细", "列表", "记录", "详情", "导出", "最近", "最新", "前", "案件", "查看", "展示"
+    ]
+    aggregate_keywords = [
+        "统计", "数量", "总数", "多少", "趋势", "同比", "环比", "占比", "排名", "汇总", "平均"
+    ]
+    detail_hit = any(k in natural_language for k in detail_keywords)
+    aggregate_hit = any(k in natural_language for k in aggregate_keywords)
+    english_detail_hit = any(k in q for k in ["list", "detail", "records", "rows", "latest", "top "])
+    return (detail_hit or english_detail_hit) and not aggregate_hit
+
 
 def _build_metadata_strings(
     db: Session, 
@@ -587,7 +682,7 @@ def _build_metadata_strings(
         dimensions_objs: 已查询的 Dimension ORM 对象列表（如已查询可传入，避免重复查 DB）
     
     Returns:
-        (metrics_str, dimensions_str, filterable_fields_str)
+        (metrics_str, dimensions_str, filterable_fields_str, detail_fields_str)
     """
     # 优先使用传入的 ORM 对象，避免重复查 DB
     if metrics_objs is None:
@@ -691,26 +786,31 @@ def _build_metadata_strings(
     
     dimensions_str = "\n".join(dims_list) or "- 日期 [name:date]"
 
-    # 构建可过滤字段列表
+    # 构建可过滤字段列表和可返回明细字段列表
     filterable_fields_list = []
-    from app.models.view import View
-    from app.models.field_dict import FieldDictionary
-    
+    detail_fields_list = []
+
     # 从视图中获取可过滤字段
     views = db.query(View).all()
     for view in views:
         columns = view.columns or []
         for col in columns:
+            display_name = col.get("display_name") or col.get("name")
+            field_name = col.get("name")
+            field_type = col.get("type", "")
+
+            # 获取物理说明和自定义说明
+            source_comment = col.get("source_comment", "")
+            description = col.get("description", "")
+            description_text = description or source_comment or "暂无说明"
+
+            if display_name and field_name:
+                detail_fields_list.append(
+                    f"- {display_name} [name:{field_name}] | 类型: {field_type} | 说明: {description_text}"
+                )
+
             # 检查字段是否可过滤
             if col.get("filterable", True):
-                display_name = col.get("display_name") or col.get("name")
-                field_name = col.get("name")
-                field_type = col.get("type", "")
-                
-                # 获取物理说明和自定义说明
-                source_comment = col.get("source_comment", "")
-                description = col.get("description", "")
-                
                 # 获取可选值
                 optional_values = ""
                 value_config = col.get("value_config", {})
@@ -726,12 +826,13 @@ def _build_metadata_strings(
                             if dict_obj and dict_obj.mappings:
                                 labels = [m.get("label", m.get("value")) for m in dict_obj.mappings]
                                 optional_values = f" | 可选值: {', '.join(labels)}"
-                
-                filterable_fields_list.append(f"- {display_name} [name:{field_name}] | 类型: {field_type} | 说明: {description or source_comment}{optional_values}")
+
+                filterable_fields_list.append(f"- {display_name} [name:{field_name}] | 类型: {field_type} | 说明: {description_text}{optional_values}")
 
     filterable_fields_str = "\n".join(filterable_fields_list) or "- 渠道 [name:channel] | 类型: VARCHAR | 说明: 主要推广渠道 | 可选值: 直搜, 搜索引擎, 外部链接"
-    
-    return metrics_str, dimensions_str, filterable_fields_str
+    detail_fields_str = "\n".join(detail_fields_list) or "- 案件编号 [name:case_id] | 类型: string | 说明: 明细主键"
+
+    return metrics_str, dimensions_str, filterable_fields_str, detail_fields_str
 
 
 async def parse_natural_language(
@@ -756,10 +857,14 @@ async def parse_natural_language(
     validator = MQLCompositeValidator(db)
     
     # 1. 获取元数据字符串（优先使用预构建的，否则查 DB）
+    detail_fields_str = ""
     if prompt_strings:
-        metrics_str, dimensions_str, filterable_fields_str = prompt_strings
+        if len(prompt_strings) >= 4:
+            metrics_str, dimensions_str, filterable_fields_str, detail_fields_str = prompt_strings[:4]
+        else:
+            metrics_str, dimensions_str, filterable_fields_str = prompt_strings
     else:
-        metrics_str, dimensions_str, filterable_fields_str = _build_metadata_strings(db, context)
+        metrics_str, dimensions_str, filterable_fields_str, detail_fields_str = _build_metadata_strings(db, context)
 
     # 2. Multi-turn correction loop
     max_retries = 3
@@ -772,14 +877,25 @@ async def parse_natural_language(
     if context and context.get("quoted_mql"):
         quoted_mql_str = f"\n引用上下文 (Quoted MQL):\n{json.dumps(context['quoted_mql'], ensure_ascii=False, indent=2)}\n请基于该上下文进行修改或进一步分析。\n"
 
+    is_detail_mode = _is_detail_query(natural_language)
+
     while current_attempt < max_retries:
-        prompt = NL_TO_MQL_PROMPT.format(
-            metrics=metrics_str,
-            dimensions=dimensions_str,
-            filterable_fields=filterable_fields_str,
-            query=natural_language,
-            error_info=(f"\n上次生成的错误信息：\n{error_info}\n请根据错误信息修复后再输出全量 JSON。\n" if error_info else "") + quoted_mql_str
-        )
+        common_error_info = (f"\n上次生成的错误信息：\n{error_info}\n请根据错误信息修复后再输出全量 JSON。\n" if error_info else "") + quoted_mql_str
+        if is_detail_mode:
+            prompt = DETAIL_TO_MQL_PROMPT.format(
+                detail_fields=detail_fields_str,
+                filterable_fields=filterable_fields_str,
+                query=natural_language,
+                error_info=common_error_info,
+            )
+        else:
+            prompt = NL_TO_MQL_PROMPT.format(
+                metrics=metrics_str,
+                dimensions=dimensions_str,
+                filterable_fields=filterable_fields_str,
+                query=natural_language,
+                error_info=common_error_info,
+            )
         logger.debug(f"Prompt: {prompt}")
         try:
             response = await call_llm(
@@ -876,7 +992,8 @@ async def parse_natural_language(
     # 4. Final fallback or error return
     final_mql = last_mql or {
         "dimensions": [], "dimensionConfigs": {}, "metricDefinitions": {}, "metrics": [],
-        "limit": 1000, "queryResultType": "DATA", "filters": {}
+        "fields": [], "limit": 1000,
+        "queryResultType": "DETAIL" if is_detail_mode else "DATA", "filters": {}
     }
     
     return {

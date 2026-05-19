@@ -114,7 +114,7 @@ class SemanticContext:
         # 反向索引（用于 display_name -> name 查找）
         self._display_name_to_metric: Dict[str, str] = {}
         self._display_name_to_dimension: Dict[str, str] = {}
-        # View.columns 字段索引：display_name -> (view_id, column_info)
+        # View.columns 字段索引：字段展示名/逻辑名/别名/源列名 -> (view_id, column_info)
         self._view_columns_index: Dict[str, Tuple[str, Dict[str, Any]]] = {}
 
         # CTE元数据存储（支持from_cte时引用CTE列）
@@ -181,9 +181,15 @@ class SemanticContext:
             
             # 建立 View.columns 的字段索引
             for col in (v.columns or []):
-                col_display_name = col.get("display_name") or col.get("name")
-                if col_display_name:
-                    self._view_columns_index[col_display_name] = (v.id, col)
+                index_keys = {
+                    col.get("display_name"),
+                    col.get("name"),
+                    col.get("alias"),
+                    col.get("source_column"),
+                }
+                for key in index_keys:
+                    if key:
+                        self._view_columns_index[key] = (v.id, col)
 
         # 加载数据集
         for d in self.db.query(Dataset).all():
@@ -390,6 +396,15 @@ class SemanticContext:
             dim_ref = self.resolve_field(actual_name)
             if dim_ref and dim_ref.source_view_id:
                 view = self.resolve_view(dim_ref.source_view_id)
+                if view:
+                    return view, view.datasource_id
+
+        # DETAIL 模式：从 fields 推断视图
+        for field_name in mql.get("fields", []):
+            actual_name = field_name.split("__")[0] if "__" in field_name else field_name
+            field_ref = self.resolve_field(actual_name)
+            if field_ref and field_ref.source_view_id:
+                view = self.resolve_view(field_ref.source_view_id)
                 if view:
                     return view, view.datasource_id
 
