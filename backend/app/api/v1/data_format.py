@@ -38,6 +38,8 @@ class GenerateConfigRequest(BaseModel):
     natural_language: str
     target_format_example: Union[Dict[str, Any], List[Dict[str, Any]]]  # 支持对象或数组
     api_parameters: str  # 用"、"分隔的字符串
+    api_name: Optional[str] = None  # 用户手动填写的接口名称
+    overwrite_config_id: Optional[str] = None  # 覆盖已有接口配置
     # 可选的前置查询结果，避免重复执行
     existing_mql: Optional[Dict[str, Any]] = None  # 前面 generate-mql 的返回 mql
     existing_sql: Optional[str] = None  # 前面 mql2sql 的返回 sql
@@ -243,7 +245,7 @@ async def generate_format_config(
             if result.get("error") == "转换脚本验证失败":
                 # 保存失败状态
                 config = DataFormatConfig(
-                    name=f"配置_{request.natural_language[:20]}",
+                    name=(request.api_name or "").strip() or f"配置_{request.natural_language[:20]}",
                     natural_language=request.natural_language,
                     target_format_example=request.target_format_example,
                     api_parameters_str=request.api_parameters,
@@ -279,7 +281,7 @@ async def generate_format_config(
         filter_result = result["filterResult"]
         parameter_mappings = filter_result.get("parameter_mappings", {})
         valid_params = filter_result.get("valid_parameters", [])
-        api_name = result.get("apiName")  # 获取LLM生成的接口名称
+        api_name = (request.api_name or "").strip() or result.get("apiName") or f"配置_{request.natural_language[:20]}"  # 优先使用用户手动填写的接口名称
 
         # 构建包含完整field信息的parameterMappings（使用参数名作为key，支持时间范围参数）
         full_parameter_mappings = {}
@@ -305,20 +307,49 @@ async def generate_format_config(
                 "base_field_name": param.get("base_field_name")
             }
 
-        config = save_format_config(
-            natural_language=request.natural_language,
-            target_format_example=request.target_format_example,
-            api_parameters_str=request.api_parameters,
-            generation_result={
-                "transformScript": result["transformScript"],
-                "parameterMappings": full_parameter_mappings,
-                "mqlTemplate": result["dynamicMql"],
-                "apiName": api_name
-            },
-            used_view_id=filter_result.get("used_view_id"),
-            db=db,
-            api_name=api_name
-        )
+        generation_payload = {
+            "transformScript": result["transformScript"],
+            "parameterMappings": full_parameter_mappings,
+            "mqlTemplate": result["dynamicMql"],
+            "apiName": api_name
+        }
+
+        if request.overwrite_config_id:
+            config = db.query(DataFormatConfig).filter(
+                DataFormatConfig.id == request.overwrite_config_id
+            ).first()
+            if not config:
+                raise HTTPException(status_code=404, detail="要覆盖的接口配置不存在")
+
+            config.name = api_name
+            config.natural_language = request.natural_language
+            config.target_format_example = request.target_format_example
+            config.api_parameters_str = request.api_parameters
+            config.transform_script = result["transformScript"]
+            config.parameter_mappings = full_parameter_mappings
+            config.mql_template = result["dynamicMql"]
+            config.view_id = filter_result.get("used_view_id") or request.view_id or config.view_id
+            config.generated_api = generate_api_info(
+                config_id=config.id,
+                name=api_name,
+                parameter_mappings=full_parameter_mappings,
+                target_format_example=request.target_format_example,
+                mql_template=result["dynamicMql"]
+            )
+            config.status = "validated"
+            config.error_message = None
+            db.commit()
+            db.refresh(config)
+        else:
+            config = save_format_config(
+                natural_language=request.natural_language,
+                target_format_example=request.target_format_example,
+                api_parameters_str=request.api_parameters,
+                generation_result=generation_payload,
+                used_view_id=filter_result.get("used_view_id"),
+                db=db,
+                api_name=api_name
+            )
 
         return {
             "success": True,
@@ -556,7 +587,12 @@ async def update_config(
         raise HTTPException(status_code=404, detail="配置不存在")
 
     if request.name is not None:
-        config.name = request.name
+        config.name = request.name.strip() or config.name
+        if config.generated_api:
+            config.generated_api = {
+                **config.generated_api,
+                "description": config.name
+            }
     if request.status is not None:
         config.status = request.status
 
@@ -819,6 +855,8 @@ async def get_custom_api_docs(
         "configId": config.id,
         "name": config.name,
         "api": config.generated_api,
+        "targetFormatExample": config.target_format_example,
+        "apiParameters": config._parse_api_parameters(),
         "status": config.status
     }
 

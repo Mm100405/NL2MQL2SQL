@@ -458,6 +458,10 @@ class SaveConversationRequest(BaseModel):
     messages: list
 
 
+class UpdateConversationTitleRequest(BaseModel):
+    title: str
+
+
 @router.post("/conversation/{conversation_id}/save")
 def save_conversation_history(
     conversation_id: str,
@@ -497,15 +501,19 @@ def save_conversation_history(
         # 更新现有记录
         existing_history.messages = messages
         existing_history.natural_language = messages[0]["content"] if messages else "对话记录"
+        if not existing_history.title:
+            existing_history.title = existing_history.natural_language
         db.commit()
         db.refresh(existing_history)
         return {"id": existing_history.id, "updated": True}
     else:
         logger.info(f"创建新记录: {conversation_id}")
         # 创建新记录
+        natural_language = messages[0]["content"] if messages else "对话记录"
         history = QueryHistory(
             conversation_id=conversation_id,
-            natural_language=messages[0]["content"] if messages else "对话记录",
+            natural_language=natural_language,
+            title=natural_language,
             messages=messages,
             status="success"
         )
@@ -513,6 +521,34 @@ def save_conversation_history(
         db.commit()
         db.refresh(history)
         return {"id": history.id, "created": True}
+
+
+@router.put("/conversation/{conversation_id}/title")
+def update_conversation_title(
+    conversation_id: str,
+    request: UpdateConversationTitleRequest,
+    db: Session = Depends(get_db)
+):
+    """更新对话标题"""
+    title = request.title.strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="标题不能为空")
+
+    histories = db.query(QueryHistory).filter(
+        QueryHistory.conversation_id == conversation_id
+    ).all()
+    if not histories:
+        history = db.query(QueryHistory).filter(QueryHistory.id == conversation_id).first()
+        histories = [history] if history else []
+
+    if not histories:
+        raise HTTPException(status_code=404, detail="Conversation history not found")
+
+    for history in histories:
+        history.title = title[:255]
+    db.commit()
+
+    return histories[0].to_dict()
 
 
 @router.get("/conversation/{conversation_id}")

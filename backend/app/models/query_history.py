@@ -11,6 +11,7 @@ class QueryHistory(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     conversation_id = Column(String(36), nullable=False, index=True)  # 对话ID，用于关联同一对话的多次查询
     natural_language = Column(Text, nullable=False)
+    title = Column(String(255), nullable=True)
     mql_query = Column(JSON, nullable=True)
     sql_query = Column(Text, nullable=True)
     execution_time = Column(Integer, nullable=True)  # milliseconds
@@ -26,6 +27,7 @@ class QueryHistory(Base):
             "id": self.id,
             "conversation_id": self.conversation_id,
             "natural_language": self.natural_language,
+            "title": self.title or self.natural_language,
             "mql_query": self.mql_query,
             "sql_query": self.sql_query,
             "execution_time": self.execution_time,

@@ -14,11 +14,14 @@
       <a-alert type="info" class="api-endpoint">
         <template #icon><icon-link /></template>
         <div class="endpoint-info">
-          <span class="api-name" v-if="apiDocs?.name">{{ apiDocs.name }}</span>
+          <span class="api-name" v-if="apiDocs?.name">
+            {{ apiDocs.name }}
+            <a-button type="text" size="mini" @click="handleEditName">修改名称</a-button>
+          </span>
           <span class="endpoint-text">{{ apiDocs?.api?.endpoint || '未生成' }}</span>
         </div>
         <a-space>
-          <a-button type="text" size="mini" @click="handleRegenerate" :loading="regenerating">
+          <a-button type="text" size="mini" @click="handleRegenerate">
             重新生成
           </a-button>
           <a-button type="text" size="mini" @click="copyEndpoint">
@@ -129,6 +132,20 @@
       </div>
     </div>
   </a-modal>
+
+  <a-modal
+    v-model:visible="nameEditVisible"
+    title="修改接口名称"
+    @ok="handleSaveName"
+    @cancel="nameEditVisible = false"
+  >
+    <a-input
+      v-model="editingName"
+      placeholder="请输入接口名称"
+      allow-clear
+      :max-length="255"
+    />
+  </a-modal>
 </template>
 
 <script setup lang="ts">
@@ -142,7 +159,7 @@ import {
 import {
   callCustomApi,
   getCustomApiDocs,
-  regenerateDataFormatConfig
+  updateDataFormatConfig
 } from '@/api/data_format'
 
 const props = defineProps<{
@@ -152,12 +169,15 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'update:visible': [value: boolean]
+  regenerate: [docs: any]
+  renamed: [payload: { configId: string, name: string }]
 }>()
 
 const loading = ref(false)
-const regenerating = ref(false)
 const apiDocs = ref<any>(null)
 const requestParams = ref<Record<string, any>>({})
+const nameEditVisible = ref(false)
+const editingName = ref('')
 const responseData = ref<any>(null)
 const responseSuccess = ref(true)
 const responseTime = ref(0)
@@ -178,7 +198,7 @@ async function loadApiDocs() {
     // 初始化参数 - 从 api.parameterConfig（使用paramName字段作为key）
     if (docs?.api?.parameterConfig) {
       requestParams.value = {}
-      Object.entries(docs.api.parameterConfig).forEach(([key, config]) => {
+      Object.entries(docs.api.parameterConfig as Record<string, any>).forEach(([key, config]) => {
         const paramKey = config.paramName || key
         requestParams.value[paramKey] = ''
       })
@@ -238,6 +258,28 @@ async function handleDebug() {
   }
 }
 
+function handleEditName() {
+  if (!props.configId || !apiDocs.value) return
+  editingName.value = apiDocs.value.name || ''
+  nameEditVisible.value = true
+}
+
+async function handleSaveName() {
+  const nextName = editingName.value.trim()
+  if (!nextName) {
+    Message.warning('接口名称不能为空')
+    return false
+  }
+  const updated = await updateDataFormatConfig(props.configId, { name: nextName })
+  apiDocs.value.name = updated.name || nextName
+  if (apiDocs.value.api) {
+    apiDocs.value.api.description = apiDocs.value.name
+  }
+  emit('renamed', { configId: props.configId, name: apiDocs.value.name })
+  nameEditVisible.value = false
+  Message.success('接口名称已更新')
+}
+
 // 清空参数
 function handleClear() {
   Object.keys(requestParams.value).forEach(key => {
@@ -273,35 +315,13 @@ function formatResponse(data: any) {
 }
 
 // 重新生成配置
-async function handleRegenerate() {
-  if (!props.configId) {
-    Message.warning('缺少配置ID')
+function handleRegenerate() {
+  if (!props.configId || !apiDocs.value) {
+    Message.warning('缺少配置信息')
     return
   }
-
-  regenerating.value = true
-
-  try {
-    const result = await regenerateDataFormatConfig(props.configId)
-
-    if (result.success) {
-      Message.success('重新生成成功')
-      // 重新加载API文档
-      await loadApiDocs()
-      // 清空之前的调试结果
-      responseData.value = null
-      requestParams.value = {}
-    } else {
-      Message.error(`重新生成失败: ${result.error || result.validationError || '未知错误'}`)
-      // 如果有验证错误，也重新加载API文档（因为可能已经部分更新）
-      await loadApiDocs()
-    }
-  } catch (error: any) {
-    console.error('重新生成失败:', error)
-    Message.error(`重新生成失败: ${error.message || '网络错误'}`)
-  } finally {
-    regenerating.value = false
-  }
+  emit('regenerate', apiDocs.value)
+  visible.value = false
 }
 
 function handleClose() {
