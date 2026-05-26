@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 class QueryRequest(BaseModel):
     natural_language: str
     context: Optional[dict] = None
+    view_id: Optional[str] = None
 
 
 class AnalysisStep(BaseModel):
@@ -155,6 +156,10 @@ async def generate_mql(request: QueryRequest, db: Session = Depends(get_db)):
     
     api_key = decrypt_api_key(model_config.api_key) if model_config.api_key else None
     
+    context = dict(request.context or {})
+    if request.view_id:
+        context["view_id"] = request.view_id
+
     result = await parse_natural_language(
         natural_language=request.natural_language,
         provider=model_config.provider,
@@ -163,7 +168,7 @@ async def generate_mql(request: QueryRequest, db: Session = Depends(get_db)):
         api_base=model_config.api_base,
         config_params=model_config.config_params,
         db=db,
-        context=request.context
+        context=context
     )
     
     return NL2MQLResponse(**result)

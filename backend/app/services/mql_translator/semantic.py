@@ -356,6 +356,12 @@ class SemanticContext:
         Returns:
             (view_ref, datasource_id) 或 (None, None)
         """
+        selected_view_id = mql.get("view_id") or (mql.get("metadata") or {}).get("view_id")
+        if selected_view_id:
+            view = self.resolve_view(selected_view_id)
+            if view:
+                return view, view.datasource_id
+
         metric_defs = mql.get("metricDefinitions", {})
 
         # 从指标定义中查找视图

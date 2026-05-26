@@ -77,8 +77,9 @@ class ValidationContext:
     在 Node 1 (Preparation) 阶段构建，传递给各校验器使用
     """
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, view_id: Optional[str] = None):
         self.db = db
+        self.view_id = view_id
         # 指标集合
         self.metric_names: Set[str] = set()
         self.metric_display_names: Set[str] = set()
@@ -110,8 +111,10 @@ class ValidationContext:
         from app.models.dimension import Dimension
         from app.models.view import View
 
-        # 加载指标
-        for m in self.db.query(Metric).all():
+        metric_query = self.db.query(Metric)
+        if self.view_id:
+            metric_query = metric_query.filter(Metric.view_id == self.view_id)
+        for m in metric_query.all():
             self.metric_names.add(m.name)
             if m.display_name:
                 self.metric_display_names.add(m.display_name)
@@ -127,8 +130,10 @@ class ValidationContext:
                 "view_id": m.view_id,
             }
 
-        # 加载维度
-        for d in self.db.query(Dimension).all():
+        dimension_query = self.db.query(Dimension)
+        if self.view_id:
+            dimension_query = dimension_query.filter(Dimension.view_id == self.view_id)
+        for d in dimension_query.all():
             self.dimension_names.add(d.name)
             if d.display_name:
                 self.dimension_display_names.add(d.display_name)
@@ -146,8 +151,10 @@ class ValidationContext:
             if d.dimension_type == "time":
                 self.time_dimensions.add(d.name)
 
-        # 加载可过滤字段（从 View 中）
-        for view in self.db.query(View).all():
+        view_query = self.db.query(View)
+        if self.view_id:
+            view_query = view_query.filter(View.id == self.view_id)
+        for view in view_query.all():
             columns = view.columns or []
             for col in columns:
                 # 检查字段是否可过滤

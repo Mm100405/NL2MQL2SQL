@@ -32,9 +32,9 @@ class MQLCompositeValidator:
     组合所有独立校验器，一次性验证完整的 MQL。
     """
 
-    def __init__(self, db: Session):
+    def __init__(self, db: Session, view_id: str = None):
         self.db = db
-        self.context = ValidationContext(db)
+        self.context = ValidationContext(db, view_id=view_id)
 
         # 创建所有校验器并注入上下文
         self.validators = [

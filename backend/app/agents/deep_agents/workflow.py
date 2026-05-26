@@ -113,10 +113,11 @@ async def preparation_node(state: DeepAgentState) -> Dict[str, Any]:
 
 
     steps = state.get("steps", [])
+    view_info = f", 当前视图={context.get('view_id')}" if context.get("view_id") else ""
     steps.append({
         "step": "preparation",
         "status": "success",
-        "detail": f"检索到 {len(metrics_list)} 个指标, {len(dimensions_list)} 个维度, 意图={intent_type}, 复杂度={complexity}"
+        "detail": f"检索到 {len(metrics_list)} 个指标, {len(dimensions_list)} 个维度{view_info}, 意图={intent_type}, 复杂度={complexity}"
     })
 
     return {

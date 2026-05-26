@@ -179,7 +179,21 @@ async def _process_generation(
     # 如果 filter_result 中没有 used_view_id，使用传入的 view_id
     if not filter_result.get("used_view_id") and view_id:
         filter_result["used_view_id"] = view_id
-        logger.info(f"[ProcessGeneration] 使用传入的 view_id: {view_id}")
+        logger.info(f"[ProcessGeneration] 使用传入的 view_id: %s", view_id)
+
+    # 再兜底：尝试从已有 MQL 或当前默认视图中补回 view_id
+    if not filter_result.get("used_view_id"):
+        fallback_view_id = view_id
+        if not fallback_view_id and isinstance(existing_mql, dict):
+            fallback_view_id = existing_mql.get("view_id") or (existing_mql.get("metadata") or {}).get("view_id")
+        if not fallback_view_id:
+            from app.models.view import View
+            fallback_view = db.query(View).first()
+            if fallback_view:
+                fallback_view_id = fallback_view.id
+        if fallback_view_id:
+            filter_result["used_view_id"] = fallback_view_id
+            logger.info("[ProcessGeneration] 兜底设置 used_view_id: %s", fallback_view_id)
 
     # 4. 生成动态MQL
     valid_params = filter_result.get("valid_parameters", [])

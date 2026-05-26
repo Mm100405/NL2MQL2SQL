@@ -2186,6 +2186,7 @@ async function handleQuery() {
               
               // 填充最终结果 - 包含所有字段
               res.mql = data.mql || {}
+              res.view_id = data.view_id || res.view_id
               res.sql = data.sql || ''
               res.result = data.result || { columns: [], data: [], total_count: 0, execution_time: 0 }
               
