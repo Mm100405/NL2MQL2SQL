@@ -5,7 +5,12 @@
     <template v-else>
       <!-- 顶部标题栏 + 视图选择 -->
       <div class="query-header">
-        <span class="query-title">{{ currentQueryTitle }}</span>
+        <div class="title-group">
+          <span class="query-title">{{ currentQueryTitle }}</span>
+          <a-button type="text" size="mini" class="title-edit-btn" @click="handleEditCurrentTitle">
+            <template #icon><icon-edit /></template>
+          </a-button>
+        </div>
         <div class="view-selector">
           <a-radio-group v-model="activeViewId" type="button" size="small">
             <a-radio v-for="tab in viewTabs" :key="tab.key" :value="tab.viewId">
@@ -425,6 +430,20 @@
       </a-form>
     </a-modal>
 
+    <a-modal
+      v-model:visible="titleEditVisible"
+      title="修改对话标题"
+      @ok="handleSaveCurrentTitle"
+      @cancel="titleEditVisible = false"
+    >
+      <a-input
+        v-model="editingTitle"
+        placeholder="请输入对话标题"
+        allow-clear
+        :max-length="255"
+      />
+    </a-modal>
+
     <!-- 数据格式配置弹窗 -->
     <DataFormatConfigModal
       v-model:visible="dataFormatConfigVisible"
@@ -437,6 +456,8 @@
     <ApiDebugModal
       v-model:visible="apiDebugVisible"
       :config-id="apiDebugConfigId"
+      @regenerate="handleRegenerateApi"
+      @renamed="handleApiRenamed"
     />
 
     <!-- 视图选择弹窗 -->
@@ -480,6 +501,7 @@ import {
   IconSend,
   IconDelete,
   IconPlus,
+  IconEdit,
   IconFilter,
   IconThunderbolt,
   IconFile,
@@ -494,7 +516,7 @@ import ChartContainer from '@/components/common/ChartContainer.vue'
 import DataFormatConfigModal from '@/components/query/DataFormatConfigModal.vue'
 import ApiDebugModal from '@/components/query/ApiDebugModal.vue'
 import type { FullQueryResponse, AnalysisStep } from '@/api/types'
-import { analyzeIntent, generateMQL, mql2sql, executeSQL, getQueryHistoryDetail, startConversation, getConversationHistory, saveConversationHistory, parseTimeRanges } from '@/api/query'
+import { analyzeIntent, generateMQL, mql2sql, executeSQL, getQueryHistoryDetail, startConversation, getConversationHistory, saveConversationHistory, parseTimeRanges, updateConversationTitle } from '@/api/query'
 import { getMetrics, getDimensions, getMetricsAllowedDimensions } from '@/api/semantic'
 import { getSystemSetting } from '@/api/settings'
 import { generateDataFormatConfig } from '@/api/data_format'
@@ -514,13 +536,17 @@ const queryInput = ref('')
 const loading = ref(false)
 const chatContainer = ref<HTMLElement | null>(null)
 const currentQueryTitle = ref('问数对话')
+const titleEditVisible = ref(false)
+const editingTitle = ref('')
 const conversationId = ref<string | null>(null)  // 当前对话ID
 
 // 数据格式配置弹窗
 const dataFormatConfigVisible = ref(false)
 const dataFormatConfig = ref<{
+  apiName?: string
   targetFormat: any
   apiParameters: string[]
+  overwriteConfigId?: string
 } | undefined>(undefined)
 const generatingDataFormatQueryIds = new Set<string>()
 
@@ -750,6 +776,25 @@ const drillDownAvailableDimensions = computed(() => {
   
   return results
 })
+
+function handleEditCurrentTitle() {
+  editingTitle.value = currentQueryTitle.value || ''
+  titleEditVisible.value = true
+}
+
+async function handleSaveCurrentTitle() {
+  const nextTitle = editingTitle.value.trim()
+  if (!nextTitle) {
+    Message.warning('标题不能为空')
+    return false
+  }
+  if (conversationId.value) {
+    await updateConversationTitle(conversationId.value, nextTitle)
+  }
+  currentQueryTitle.value = nextTitle
+  titleEditVisible.value = false
+  Message.success('标题已更新')
+}
 
 function formatDimensionName(dim: string) {
   if (!dim) return ''
@@ -1073,7 +1118,7 @@ async function loadConversationHistory(convId: string) {
       return;
     }
     
-    currentQueryTitle.value = detail.natural_language?.slice(0, 15) || '历史对话'
+    currentQueryTitle.value = detail.title || detail.natural_language?.slice(0, 15) || '历史对话'
     
     // 如果有完整的消息历史，直接使用
     if (detail.messages && Array.isArray(detail.messages)) {
@@ -1386,7 +1431,7 @@ async function loadHistorySession(id: string) {
   loading.value = true
   try {
     const detail = await getQueryHistoryDetail(id)
-    currentQueryTitle.value = detail.natural_language.slice(0, 15)
+    currentQueryTitle.value = detail.title || detail.natural_language.slice(0, 15)
     
     // 恢复对话展示
     const agentMsg: MessageItem = { 
@@ -1592,8 +1637,42 @@ function openApiDebug(configId: string) {
   apiDebugVisible.value = true
 }
 
+function handleApiRenamed(payload: { configId: string, name: string }) {
+  messages.value.forEach(msg => {
+    if (msg.queryResult?.dataFormatConfigId === payload.configId) {
+      msg.queryResult.dataFormatApiName = payload.name
+    }
+  })
+}
+
+function handleRegenerateApi(apiDocs: any) {
+  const configId = apiDocs?.configId || apiDebugConfigId.value
+  if (!configId) {
+    Message.warning('缺少接口配置ID')
+    return
+  }
+  const queryResult = messages.value
+    .map(msg => msg.queryResult)
+    .find(result => result?.dataFormatConfigId === configId)
+  if (!queryResult) {
+    Message.warning('未找到原始查询结果，无法覆盖重新生成')
+    return
+  }
+  const parameterConfig = apiDocs?.api?.parameterConfig || {}
+  dataFormatConfig.value = {
+    apiName: apiDocs?.name || queryResult.dataFormatApiName,
+    targetFormat: apiDocs?.targetFormatExample || [],
+    apiParameters: apiDocs?.apiParameters || Object.values(parameterConfig)
+      .map((config: any) => config?.paramName)
+      .filter((param): param is string => Boolean(param)),
+    overwriteConfigId: configId
+  }
+  activeQueryResult.value = queryResult
+  showDataFormatConfig()
+}
+
 // 处理数据格式配置保存
-async function handleDataFormatSave(config: { targetFormat: any, apiParameters: string[] }) {
+async function handleDataFormatSave(config: { apiName?: string, targetFormat: any, apiParameters: string[], overwriteConfigId?: string }) {
   dataFormatConfig.value = config
   const queryResult = activeQueryResult.value
   activeQueryResult.value = null
@@ -1606,11 +1685,13 @@ async function handleDataFormatSave(config: { targetFormat: any, apiParameters: 
 
 // 为指定查询结果生成数据格式配置
 async function generateDataFormatForQuery(queryResult: FullQueryResponse) {
-  if (queryResult.dataFormatConfigId) {
+  const overwriteConfigId = dataFormatConfig.value?.overwriteConfigId
+
+  if (queryResult.dataFormatConfigId && !overwriteConfigId) {
     return
   }
 
-  const generationKey = queryResult.query_id || queryResult.sql || queryResult.natural_language || '__current__'
+  const generationKey = overwriteConfigId || queryResult.query_id || queryResult.sql || queryResult.natural_language || '__current__'
   if (generatingDataFormatQueryIds.has(generationKey)) {
     return
   }
@@ -1676,6 +1757,12 @@ async function generateDataFormatForQuery(queryResult: FullQueryResponse) {
       natural_language: queryResult.natural_language || '',
       target_format_example: clonedTargetFormat,
       api_parameters: apiParametersStr || ''
+    }
+    if (dataFormatConfig.value.apiName) {
+      requestData.api_name = dataFormatConfig.value.apiName
+    }
+    if (overwriteConfigId) {
+      requestData.overwrite_config_id = overwriteConfigId
     }
     
     // 传入前置查询结果
@@ -2099,6 +2186,7 @@ async function handleQuery() {
               
               // 填充最终结果 - 包含所有字段
               res.mql = data.mql || {}
+              res.view_id = data.view_id || res.view_id
               res.sql = data.sql || ''
               res.result = data.result || { columns: [], data: [], total_count: 0, execution_time: 0 }
               
@@ -2785,10 +2873,33 @@ async function handleAdjust() {
   background: var(--bg-elevated);
 }
 
+.title-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+
 .query-title {
   font-size: 13px;
   font-weight: 600;
   color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.title-edit-btn {
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  color: var(--text-tertiary);
+}
+
+.title-edit-btn:hover {
+  color: var(--soft-primary);
 }
 
 .view-selector {

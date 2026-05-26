@@ -43,6 +43,8 @@ class AgentQueryRequest(BaseModel):
     natural_language: str
     context: Optional[dict] = None
     user_id: Optional[str] = "anonymous"
+    conversation_id: Optional[str] = None
+    view_id: Optional[str] = None
 
 
 class AgentStep(BaseModel):
@@ -218,6 +220,10 @@ async def agent_query_stream(
             # 发送开始事件
             yield format_sse_event("start", {"query_id": query_id})
 
+            request_context = dict(request.context or {})
+            if request.view_id:
+                request_context["view_id"] = request.view_id
+
             # 使用增强版管理器（支持动态 Skills）
             from app.agents.deep_agents.enhanced_manager import get_enhanced_deep_agents_manager
 
@@ -312,7 +318,7 @@ async def agent_query_stream(
             task = asyncio.create_task(
                 manager.execute_stream_with_skills(
                     natural_language=request.natural_language,
-                    context=request.context or {},
+                    context=request_context,
                     max_retries=3,
                     step_callback=streaming_step_callback,
                     use_skills=True  # 启用已加载的 Skills
@@ -353,6 +359,7 @@ async def agent_query_stream(
                 yield format_sse_event("result", {
                     "natural_language": result.get('natural_language'),
                     "mql": result.get('mql'),
+                    "view_id": (result.get('mql') or {}).get('view_id') or request_context.get('view_id'),
                     "sql": result.get('sql'),
                     "result": result.get('result'),
                     "interpretation": result.get('interpretation'),

@@ -42,6 +42,11 @@ export function saveConversationHistory(conversation_id: string, messages: any[]
   return request.post(`/query/conversation/${conversation_id}/save`, { messages })
 }
 
+// 更新对话标题
+export function updateConversationTitle(conversation_id: string, title: string): Promise<QueryHistory> {
+  return request.put(`/query/conversation/${conversation_id}/title`, { title })
+}
+
 // 获取对话历史
 export function getConversationHistory(conversation_id: string): Promise<any> {
   return request.get(`/query/conversation/${conversation_id}`)

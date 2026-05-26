@@ -687,6 +687,9 @@ def _build_metadata_strings(
     # 优先使用传入的 ORM 对象，避免重复查 DB
     if metrics_objs is None:
         metrics_query = db.query(Metric)
+        view_id = context.get("view_id") if context else None
+        if view_id:
+            metrics_query = metrics_query.filter(Metric.view_id == view_id)
         if context and context.get("suggested_metrics"):
             from sqlalchemy import or_
             metrics_query = metrics_query.filter(or_(
@@ -699,6 +702,9 @@ def _build_metadata_strings(
 
     if dimensions_objs is None:
         dimensions_query = db.query(Dimension)
+        view_id = context.get("view_id") if context else None
+        if view_id:
+            dimensions_query = dimensions_query.filter(Dimension.view_id == view_id)
         if context and context.get("suggested_dimensions"):
             from sqlalchemy import or_
             dimensions_query = dimensions_query.filter(or_(
@@ -732,7 +738,7 @@ def _build_metadata_strings(
     
     # 格式：展示名 [name:逻辑名]，LLM 理解时用展示名，输出 MQL 时用逻辑名
     metrics_list = [f"- {m.display_name or m.name} [name:{m.name}]" for m in metrics]
-    metrics_str = "\n".join(metrics_list) or "- 销售额 [name:gmv]"
+    metrics_str = "\n".join(metrics_list) or "- 当前视图暂无可用指标"
     
     dims_list = []
     for d in dimensions:
@@ -784,14 +790,18 @@ def _build_metadata_strings(
             dim_info = f"- {d.display_name or d.name} [name:{d.name}]"
             dims_list.append(dim_info)
     
-    dimensions_str = "\n".join(dims_list) or "- 日期 [name:date]"
+    dimensions_str = "\n".join(dims_list) or "- 当前视图暂无可用维度"
 
     # 构建可过滤字段列表和可返回明细字段列表
     filterable_fields_list = []
     detail_fields_list = []
 
     # 从视图中获取可过滤字段
-    views = db.query(View).all()
+    view_id = context.get("view_id") if context else None
+    views_query = db.query(View)
+    if view_id:
+        views_query = views_query.filter(View.id == view_id)
+    views = views_query.all()
     for view in views:
         columns = view.columns or []
         for col in columns:
@@ -829,8 +839,8 @@ def _build_metadata_strings(
 
                 filterable_fields_list.append(f"- {display_name} [name:{field_name}] | 类型: {field_type} | 说明: {description_text}{optional_values}")
 
-    filterable_fields_str = "\n".join(filterable_fields_list) or "- 渠道 [name:channel] | 类型: VARCHAR | 说明: 主要推广渠道 | 可选值: 直搜, 搜索引擎, 外部链接"
-    detail_fields_str = "\n".join(detail_fields_list) or "- 案件编号 [name:case_id] | 类型: string | 说明: 明细主键"
+    filterable_fields_str = "\n".join(filterable_fields_list) or "- 当前视图暂无可过滤字段"
+    detail_fields_str = "\n".join(detail_fields_list) or "- 当前视图暂无可返回明细字段"
 
     return metrics_str, dimensions_str, filterable_fields_str, detail_fields_str
 
@@ -854,7 +864,8 @@ async def parse_natural_language(
     """
     # 使用新的模块化校验器
     from app.utils.mql_validator.composite_validator import MQLCompositeValidator
-    validator = MQLCompositeValidator(db)
+    view_id = context.get("view_id") if context else None
+    validator = MQLCompositeValidator(db, view_id=view_id)
     
     # 1. 获取元数据字符串（优先使用预构建的，否则查 DB）
     detail_fields_str = ""
@@ -915,7 +926,9 @@ async def parse_natural_language(
                 mql_str = mql_str.split("```")[1].split("```")[0].strip()
             
             mql = json.loads(mql_str)
-            
+            if view_id:
+                mql["view_id"] = view_id
+
             last_mql = mql
             
             # 3. Strong Validation Integration (使用新的模块化校验器)
@@ -996,6 +1009,9 @@ async def parse_natural_language(
         "queryResultType": "DETAIL" if is_detail_mode else "DATA", "filters": {}
     }
     
+    if view_id:
+        final_mql["view_id"] = view_id
+
     return {
         "mql": final_mql,
         "steps": [

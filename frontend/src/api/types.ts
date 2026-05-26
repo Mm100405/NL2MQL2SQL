@@ -207,6 +207,7 @@ export interface QueryHistory {
   id: string
   conversation_id?: string  // 对话ID，用于对话历史记录
   natural_language: string
+  title?: string
   mql_query: any
   sql_query: string
   execution_time: number
