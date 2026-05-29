@@ -2191,7 +2191,9 @@ async function handleQuery() {
               res.result = data.result || { columns: [], data: [], total_count: 0, execution_time: 0 }
               
               // 确保 chart_recommendation 存在
-              if (!res.result.chart_recommendation && data.visualization) {
+              if (String(res.mql?.queryResultType || 'DATA').toUpperCase() === 'DETAIL') {
+                res.result.chart_recommendation = 'table'
+              } else if (!res.result.chart_recommendation && data.visualization) {
                 res.result.chart_recommendation = data.visualization
               } else if (!res.result.chart_recommendation) {
                 res.result.chart_recommendation = 'table'

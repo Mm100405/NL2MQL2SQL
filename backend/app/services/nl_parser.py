@@ -600,7 +600,8 @@ DETAIL 模式 JSON 结构：
 5. orderBy 字段必须来自 fields 或可返回字段列表。
 6. 如果用户要求“最近/最新/倒序”，优先按时间字段 DESC 排序。
 7. limit 默认 100；如果用户明确要求条数，使用用户指定值。
-8. 只返回 JSON，不要解释。
+8. 时间过滤只能使用这些 MQL 时间函数：TODAY(), YESTERDAY(), TOMORROW(), LAST_N_DAYS(n), LAST_N_MONTHS(n), LAST_N_YEARS(n), NEXT_N_DAYS(n), NEXT_N_MONTHS(n), THIS_WEEK(), THIS_MONTH(), THIS_QUARTER(), THIS_YEAR()。表达“今年以来/本年开始”必须使用 THIS_YEAR()，不要使用 START_OF_YEAR()。
+9. 只返回 JSON，不要解释。
 
 可返回字段列表（格式：展示名 [name:逻辑名] | 类型 | 说明）:
 {detail_fields}

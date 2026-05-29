@@ -308,6 +308,7 @@ async def agent_query_stream(
                         "sql": current_state.get('sql'),
                         "sql_datasources": current_state.get('sql_datasources', []),
                         "query_result": current_state.get('query_result'),
+                        "result": current_state.get('query_result'),
                         "query_id": current_state.get('query_id'),
                         "insights": current_state.get('insights', []),
                         "visualization": current_state.get('visualization'),
@@ -517,7 +518,7 @@ async def event_stream_generator(
 
 def format_sse_event(event_type: str, data: dict) -> str:
     """格式化SSE事件"""
-    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
 
 
 
@@ -763,8 +764,8 @@ async def parse_time_ranges(request: TimeRangeRequest, db: Session = Depends(get
                 result_dt = datetime.now() + relativedelta(months=n)
                 return result_dt.replace(hour=0, minute=0, second=0, microsecond=0)
 
-            # THIS_WEEK()
-            if func_str.upper() == "THIS_WEEK()":
+            # THIS_WEEK() / START_OF_WEEK()
+            if func_str.upper() in ("THIS_WEEK()", "START_OF_WEEK()"):
                 # 本周一
                 today = datetime.now()
                 days_since_monday = today.weekday()
@@ -772,12 +773,12 @@ async def parse_time_ranges(request: TimeRangeRequest, db: Session = Depends(get
                     hour=0, minute=0, second=0, microsecond=0
                 )
 
-            # THIS_MONTH()
-            if func_str.upper() == "THIS_MONTH()":
+            # THIS_MONTH() / START_OF_MONTH()
+            if func_str.upper() in ("THIS_MONTH()", "START_OF_MONTH()"):
                 return datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-            # THIS_YEAR()
-            if func_str.upper() == "THIS_YEAR()":
+            # THIS_YEAR() / START_OF_YEAR()
+            if func_str.upper() in ("THIS_YEAR()", "START_OF_YEAR()"):
                 return datetime.now().replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
 
             # 尝试解析为日期字符串

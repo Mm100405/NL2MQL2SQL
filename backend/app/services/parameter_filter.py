@@ -1,15 +1,102 @@
 """
 参数筛选和MQL生成服务
 """
-from typing import Dict, Any, List, Optional, Union
+from typing import Dict, Any, List, Optional, Union, Set
 from sqlalchemy.orm import Session
 import copy
 import re
 
 
+_TIME_RANGE_PATTERN = re.compile(r'^(.+?)[_]?(开始|结束|start|end|from|to)$', re.IGNORECASE)
+
+
+def _parse_time_range_param(param_name: Optional[str]) -> tuple[Optional[str], Optional[str]]:
+    if not param_name:
+        return None, None
+    match = _TIME_RANGE_PATTERN.match(param_name)
+    if not match:
+        return None, None
+    suffix = match.group(2).lower()
+    range_type = "start" if suffix in ["开始", "start", "from"] else "end"
+    return match.group(1), range_type
+
+
+def _mapping_filter_field(param_name: str, mapping: Dict[str, Any]) -> Optional[str]:
+    base_name, _ = _parse_time_range_param(mapping.get("param_name") or param_name)
+    return (
+        mapping.get("source_field")
+        or mapping.get("sourceField")
+        or mapping.get("field_name")
+        or mapping.get("fieldName")
+        or mapping.get("base_field_name")
+        or mapping.get("baseFieldName")
+        or base_name
+        or param_name
+    )
+
+
+def get_parameter_filter_fields(parameter_mappings: Dict[str, Any]) -> Set[str]:
+    fields: Set[str] = set()
+    for param_name, mapping in (parameter_mappings or {}).items():
+        if not isinstance(mapping, dict):
+            continue
+        base_name, _ = _parse_time_range_param(mapping.get("param_name") or param_name)
+        for key in ("source_field", "sourceField", "field_name", "fieldName", "base_field_name", "baseFieldName"):
+            value = mapping.get(key)
+            if value:
+                fields.add(str(value))
+        if base_name:
+            fields.add(base_name)
+    return fields
+
+
+def remove_filter_conditions_for_fields(filters: Any, field_names: Set[str]) -> Any:
+    if not field_names:
+        return copy.deepcopy(filters)
+
+    def should_remove(condition: Any) -> bool:
+        if isinstance(condition, dict) and "field" in condition:
+            return str(condition.get("field")) in field_names
+        if isinstance(condition, str):
+            refs = re.findall(r"\[([^\]]+)\]", condition)
+            return any(ref in field_names for ref in refs)
+        return False
+
+    def clean(condition: Any) -> Any:
+        if should_remove(condition):
+            return None
+        if isinstance(condition, dict) and "conditions" in condition:
+            cleaned_conditions = []
+            for sub in condition.get("conditions", []):
+                cleaned = clean(sub)
+                if cleaned is not None:
+                    cleaned_conditions.append(cleaned)
+            if not cleaned_conditions:
+                return None
+            cleaned_group = copy.deepcopy(condition)
+            cleaned_group["conditions"] = cleaned_conditions
+            return cleaned_group
+        return copy.deepcopy(condition)
+
+    if isinstance(filters, dict):
+        cleaned = clean(filters)
+        if cleaned is None:
+            return {"operator": filters.get("operator", "AND"), "conditions": []}
+        return cleaned
+    if isinstance(filters, list):
+        cleaned_list = []
+        for item in filters:
+            cleaned = clean(item)
+            if cleaned is not None:
+                cleaned_list.append(cleaned)
+        return cleaned_list
+    return copy.deepcopy(filters)
+
+
 def filter_api_parameters(
     api_parameters_str: str,
-    db: Session
+    db: Session,
+    view_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     从视图的可过滤字段中筛选API参数
@@ -32,8 +119,11 @@ def filter_api_parameters(
     # 1. 解析API参数字符串
     api_params = [p.strip() for p in api_parameters_str.split("、") if p.strip()]
 
-    # 2. 获取所有视图及其可过滤字段
-    views = db.query(View).all()
+    # 2. 获取视图及其可过滤字段
+    view_query = db.query(View)
+    if view_id:
+        view_query = view_query.filter(View.id == view_id)
+    views = view_query.all()
 
     # 收集所有可过滤字段
     all_filterable_fields = []
@@ -68,8 +158,8 @@ def filter_api_parameters(
 
     for param_name in api_params:
         # 检查是否是时间范围参数（xxx_开始, xxx_结束 或 xxx_start, xxx_end）
-        time_range_pattern = r'^(.+?)[_]?(开始|结束|start|end|from|to)$'
-        match = re.match(time_range_pattern, param_name, re.IGNORECASE)
+        time_range_pattern = _TIME_RANGE_PATTERN
+        match = time_range_pattern.match(param_name)
         
         if match:
             # 时间范围参数处理
@@ -85,10 +175,12 @@ def filter_api_parameters(
             matched_field = None
             for field in all_filterable_fields:
                 if field["is_time_field"] and (
-                    field["display_name"] == base_name or 
+                    field["display_name"] == base_name or
                     field["field_name"] == base_name or
+                    field.get("source_column") == base_name or
                     base_name in field["display_name"] or
-                    base_name in (field.get("field_name") or "")
+                    base_name in (field.get("field_name") or "") or
+                    base_name in (field.get("source_column") or "")
                 ):
                     matched_field = field
                     break
@@ -135,16 +227,23 @@ def filter_api_parameters(
         # 精确匹配
         matched_field = None
         for field in all_filterable_fields:
-            if field["display_name"] == param_name or field["field_name"] == param_name:
+            if (
+                field["display_name"] == param_name
+                or field["field_name"] == param_name
+                or field.get("source_column") == param_name
+            ):
                 matched_field = field
                 break
 
         # 模糊匹配（如果精确匹配没找到）
         if not matched_field:
             for field in all_filterable_fields:
-                if (param_name in field["display_name"] or
-                    field["display_name"] in param_name or
-                    param_name in (field.get("field_name") or "")):
+                if (
+                    param_name in field["display_name"]
+                    or field["display_name"] in param_name
+                    or param_name in (field.get("field_name") or "")
+                    or param_name in (field.get("source_column") or "")
+                ):
                     matched_field = field
                     break
 
@@ -289,18 +388,26 @@ def generate_dynamic_mql(
 
     logger.info(f"[DynamicMQL] 开始生成，base_mql keys: {list(base_mql.keys()) if base_mql else 'None'}")
 
-    base_filters = copy.deepcopy(base_mql.get("filters", []))
+    parameter_filter_fields = get_parameter_filter_fields(parameter_mappings)
+    base_filters = remove_filter_conditions_for_fields(base_mql.get("filters", []), parameter_filter_fields)
 
     # 复制基础MQL
     mql = {
         "metrics": copy.deepcopy(base_mql.get("metrics", [])),
         "metricDefinitions": copy.deepcopy(base_mql.get("metricDefinitions", {})),
         "dimensions": copy.deepcopy(base_mql.get("dimensions", [])),
+        "fields": copy.deepcopy(base_mql.get("fields", [])),
         "filters": base_filters,
         "timeConstraint": base_mql.get("timeConstraint", "true"),
+        "orderBy": copy.deepcopy(base_mql.get("orderBy", [])),
+        "distinct": base_mql.get("distinct", False),
         "limit": base_mql.get("limit", 1000),
         "queryResultType": base_mql.get("queryResultType", "DATA")
     }
+    if base_mql.get("view_id"):
+        mql["view_id"] = base_mql["view_id"]
+    if base_mql.get("metadata"):
+        mql["metadata"] = copy.deepcopy(base_mql["metadata"])
 
     logger.info(f"[DynamicMQL] MQL 构建完成，keys: {list(mql.keys())}")
 
@@ -316,11 +423,42 @@ def generate_dynamic_mql(
             mql["filters"] = [filter_condition]
 
     # 为每个API参数生成过滤条件
+    time_range_mappings: Dict[str, Dict[str, Any]] = {}
+    regular_mappings = []
     for param_name, mapping in parameter_mappings.items():
-        source_field = mapping.get("source_field")
+        if not isinstance(mapping, dict):
+            continue
+        param_key = mapping.get("param_name") or param_name
+        base_name, parsed_range_type = _parse_time_range_param(param_key)
+        is_time_range = bool(mapping.get("is_time_range")) or parsed_range_type is not None
+        if is_time_range:
+            base_field_name = mapping.get("base_field_name") or base_name or mapping.get("field_name") or param_name
+            range_type = mapping.get("range_type") or parsed_range_type
+            source_field = _mapping_filter_field(param_name, mapping) or base_field_name
+            group = time_range_mappings.setdefault(
+                str(base_field_name),
+                {"source_field": source_field, "start": None, "end": None},
+            )
+            group["source_field"] = source_field or group["source_field"]
+            if range_type in ("start", "end"):
+                group[range_type] = param_key
+        else:
+            regular_mappings.append((param_name, mapping))
+
+    for time_range in time_range_mappings.values():
+        source_field = time_range.get("source_field")
+        start_param = time_range.get("start")
+        end_param = time_range.get("end")
+        if source_field and start_param:
+            append_filter({"field": source_field, "op": ">=", "value": f"{{{{{start_param}}}}}"})
+        if source_field and end_param:
+            append_filter({"field": source_field, "op": "<=", "value": f"{{{{{end_param}}}}}"})
+
+    for param_name, mapping in regular_mappings:
+        source_field = _mapping_filter_field(param_name, mapping)
+        param_key = mapping.get("param_name") or param_name
         if source_field:
-            # 使用源字段名生成过滤条件
-            append_filter(f"[{source_field}] = {{{{{param_name}}}}}")
+            append_filter({"field": source_field, "op": "=", "value": f"{{{{{param_key}}}}}"})
 
     return mql
 
@@ -520,6 +658,30 @@ def save_format_config(
         raise
 
 
+def _normalize_param_mapping(name: str, mapping: Dict[str, Any]) -> Dict[str, Any]:
+    param_name = mapping.get("param_name") or mapping.get("paramName") or mapping.get("name") or name
+    source_field = mapping.get("source_field") or mapping.get("sourceField")
+    field_name = mapping.get("field_name") or mapping.get("fieldName")
+    base_name, parsed_range_type = _parse_time_range_param(param_name)
+    is_time_range = bool(mapping.get("is_time_range", mapping.get("isTimeRange", False))) or parsed_range_type is not None
+    range_type = mapping.get("range_type") or mapping.get("rangeType") or parsed_range_type
+    base_field_name = mapping.get("base_field_name") or mapping.get("baseFieldName") or field_name or base_name
+    return {
+        "source_field": source_field,
+        "field_type": mapping.get("field_type") or mapping.get("fieldType") or mapping.get("type", "string"),
+        "field_name": field_name,
+        "view_id": mapping.get("view_id") or mapping.get("viewId"),
+        "display_name": mapping.get("display_name") or mapping.get("displayName") or param_name,
+        "dict_values": mapping.get("dict_values") or mapping.get("dictValues"),
+        "view_name": mapping.get("view_name") or mapping.get("viewName"),
+        "required": mapping.get("required", not is_time_range),
+        "param_name": param_name,
+        "is_time_range": is_time_range,
+        "range_type": range_type,
+        "base_field_name": base_field_name,
+    }
+
+
 def _convert_param_mappings(param_mappings: Union[List[Dict[str, Any]], Dict[str, Any]]) -> Dict[str, Any]:
     """
     转换参数映射格式（从数组转字典，或保持字典格式）
@@ -528,26 +690,16 @@ def _convert_param_mappings(param_mappings: Union[List[Dict[str, Any]], Dict[str
     1. 数组格式（大模型生成）：[{"name": "param1", "sourceField": "field1", "type": "string"}]
     2. 字典格式（数据库匹配）：{"param1": {"source_field": "field1", "field_type": "string"}}
     """
-    # 如果已经是字典格式，直接返回（确保键值对格式正确）
     if isinstance(param_mappings, dict):
         result = {}
         for name, mapping in param_mappings.items():
             if isinstance(mapping, dict):
-                result[name] = {
-                    "source_field": mapping.get("source_field"),
-                    "field_type": mapping.get("field_type", "string"),
-                    # 保留param_name字段
-                    "param_name": mapping.get("param_name")
-                }
+                result[name] = _normalize_param_mapping(name, mapping)
         return result
 
-    # 如果是数组格式，转换为字典
     result = {}
     for mapping in param_mappings:
-        name = mapping.get("name")
+        name = mapping.get("name") or mapping.get("param_name") or mapping.get("paramName")
         if name:
-            result[name] = {
-                "source_field": mapping.get("sourceField"),
-                "field_type": mapping.get("type", "string")
-            }
+            result[name] = _normalize_param_mapping(name, mapping)
     return result

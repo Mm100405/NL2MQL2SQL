@@ -18,9 +18,11 @@ from app.services.parameter_filter import (
     filter_api_parameters,
     generate_dynamic_mql,
     save_format_config,
-    generate_api_info
+    generate_api_info,
+    get_parameter_filter_fields,
+    remove_filter_conditions_for_fields,
 )
-from app.services.query_executor import convert_decimal
+from app.services.query_executor import convert_query_value
 
 router = APIRouter()
 
@@ -96,7 +98,7 @@ async def _process_generation(
     if existing_query_result:
         existing_query_result_dict = {
             "columns": existing_query_result.columns,
-            "data": convert_decimal(existing_query_result.data),
+            "data": convert_query_value(existing_query_result.data),
             "total_count": existing_query_result.total_count,
             "execution_time": existing_query_result.execution_time
         }
@@ -171,9 +173,13 @@ async def _process_generation(
         }
 
     # 3. 筛选API参数
+    effective_view_id = view_id
+    if not effective_view_id and isinstance(existing_mql, dict):
+        effective_view_id = existing_mql.get("view_id") or (existing_mql.get("metadata") or {}).get("view_id")
     filter_result = filter_api_parameters(
         api_parameters_str=api_parameters,
-        db=db
+        db=db,
+        view_id=effective_view_id,
     )
     
     # 如果 filter_result 中没有 used_view_id，使用传入的 view_id
@@ -529,7 +535,7 @@ async def regenerate_config(
         api_info = generate_api_info(
             config_id=config_id,
             name=api_name or old_config.name,  # 使用新的名称
-            parameter_mappings=filter_result.get("parameter_mappings", {}),
+            parameter_mappings=full_parameter_mappings,
             target_format_example=old_config.target_format_example,
             mql_template=result["dynamicMql"]
         )
@@ -712,17 +718,28 @@ async def call_custom_api(
         "metrics": mql_template.get("metrics", []),
         "metricDefinitions": mql_template.get("metricDefinitions", {}),
         "dimensions": mql_template.get("dimensions", []),
+        "fields": mql_template.get("fields", []),
         "filters": base_conditions,
         "timeConstraint": mql_template.get("timeConstraint", "true"),
+        "orderBy": mql_template.get("orderBy", []),
+        "distinct": mql_template.get("distinct", False),
         "limit": mql_template.get("limit", 1000),
         "queryResultType": mql_template.get("queryResultType", "DATA")
     }
+    if mql_template.get("view_id"):
+        mql["view_id"] = mql_template["view_id"]
+    if mql_template.get("metadata"):
+        mql["metadata"] = mql_template["metadata"]
 
     # 注意：不再单独调用 correct_mql，mql_to_sql 内部的 MQLTranslator.translate()
     # 已调用 MQLCorrector.correct_and_validate() 进行验证和修正
 
     # 使用parameter_mappings生成动态过滤条件（V2 结构化格式）
     parameter_mappings = config.parameter_mappings or {}
+    parameter_filter_fields = get_parameter_filter_fields(parameter_mappings) if isinstance(parameter_mappings, dict) else set()
+    if parameter_filter_fields:
+        base_conditions = remove_filter_conditions_for_fields(base_conditions, parameter_filter_fields)
+        mql["filters"] = base_conditions
 
     if parameter_mappings and isinstance(parameter_mappings, dict):
         # 先收集所有时间范围参数，按base_field_name分组
@@ -1342,15 +1359,26 @@ async def call_external_api(
         "metrics": mql_template.get("metrics", []),
         "metricDefinitions": mql_template.get("metricDefinitions", {}),
         "dimensions": mql_template.get("dimensions", []),
+        "fields": mql_template.get("fields", []),
         "filters": base_conditions,
         "timeConstraint": mql_template.get("timeConstraint", "true"),
+        "orderBy": mql_template.get("orderBy", []),
+        "distinct": mql_template.get("distinct", False),
         "limit": mql_template.get("limit", 1000),
         "queryResultType": mql_template.get("queryResultType", "DATA")
     }
+    if mql_template.get("view_id"):
+        mql["view_id"] = mql_template["view_id"]
+    if mql_template.get("metadata"):
+        mql["metadata"] = mql_template["metadata"]
     
     # 3. 使用parameter_mappings生成动态过滤条件
     parameter_mappings = config.parameter_mappings or {}
-    
+    parameter_filter_fields = get_parameter_filter_fields(parameter_mappings) if isinstance(parameter_mappings, dict) else set()
+    if parameter_filter_fields:
+        base_conditions = remove_filter_conditions_for_fields(base_conditions, parameter_filter_fields)
+        mql["filters"] = base_conditions
+
     if parameter_mappings and isinstance(parameter_mappings, dict):
         time_range_params = {}
         regular_params = []
