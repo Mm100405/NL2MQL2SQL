@@ -2,6 +2,7 @@
 from typing import Dict, List, Any, Optional
 from sqlalchemy.orm import Session
 from sqlalchemy import text
+from datetime import date, datetime, time
 from decimal import Decimal
 import logging
 
@@ -11,24 +12,19 @@ from app.services.datasource_utils import create_datasource_engine, get_datasour
 logger = logging.getLogger(__name__)
 
 
-def convert_decimal(value: Any) -> Any:
-    """
-    递归转换Decimal类型为float，用于JSON序列化
-
-    Args:
-        value: 需要转换的值，可以是任何类型
-
-    Returns:
-        转换后的值，Decimal被转换为float，其他类型保持不变
-    """
+def convert_query_value(value: Any) -> Any:
+    """递归转换查询结果为 JSON 可序列化值"""
     if isinstance(value, Decimal):
         return float(value)
-    elif isinstance(value, list):
-        return [convert_decimal(item) for item in value]
-    elif isinstance(value, dict):
-        return {k: convert_decimal(v) for k, v in value.items()}
-    else:
-        return value
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, list):
+        return [convert_query_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [convert_query_value(item) for item in value]
+    if isinstance(value, dict):
+        return {k: convert_query_value(v) for k, v in value.items()}
+    return value
 
 
 async def execute_query(
@@ -66,8 +62,8 @@ async def execute_query(
             logger.info(f"查询成功，返回 {len(data)} 行数据")
             logger.debug(f"列名: {columns}")
 
-            # 转换Decimal类型为float，便于JSON序列化
-            data = convert_decimal(data)
+            # 转换查询结果为 JSON 可序列化值，便于接口和 SSE 返回
+            data = convert_query_value(data)
 
             return {
                 "columns": columns,

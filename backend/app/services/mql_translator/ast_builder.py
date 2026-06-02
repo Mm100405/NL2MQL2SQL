@@ -155,14 +155,20 @@ class MQLASTBuilder:
         # 构建 SELECT 语句
         select = exp.Select()
 
-        # 1. SELECT 子句（维度 + 指标）
-        select_expressions, group_by_expressions = self._build_select_clause(mql)
+        is_detail_query = str(mql.get("queryResultType", "DATA")).upper() == "DETAIL"
+
+        # 1. SELECT 子句（维度 + 指标）或明细字段
+        if is_detail_query:
+            select_expressions = self._build_detail_select_clause(mql)
+            group_by_expressions = []
+        else:
+            select_expressions, group_by_expressions = self._build_select_clause(mql)
         for expr in select_expressions:
             select.append("expressions", expr)
 
         # 1.5 窗口函数（追加到 SELECT 子句）
         # 传入 select_expressions 用于解析指标别名到实际表达式
-        window_expressions = self._build_window_function_expressions(mql, select_expressions)
+        window_expressions = [] if is_detail_query else self._build_window_function_expressions(mql, select_expressions)
         for expr in window_expressions:
             select.append("expressions", expr)
 
@@ -193,7 +199,7 @@ class MQLASTBuilder:
             )
 
         # 5. HAVING 子句
-        having_clause = self._build_having_clause(mql)
+        having_clause = None if is_detail_query else self._build_having_clause(mql)
         if having_clause:
             select.set("having", exp.Having(this=having_clause))
 
@@ -332,7 +338,7 @@ class MQLASTBuilder:
         if mql.get("from_cte"):
             # from_cte场景：只保留显示和排序相关的字段
             # 允许 having（用于过滤 CTE 返回的窗口函数列，如 [rn] <= 10）
-            allowed_main_fields = {"dimensions", "metrics", "limit", "orderBy", "from_cte", "distinct", "having"}
+            allowed_main_fields = {"dimensions", "metrics", "fields", "limit", "orderBy", "from_cte", "distinct", "having", "queryResultType"}
             main_mql = {k: v for k, v in mql.items() if k in allowed_main_fields}
         else:
             # 非from_cte场景：保留所有字段（除了cte）
@@ -398,6 +404,30 @@ class MQLASTBuilder:
         except Exception:
             # 如果解析失败，直接返回 UNION（不带 LIMIT）
             return result
+
+    def _build_detail_select_clause(self, mql: Dict[str, Any]) -> List[exp.Expression]:
+        """构建 DETAIL 模式的 SELECT 子句（直接投影字段，不聚合）"""
+        select_exprs: List[exp.Expression] = []
+        for field_name in mql.get("fields", []):
+            if not isinstance(field_name, str):
+                continue
+            actual_name = field_name.split("__")[0] if "__" in field_name else field_name
+            field_ref = self.semantic.resolve_field(actual_name)
+            if field_ref:
+                col_expr = field_ref.physical_column
+                if field_ref.source_view_id:
+                    col_expr = self.semantic.get_view_column_expression(
+                        field_ref.source_view_id, col_expr
+                    )
+                if "." in col_expr:
+                    table_name, column_name = col_expr.split(".", 1)
+                    col_node = exp.column(column_name, table=table_name)
+                else:
+                    col_node = exp.column(col_expr)
+                select_exprs.append(col_node.as_(field_name))
+            else:
+                select_exprs.append(exp.column(field_name).as_(field_name))
+        return select_exprs
 
     def _build_select_clause(
         self, mql: Dict[str, Any]

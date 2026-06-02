@@ -70,8 +70,12 @@
             >
               <icon-message class="history-icon" />
               <span class="history-text">
-                {{ item.natural_language.slice(0, 18) }}{{ item.natural_language.length > 18 ? '...' : '' }}
+                {{ getHistoryTitle(item) }}
               </span>
+              <icon-edit
+                class="edit-icon"
+                @click.stop="handleEditHistoryTitle(item)"
+              />
               <icon-delete
                 class="delete-icon"
                 @click.stop="handleDeleteHistory(item.conversation_id || item.id)"
@@ -134,6 +138,20 @@
         </router-view>
       </a-layout-content>
     </a-layout>
+
+    <a-modal
+      v-model:visible="titleEditVisible"
+      title="修改对话标题"
+      @ok="handleSaveHistoryTitle"
+      @cancel="titleEditVisible = false"
+    >
+      <a-input
+        v-model="editingTitle"
+        placeholder="请输入对话标题"
+        allow-clear
+        :max-length="255"
+      />
+    </a-modal>
 
     <!-- 个人设置弹窗 -->
     <a-modal
@@ -209,7 +227,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import { useAppStore } from '@/stores/app'
 import { useSettingsStore } from '@/stores/settings'
-import { startConversation, getQueryHistory, deleteQueryHistory } from '@/api/query'
+import { startConversation, getQueryHistory, deleteQueryHistory, updateConversationTitle } from '@/api/query'
 
 const router = useRouter()
 const route = useRoute()
@@ -218,6 +236,9 @@ const settingsStore = useSettingsStore()
 
 const chatHistory = ref<any[]>([])
 const sidebarCollapsed = ref(false)
+const titleEditVisible = ref(false)
+const editingTitle = ref('')
+const editingHistoryItem = ref<any>(null)
 const profileVisible = ref(false)
 const modelStatusVisible = ref(false)
 
@@ -242,6 +263,11 @@ const loadChatHistory = async () => {
     console.error('加载历史对话失败:', error)
     Message.error('加载历史对话失败')
   }
+}
+
+function getHistoryTitle(item: any) {
+  const title = item.title || item.natural_language || '未命名对话'
+  return title.length > 18 ? `${title.slice(0, 18)}...` : title
 }
 
 // 加载模型配置
@@ -282,6 +308,29 @@ const handleHistoryClick = (id: string) => {
     path: '/agent-query',
     query: { id }
   })
+}
+
+// 修改历史对话标题
+const handleEditHistoryTitle = (item: any) => {
+  editingHistoryItem.value = item
+  editingTitle.value = item.title || item.natural_language || ''
+  titleEditVisible.value = true
+}
+
+const handleSaveHistoryTitle = async () => {
+  const item = editingHistoryItem.value
+  const id = item?.conversation_id || item?.id
+  if (!id) return false
+
+  const nextTitle = editingTitle.value.trim()
+  if (!nextTitle) {
+    Message.warning('标题不能为空')
+    return false
+  }
+  const updated = await updateConversationTitle(id, nextTitle)
+  item.title = updated.title || nextTitle
+  titleEditVisible.value = false
+  Message.success('标题已更新')
 }
 
 // 删除历史对话
@@ -549,6 +598,7 @@ onMounted(() => {
   padding-left: calc(var(--space-md) + 8px);
 }
 
+.history-item:hover .edit-icon,
 .history-item:hover .delete-icon {
   opacity: 1;
 }
@@ -581,12 +631,18 @@ onMounted(() => {
   white-space: nowrap;
 }
 
+.edit-icon,
 .delete-icon {
   font-size: 14px;
   opacity: 0;
   color: var(--text-tertiary);
   transition: all var(--duration-base) var(--ease-smooth);
   flex-shrink: 0;
+}
+
+.edit-icon:hover {
+  color: var(--soft-primary);
+  transform: scale(1.2);
 }
 
 .delete-icon:hover {

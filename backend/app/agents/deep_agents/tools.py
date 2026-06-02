@@ -160,8 +160,13 @@ def retrieve_metadata(
             from app.models.dimension import Dimension
             from sqlalchemy import or_
 
+            view_id = context.get("view_id") if context else None
+
             # 检索指标
-            metrics = db_session.query(Metric).all()
+            metrics_query = db_session.query(Metric)
+            if view_id:
+                metrics_query = metrics_query.filter(Metric.view_id == view_id)
+            metrics = metrics_query.all()
             metrics_list = [
                 {
                     "name": m.name,
@@ -176,7 +181,10 @@ def retrieve_metadata(
             ]
 
             # 检索维度
-            dimensions = db_session.query(Dimension).all()
+            dimensions_query = db_session.query(Dimension)
+            if view_id:
+                dimensions_query = dimensions_query.filter(Dimension.view_id == view_id)
+            dimensions = dimensions_query.all()
             dimensions_list = [
                 {
                     "name": d.name,
@@ -218,8 +226,9 @@ def retrieve_metadata(
 
             # 预构建 prompt 字符串（直接传入已查询的 ORM 对象，避免重复查 DB）
             from app.services.nl_parser import _build_metadata_strings
-            metrics_str, dimensions_str, filterable_fields_str = _build_metadata_strings(
-                db_session, 
+            metrics_str, dimensions_str, filterable_fields_str, detail_fields_str = _build_metadata_strings(
+                db_session,
+                context=context,
                 metrics_objs=metrics,
                 dimensions_objs=dimensions
             )
@@ -231,6 +240,7 @@ def retrieve_metadata(
                     "metrics_str": metrics_str,
                     "dimensions_str": dimensions_str,
                     "filterable_fields_str": filterable_fields_str,
+                    "detail_fields_str": detail_fields_str,
                 },
                 "suggested_metrics": [m["display_name"] for m in metrics_list[:10]],
                 "suggested_dimensions": [d["display_name"] for d in dimensions_list[:10]],
@@ -316,6 +326,7 @@ async def generate_mql(
                 prompt_strings.get("metrics_str", ""),
                 prompt_strings.get("dimensions_str", ""),
                 prompt_strings.get("filterable_fields_str", ""),
+                prompt_strings.get("detail_fields_str", ""),
             )
         
         # MQL 生成任务需要较长时间，配置 300 秒超时
@@ -334,10 +345,14 @@ async def generate_mql(
             prompt_strings=prebuilt_prompt
         )
         
+        mql = result.get("mql")
+        if isinstance(mql, dict) and context and context.get("view_id"):
+            mql["view_id"] = context["view_id"]
+
         # 返回结果
         return {
             "success": True,
-            "mql": result.get("mql"),
+            "mql": mql,
             "confidence": result.get("confidence", 0.8),
             "interpretation": result.get("interpretation", f"生成的 MQL 用于查询: {natural_language}")
         }
@@ -386,7 +401,8 @@ def validate_mql(
         # 使用新的模块化校验器
         from app.utils.mql_validator.composite_validator import MQLCompositeValidator
 
-        validator = MQLCompositeValidator(db_session)
+        view_id = mql.get("view_id") if isinstance(mql, dict) else None
+        validator = MQLCompositeValidator(db_session, view_id=view_id)
         result = validator.validate(mql)
 
         # 转换错误为字典格式
@@ -456,7 +472,7 @@ async def correct_mql_auto(
         # 如果没有提供校验结果，先进行校验
         if not validation_result:
             from app.utils.mql_validator.composite_validator import MQLCompositeValidator
-            validator = MQLCompositeValidator(db_session)
+            validator = MQLCompositeValidator(db_session, view_id=mql.get("view_id"))
             val_result = validator.validate(mql)
             validation_result = val_result.to_dict()
 
@@ -1032,7 +1048,7 @@ def _build_correction_prompt(mql: dict, errors: list, db_session, prompt_strings
     else:
         # 兜底：如果没有预构建的，从 DB 查询
         from app.services.nl_parser import _build_metadata_strings
-        metrics_str, dimensions_str, filterable_fields_str = _build_metadata_strings(db_session)
+        metrics_str, dimensions_str, filterable_fields_str, _detail_fields_str = _build_metadata_strings(db_session)
     
     # 格式化错误信息
     errors_str = "\n".join([f"- {err}" for err in errors])

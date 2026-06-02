@@ -5,8 +5,10 @@ import { request } from './request'
  */
 export interface GenerateConfigRequest {
   natural_language: string
-  target_format_example: Record<string, any>
+  target_format_example: Record<string, any> | Array<Record<string, any>>
   api_parameters: string
+  api_name?: string
+  overwrite_config_id?: string
   // 可选的前置查询结果，避免重复执行
   existing_mql?: Record<string, any>  // 前面 generate-mql 的返回 mql
   existing_sql?: string  // 前面 mql2sql 的返回 sql

@@ -3,7 +3,7 @@
 """
 import json
 import re
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from sqlalchemy.orm import Session
 import logging
 from decimal import Decimal
@@ -53,6 +53,7 @@ GENERATE_TRANSFORM_PROMPT = """你是一个数据转换专家。请根据以下�
 - 字段映射要准确
 - 使用 `sourceData.columns` 获取列名数组
 - 使用 `sourceData.data` 获取二维数据数组
+- 禁止使用 `eval()`、`Function()`、`new Function()`、`require()`、`import`、`fetch()` 等动态执行或外部访问能力
 - 示例:
   ```javascript
   function transformData(sourceData) {{
@@ -114,6 +115,7 @@ GENERATE_TRANSFORM_PROMPT = """你是一个数据转换专家。请根据以下�
 6. 如果某个参数在原数据中没有对应字段，需要在parameterMappings中使用sourceField为null，并在mqlTemplate中使用静态值或排除该过滤条件
 7. 如果“API所需参数”为空，parameterMappings 必须返回空数组 []，不要臆造参数
 8. 在生成代码后，请再次检查变量名是否正确拼写
+9. 转换脚本必须是普通函数实现，不能使用 `Function()` 或 `new Function()` 动态构造函数
 
 ## 正确的代码示例
 ```javascript
@@ -140,6 +142,59 @@ function transformData(sourceData) {{
 """
 
 
+REPAIR_TRANSFORM_PROMPT = """你是一个数据转换脚本修复专家。上一次生成的数据转换配置没有通过校验，请根据错误信息只修复转换脚本，并返回完整 JSON 配置。
+
+## 用户查询
+{natural_language}
+
+## 目标数据格式
+```json
+{target_format_example}
+```
+
+## API所需参数
+{api_parameters}
+
+## 原始数据示例
+```json
+{source_data_sample}
+```
+
+## 上一次生成配置
+```json
+{previous_generation}
+```
+
+## 上一次转换脚本
+```javascript
+{previous_script}
+```
+
+## 校验失败信息
+- 阶段：{validation_phase}
+- 错误：{validation_error}
+- 建议：{validation_suggestion}
+
+## 修复要求
+1. 只生成普通 JavaScript 函数：`function transformData(sourceData) {{ ... }}`。
+2. 禁止使用 `eval()`、`Function()`、`new Function()`、`require()`、`import`、`fetch()`、`window`、`document`、`process`。
+3. 必须使用 `sourceData.columns` 和 `sourceData.data` 读取数据，不要臆造输入结构。
+4. 目标字段含义不确定时，保留空字符串或原始值，不要把 null 随意映射成示例值。
+5. 优先保留上一次生成配置中的 `apiName`、`parameterMappings`、`mqlTemplate`，重点修复 `transformScript`。
+6. 只返回 JSON，不要 Markdown。
+
+## 输出格式
+```json
+{{
+  "apiName": "接口名称",
+  "transformScript": "function transformData(sourceData) {{ ... }}",
+  "parameterMappings": [],
+  "mqlTemplate": {{}}
+}}
+```
+"""
+
+
 async def generate_transform_config(
     natural_language: str,
     target_format_example: Dict[str, Any],
@@ -147,7 +202,8 @@ async def generate_transform_config(
     db: Session,
     existing_mql: Optional[Dict[str, Any]] = None,  # 前面 generate-mql 的返回
     existing_sql: Optional[str] = None,  # 前面 mql2sql 的返回
-    existing_query_result: Optional[Dict[str, Any]] = None  # 前面 execute 的返回结果（字典格式）
+    existing_query_result: Optional[Dict[str, Any]] = None,  # 前面 execute 的返回结果（字典格式）
+    repair_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     调用大模型生成转换脚本和配置
@@ -170,8 +226,8 @@ async def generate_transform_config(
 
     # 1. 获取模型配置
     model_config = db.query(ModelConfig).filter(
-        ModelConfig.is_default == True,
-        ModelConfig.is_active == True
+        ModelConfig.is_default.is_(True),
+        ModelConfig.is_active.is_(True)
     ).first()
 
     if not model_config:
@@ -201,7 +257,7 @@ async def generate_transform_config(
                 db=db
             )
             base_mql = nl_result.get("mql", {})
-        except Exception as e:
+        except Exception:
             # 如果解析失败，使用空MQL
             base_mql = {
                 "metrics": [],
@@ -218,7 +274,7 @@ async def generate_transform_config(
 
     if existing_query_result:
         # 使用传入的查询结果作为样本数据（字典格式）
-        logger.info(f"[TransformGenerator] 使用传入的查询结果")
+        logger.info("[TransformGenerator] 使用传入的查询结果")
         try:
             source_data_sample = {
                 "columns": existing_query_result.get("columns", []),
@@ -280,6 +336,15 @@ async def generate_transform_config(
 
     # 5. 调用大模型
     try:
+        if repair_context:
+            prompt = _build_repair_prompt(
+                natural_language=natural_language,
+                target_format_example=target_format_example,
+                api_parameters=api_parameters,
+                source_data_sample=source_data_sample,
+                repair_context=repair_context,
+            )
+
         llm_response = await call_llm(
             prompt=prompt,
             provider=model_config.provider,
@@ -307,7 +372,10 @@ async def generate_transform_config(
                 "success": False,
                 "error": "生成结果验证失败",
                 "details": validation_result["errors"],
-                "llm_output": generation
+                "llm_output": generation,
+                "transformScript": generation.get("transformScript", ""),
+                "baseMql": base_mql,
+                "sourceDataSample": source_data_sample,
             }
 
         return {
@@ -331,12 +399,31 @@ async def generate_transform_config(
         }
 
 
+def _build_repair_prompt(
+    natural_language: str,
+    target_format_example: Any,
+    api_parameters: str,
+    source_data_sample: Dict[str, Any],
+    repair_context: Dict[str, Any],
+) -> str:
+    previous_generation = repair_context.get("previous_generation") or {}
+    return REPAIR_TRANSFORM_PROMPT.format(
+        natural_language=natural_language,
+        target_format_example=json.dumps(target_format_example, indent=2, ensure_ascii=False, cls=DecimalEncoder),
+        api_parameters=api_parameters.replace("、", ", "),
+        source_data_sample=json.dumps(source_data_sample, indent=2, ensure_ascii=False, cls=DecimalEncoder),
+        previous_generation=json.dumps(previous_generation, indent=2, ensure_ascii=False, cls=DecimalEncoder),
+        previous_script=repair_context.get("previous_script") or previous_generation.get("transformScript") or "",
+        validation_phase=repair_context.get("phase") or "unknown",
+        validation_error=repair_context.get("validation_error") or repair_context.get("error") or "unknown",
+        validation_suggestion=repair_context.get("suggestion") or "无",
+    )
+
+
 def _parse_llm_response(response: str) -> Optional[Dict[str, Any]]:
     """
     解析大模型返回的JSON响应
     """
-    import re
-
     if not response:
         return None
 

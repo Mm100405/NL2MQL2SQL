@@ -43,6 +43,8 @@ class AgentQueryRequest(BaseModel):
     natural_language: str
     context: Optional[dict] = None
     user_id: Optional[str] = "anonymous"
+    conversation_id: Optional[str] = None
+    view_id: Optional[str] = None
 
 
 class AgentStep(BaseModel):
@@ -218,6 +220,10 @@ async def agent_query_stream(
             # 发送开始事件
             yield format_sse_event("start", {"query_id": query_id})
 
+            request_context = dict(request.context or {})
+            if request.view_id:
+                request_context["view_id"] = request.view_id
+
             # 使用增强版管理器（支持动态 Skills）
             from app.agents.deep_agents.enhanced_manager import get_enhanced_deep_agents_manager
 
@@ -302,6 +308,7 @@ async def agent_query_stream(
                         "sql": current_state.get('sql'),
                         "sql_datasources": current_state.get('sql_datasources', []),
                         "query_result": current_state.get('query_result'),
+                        "result": current_state.get('query_result'),
                         "query_id": current_state.get('query_id'),
                         "insights": current_state.get('insights', []),
                         "visualization": current_state.get('visualization'),
@@ -312,7 +319,7 @@ async def agent_query_stream(
             task = asyncio.create_task(
                 manager.execute_stream_with_skills(
                     natural_language=request.natural_language,
-                    context=request.context or {},
+                    context=request_context,
                     max_retries=3,
                     step_callback=streaming_step_callback,
                     use_skills=True  # 启用已加载的 Skills
@@ -353,6 +360,7 @@ async def agent_query_stream(
                 yield format_sse_event("result", {
                     "natural_language": result.get('natural_language'),
                     "mql": result.get('mql'),
+                    "view_id": (result.get('mql') or {}).get('view_id') or request_context.get('view_id'),
                     "sql": result.get('sql'),
                     "result": result.get('result'),
                     "interpretation": result.get('interpretation'),
@@ -510,7 +518,7 @@ async def event_stream_generator(
 
 def format_sse_event(event_type: str, data: dict) -> str:
     """格式化SSE事件"""
-    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+    return f"event: {event_type}\ndata: {json.dumps(data, ensure_ascii=False, default=str)}\n\n"
 
 
 
@@ -756,8 +764,8 @@ async def parse_time_ranges(request: TimeRangeRequest, db: Session = Depends(get
                 result_dt = datetime.now() + relativedelta(months=n)
                 return result_dt.replace(hour=0, minute=0, second=0, microsecond=0)
 
-            # THIS_WEEK()
-            if func_str.upper() == "THIS_WEEK()":
+            # THIS_WEEK() / START_OF_WEEK()
+            if func_str.upper() in ("THIS_WEEK()", "START_OF_WEEK()"):
                 # 本周一
                 today = datetime.now()
                 days_since_monday = today.weekday()
@@ -765,12 +773,12 @@ async def parse_time_ranges(request: TimeRangeRequest, db: Session = Depends(get
                     hour=0, minute=0, second=0, microsecond=0
                 )
 
-            # THIS_MONTH()
-            if func_str.upper() == "THIS_MONTH()":
+            # THIS_MONTH() / START_OF_MONTH()
+            if func_str.upper() in ("THIS_MONTH()", "START_OF_MONTH()"):
                 return datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-            # THIS_YEAR()
-            if func_str.upper() == "THIS_YEAR()":
+            # THIS_YEAR() / START_OF_YEAR()
+            if func_str.upper() in ("THIS_YEAR()", "START_OF_YEAR()"):
                 return datetime.now().replace(month=1, day=1, hour=0, minute=0, second=0, microsecond=0)
 
             # 尝试解析为日期字符串

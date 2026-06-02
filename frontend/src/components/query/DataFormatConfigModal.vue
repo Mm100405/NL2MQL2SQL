@@ -2,11 +2,23 @@
   <a-modal
     v-model:visible="visible"
     title="配置输出格式"
-    @ok="handleSave"
     @cancel="handleClose"
     width="700px"
   >
     <div class="config-form">
+      <!-- API名称 -->
+      <div class="form-section">
+        <div class="section-header">
+          <span class="section-title">API名称</span>
+          <span class="section-hint">可手动指定接口名称，不填写则由模型生成</span>
+        </div>
+        <a-input
+          v-model="apiName"
+          placeholder="请输入接口名称，如：案件统计查询接口"
+          allow-clear
+        />
+      </div>
+
       <!-- 目标格式示例 -->
       <div class="form-section">
         <div class="section-header">
@@ -54,7 +66,7 @@
             placeholder="从可过滤字段中选择"
             allow-create
             filterable
-            :options="filterableFields.map(f => ({ label: f.display_name || f.name, value: f.name }))"
+            :options="(filterableFields || []).map(f => ({ label: f.display_name || f.name, value: f.name }))"
             @press-enter="addParam"
           />
           <a-button type="primary" @click="addParam">
@@ -100,15 +112,17 @@ interface FilterableField {
 const props = defineProps<{
   visible: boolean
   initialConfig?: {
+    apiName?: string
     targetFormat: any
     apiParameters: string[]
+    overwriteConfigId?: string
   }
   filterableFields?: FilterableField[]
 }>()
 
 const emit = defineEmits<{
   (e: 'update:visible', value: boolean): void
-  (e: 'save', config: { targetFormat: any, apiParameters: string[] }): void
+  (e: 'save', config: { apiName?: string, targetFormat: any, apiParameters: string[], overwriteConfigId?: string }): void
 }>()
 
 // 可见性双向绑定
@@ -118,6 +132,7 @@ const visible = computed({
 })
 
 // 表单数据
+const apiName = ref('')
 const targetFormat = ref('')
 const apiParameters = ref<string[]>([])
 const currentParam = ref<string | undefined>(undefined)
@@ -152,6 +167,7 @@ const jsonExample = computed(() => {
 watch(() => props.visible, (val) => {
   if (val) {
     // 打开时加载已有配置
+    apiName.value = props.initialConfig?.apiName || ''
     if (props.initialConfig) {
       // targetFormat 可能是对象，需要转为JSON字符串
       const format = props.initialConfig.targetFormat
@@ -161,6 +177,9 @@ watch(() => props.visible, (val) => {
         targetFormat.value = format || ''
       }
       apiParameters.value = [...(props.initialConfig.apiParameters || [])]
+    } else {
+      targetFormat.value = ''
+      apiParameters.value = []
     }
     formatError.value = null
     isFormatValid.value = false
@@ -276,8 +295,10 @@ function handleSave() {
 
   // emit配置数据
   emit('save', {
+    apiName: apiName.value.trim() || undefined,
     targetFormat: parsedFormat,
-    apiParameters: [...apiParameters.value]
+    apiParameters: [...apiParameters.value],
+    overwriteConfigId: props.initialConfig?.overwriteConfigId
   })
 
   Message.success('配置已保存')

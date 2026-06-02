@@ -47,6 +47,10 @@ MQL_TIME_FUNCTIONS = {
     "THIS_MONTH": {"args": [], "desc": "本月开始", "example": "THIS_MONTH()"},
     "THIS_QUARTER": {"args": [], "desc": "本季开始", "example": "THIS_QUARTER()"},
     "THIS_YEAR": {"args": [], "desc": "本年开始", "example": "THIS_YEAR()"},
+    "START_OF_WEEK": {"args": [], "desc": "本周开始（THIS_WEEK 别名）", "example": "START_OF_WEEK()"},
+    "START_OF_MONTH": {"args": [], "desc": "本月开始（THIS_MONTH 别名）", "example": "START_OF_MONTH()"},
+    "START_OF_QUARTER": {"args": [], "desc": "本季开始（THIS_QUARTER 别名）", "example": "START_OF_QUARTER()"},
+    "START_OF_YEAR": {"args": [], "desc": "本年开始（THIS_YEAR 别名）", "example": "START_OF_YEAR()"},
     "ADD_MONTHS": {"args": ["date", "n"], "desc": "日期加减 N 月", "example": "ADD_MONTHS([日期], -1)"},
 }
 
@@ -230,19 +234,19 @@ class TimeFunctionHandler:
             n = int(args[0]) if args else 1
             return current_date + ibis.interval(months=n)
         
-        elif func_name == "THIS_WEEK":
+        elif func_name in ("THIS_WEEK", "START_OF_WEEK"):
             # MySQL: DATE_SUB(CURRENT_DATE, INTERVAL WEEKDAY(CURRENT_DATE) DAY)
             return "THIS_WEEK_PLACEHOLDER"
-        
-        elif func_name == "THIS_MONTH":
+
+        elif func_name in ("THIS_MONTH", "START_OF_MONTH"):
             # MySQL: DATE_FORMAT(CURRENT_DATE, '%Y-%m-01')
             return "THIS_MONTH_PLACEHOLDER"
-        
-        elif func_name == "THIS_QUARTER":
+
+        elif func_name in ("THIS_QUARTER", "START_OF_QUARTER"):
             # MySQL: DATE_FORMAT(CURRENT_DATE, '%Y-%m-01') (简化)
             return "THIS_QUARTER_PLACEHOLDER"
-        
-        elif func_name == "THIS_YEAR":
+
+        elif func_name in ("THIS_YEAR", "START_OF_YEAR"):
             # MySQL: DATE_FORMAT(CURRENT_DATE, '%Y-01-01')
             return "THIS_YEAR_PLACEHOLDER"
         
@@ -369,7 +373,16 @@ class TimeFunctionHandler:
     def _render_postgres(self, expr: ir.Expr) -> str:
         """渲染为 PostgreSQL 方言"""
         expr_str = str(expr)
-        
+
+        if expr_str == "THIS_WEEK_PLACEHOLDER":
+            return "DATE_TRUNC('week', CURRENT_DATE)"
+        if expr_str == "THIS_MONTH_PLACEHOLDER":
+            return "DATE_TRUNC('month', CURRENT_DATE)"
+        if expr_str == "THIS_QUARTER_PLACEHOLDER":
+            return "DATE_TRUNC('quarter', CURRENT_DATE)"
+        if expr_str == "THIS_YEAR_PLACEHOLDER":
+            return "DATE_TRUNC('year', CURRENT_DATE)"
+
         expr_str = expr_str.replace("current_date()", "CURRENT_DATE")
         expr_str = expr_str.replace("current_timestamp()", "CURRENT_TIMESTAMP")
         
@@ -381,7 +394,16 @@ class TimeFunctionHandler:
     def _render_clickhouse(self, expr: ir.Expr) -> str:
         """渲染为 ClickHouse 方言"""
         expr_str = str(expr)
-        
+
+        if expr_str == "THIS_WEEK_PLACEHOLDER":
+            return "toMonday(today())"
+        if expr_str == "THIS_MONTH_PLACEHOLDER":
+            return "toStartOfMonth(today())"
+        if expr_str == "THIS_QUARTER_PLACEHOLDER":
+            return "toStartOfQuarter(today())"
+        if expr_str == "THIS_YEAR_PLACEHOLDER":
+            return "toStartOfYear(today())"
+
         expr_str = expr_str.replace("current_date()", "today()")
         expr_str = expr_str.replace("current_timestamp()", "now()")
         

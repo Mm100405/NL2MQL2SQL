@@ -18,9 +18,11 @@ from app.services.parameter_filter import (
     filter_api_parameters,
     generate_dynamic_mql,
     save_format_config,
-    generate_api_info
+    generate_api_info,
+    get_parameter_filter_fields,
+    remove_filter_conditions_for_fields,
 )
-from app.services.query_executor import convert_decimal
+from app.services.query_executor import convert_query_value
 
 router = APIRouter()
 
@@ -36,13 +38,16 @@ class ExistingQueryResult(BaseModel):
 class GenerateConfigRequest(BaseModel):
     """生成配置请求"""
     natural_language: str
-    target_format_example: Union[Dict[str, Any], List[Dict[str, Any]]]  # 支持对象或数组
+    target_format_example: Any  # 支持对象、数组或嵌套数组
     api_parameters: str  # 用"、"分隔的字符串
+    api_name: Optional[str] = None  # 用户手动填写的接口名称
+    overwrite_config_id: Optional[str] = None  # 覆盖已有接口配置
     # 可选的前置查询结果，避免重复执行
     existing_mql: Optional[Dict[str, Any]] = None  # 前面 generate-mql 的返回 mql
     existing_sql: Optional[str] = None  # 前面 mql2sql 的返回 sql
     existing_query_result: Optional[ExistingQueryResult] = None  # 前面 execute 的返回结果（包含样本数据）
     view_id: Optional[str] = None  # 结果面板绑定的视图ID
+    repair_context: Optional[Dict[str, Any]] = None  # 上一次生成失败的修复上下文
 
 
 class ValidateScriptRequest(BaseModel):
@@ -71,7 +76,8 @@ async def _process_generation(
     existing_mql: Optional[Dict[str, Any]] = None,
     existing_sql: Optional[str] = None,
     existing_query_result: Optional[ExistingQueryResult] = None,
-    view_id: Optional[str] = None
+    view_id: Optional[str] = None,
+    repair_context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     处理配置生成的核心逻辑（生成、验证、筛选）
@@ -92,7 +98,7 @@ async def _process_generation(
     if existing_query_result:
         existing_query_result_dict = {
             "columns": existing_query_result.columns,
-            "data": convert_decimal(existing_query_result.data),
+            "data": convert_query_value(existing_query_result.data),
             "total_count": existing_query_result.total_count,
             "execution_time": existing_query_result.execution_time
         }
@@ -107,14 +113,31 @@ async def _process_generation(
         db=db,
         existing_mql=existing_mql,
         existing_sql=existing_sql,
-        existing_query_result=existing_query_result_dict
+        existing_query_result=existing_query_result_dict,
+        repair_context=repair_context,
     )
 
     if not generation_result.get("success"):
+        transform_script = generation_result.get("transformScript")
+        logger.warning(
+            "[DataFormat] 生成结果验证失败，phase=generation_validation, has_script=%s, details=%s",
+            bool(transform_script),
+            generation_result.get("details"),
+        )
         return {
             "success": False,
             "error": generation_result.get("error", "生成失败"),
-            "details": generation_result.get("details")
+            "details": generation_result.get("details"),
+            "validationError": "；".join(generation_result.get("details") or []),
+            "phase": "generation_validation",
+            "transformScript": transform_script,
+            "repairContext": {
+                "previous_script": transform_script,
+                "previous_generation": generation_result.get("llm_output") or generation_result,
+                "phase": "generation_validation",
+                "validation_error": "；".join(generation_result.get("details") or []) or generation_result.get("error", "生成失败"),
+                "suggestion": None,
+            } if transform_script else None,
         }
 
     transform_script = generation_result.get("transformScript")
@@ -123,29 +146,60 @@ async def _process_generation(
     # 2. 沙箱验证转换脚本
     validation_result = validate_transform_script(
         script=transform_script,
-        test_data=generation_result.get("sourceDataSample")
+        test_data=generation_result.get("sourceDataSample"),
+        expected_format=target_format_example,
     )
 
     if not validation_result.get("valid"):
+        logger.warning(
+            "[DataFormat] 转换脚本沙箱校验失败，phase=%s, error=%s, has_repair_context=True",
+            validation_result.get("phase"),
+            validation_result.get("error"),
+        )
         return {
             "success": False,
             "error": "转换脚本验证失败",
             "validationError": validation_result.get("error"),
             "suggestion": validation_result.get("suggestion"),
             "phase": validation_result.get("phase"),
-            "transformScript": transform_script
+            "transformScript": transform_script,
+            "repairContext": {
+                "previous_script": transform_script,
+                "previous_generation": generation_result,
+                "phase": validation_result.get("phase"),
+                "validation_error": validation_result.get("error"),
+                "suggestion": validation_result.get("suggestion")
+            }
         }
 
     # 3. 筛选API参数
+    effective_view_id = view_id
+    if not effective_view_id and isinstance(existing_mql, dict):
+        effective_view_id = existing_mql.get("view_id") or (existing_mql.get("metadata") or {}).get("view_id")
     filter_result = filter_api_parameters(
         api_parameters_str=api_parameters,
-        db=db
+        db=db,
+        view_id=effective_view_id,
     )
     
     # 如果 filter_result 中没有 used_view_id，使用传入的 view_id
     if not filter_result.get("used_view_id") and view_id:
         filter_result["used_view_id"] = view_id
-        logger.info(f"[ProcessGeneration] 使用传入的 view_id: {view_id}")
+        logger.info(f"[ProcessGeneration] 使用传入的 view_id: %s", view_id)
+
+    # 再兜底：尝试从已有 MQL 或当前默认视图中补回 view_id
+    if not filter_result.get("used_view_id"):
+        fallback_view_id = view_id
+        if not fallback_view_id and isinstance(existing_mql, dict):
+            fallback_view_id = existing_mql.get("view_id") or (existing_mql.get("metadata") or {}).get("view_id")
+        if not fallback_view_id:
+            from app.models.view import View
+            fallback_view = db.query(View).first()
+            if fallback_view:
+                fallback_view_id = fallback_view.id
+        if fallback_view_id:
+            filter_result["used_view_id"] = fallback_view_id
+            logger.info("[ProcessGeneration] 兜底设置 used_view_id: %s", fallback_view_id)
 
     # 4. 生成动态MQL
     valid_params = filter_result.get("valid_parameters", [])
@@ -203,7 +257,8 @@ async def generate_format_config(
             existing_mql=request.existing_mql,
             existing_sql=request.existing_sql,
             existing_query_result=request.existing_query_result,
-            view_id=request.view_id
+            view_id=request.view_id,
+            repair_context=request.repair_context,
         )
 
         # 验证失败
@@ -211,7 +266,7 @@ async def generate_format_config(
             if result.get("error") == "转换脚本验证失败":
                 # 保存失败状态
                 config = DataFormatConfig(
-                    name=f"配置_{request.natural_language[:20]}",
+                    name=(request.api_name or "").strip() or f"配置_{request.natural_language[:20]}",
                     natural_language=request.natural_language,
                     target_format_example=request.target_format_example,
                     api_parameters_str=request.api_parameters,
@@ -222,12 +277,19 @@ async def generate_format_config(
                 db.add(config)
                 db.commit()
 
+                logger.warning(
+                    "[DataFormat] 返回转换脚本验证失败，phase=%s, has_repair_context=%s",
+                    result.get("phase"),
+                    bool(result.get("repairContext")),
+                )
                 return {
                     "success": False,
                     "error": result.get("error"),
                     "validationError": result.get("validationError"),
                     "suggestion": result.get("suggestion"),
-                    "phase": result.get("phase")
+                    "phase": result.get("phase"),
+                    "transformScript": result.get("transformScript"),
+                    "repairContext": result.get("repairContext")
                 }
             else:
                 return {
@@ -240,7 +302,7 @@ async def generate_format_config(
         filter_result = result["filterResult"]
         parameter_mappings = filter_result.get("parameter_mappings", {})
         valid_params = filter_result.get("valid_parameters", [])
-        api_name = result.get("apiName")  # 获取LLM生成的接口名称
+        api_name = (request.api_name or "").strip() or result.get("apiName") or f"配置_{request.natural_language[:20]}"  # 优先使用用户手动填写的接口名称
 
         # 构建包含完整field信息的parameterMappings（使用参数名作为key，支持时间范围参数）
         full_parameter_mappings = {}
@@ -266,20 +328,49 @@ async def generate_format_config(
                 "base_field_name": param.get("base_field_name")
             }
 
-        config = save_format_config(
-            natural_language=request.natural_language,
-            target_format_example=request.target_format_example,
-            api_parameters_str=request.api_parameters,
-            generation_result={
-                "transformScript": result["transformScript"],
-                "parameterMappings": full_parameter_mappings,
-                "mqlTemplate": result["dynamicMql"],
-                "apiName": api_name
-            },
-            used_view_id=filter_result.get("used_view_id"),
-            db=db,
-            api_name=api_name
-        )
+        generation_payload = {
+            "transformScript": result["transformScript"],
+            "parameterMappings": full_parameter_mappings,
+            "mqlTemplate": result["dynamicMql"],
+            "apiName": api_name
+        }
+
+        if request.overwrite_config_id:
+            config = db.query(DataFormatConfig).filter(
+                DataFormatConfig.id == request.overwrite_config_id
+            ).first()
+            if not config:
+                raise HTTPException(status_code=404, detail="要覆盖的接口配置不存在")
+
+            config.name = api_name
+            config.natural_language = request.natural_language
+            config.target_format_example = request.target_format_example
+            config.api_parameters_str = request.api_parameters
+            config.transform_script = result["transformScript"]
+            config.parameter_mappings = full_parameter_mappings
+            config.mql_template = result["dynamicMql"]
+            config.view_id = filter_result.get("used_view_id") or request.view_id or config.view_id
+            config.generated_api = generate_api_info(
+                config_id=config.id,
+                name=api_name,
+                parameter_mappings=full_parameter_mappings,
+                target_format_example=request.target_format_example,
+                mql_template=result["dynamicMql"]
+            )
+            config.status = "validated"
+            config.error_message = None
+            db.commit()
+            db.refresh(config)
+        else:
+            config = save_format_config(
+                natural_language=request.natural_language,
+                target_format_example=request.target_format_example,
+                api_parameters_str=request.api_parameters,
+                generation_result=generation_payload,
+                used_view_id=filter_result.get("used_view_id"),
+                db=db,
+                api_name=api_name
+            )
 
         return {
             "success": True,
@@ -444,7 +535,7 @@ async def regenerate_config(
         api_info = generate_api_info(
             config_id=config_id,
             name=api_name or old_config.name,  # 使用新的名称
-            parameter_mappings=filter_result.get("parameter_mappings", {}),
+            parameter_mappings=full_parameter_mappings,
             target_format_example=old_config.target_format_example,
             mql_template=result["dynamicMql"]
         )
@@ -517,7 +608,12 @@ async def update_config(
         raise HTTPException(status_code=404, detail="配置不存在")
 
     if request.name is not None:
-        config.name = request.name
+        config.name = request.name.strip() or config.name
+        if config.generated_api:
+            config.generated_api = {
+                **config.generated_api,
+                "description": config.name
+            }
     if request.status is not None:
         config.status = request.status
 
@@ -622,17 +718,28 @@ async def call_custom_api(
         "metrics": mql_template.get("metrics", []),
         "metricDefinitions": mql_template.get("metricDefinitions", {}),
         "dimensions": mql_template.get("dimensions", []),
+        "fields": mql_template.get("fields", []),
         "filters": base_conditions,
         "timeConstraint": mql_template.get("timeConstraint", "true"),
+        "orderBy": mql_template.get("orderBy", []),
+        "distinct": mql_template.get("distinct", False),
         "limit": mql_template.get("limit", 1000),
         "queryResultType": mql_template.get("queryResultType", "DATA")
     }
+    if mql_template.get("view_id"):
+        mql["view_id"] = mql_template["view_id"]
+    if mql_template.get("metadata"):
+        mql["metadata"] = mql_template["metadata"]
 
     # 注意：不再单独调用 correct_mql，mql_to_sql 内部的 MQLTranslator.translate()
     # 已调用 MQLCorrector.correct_and_validate() 进行验证和修正
 
     # 使用parameter_mappings生成动态过滤条件（V2 结构化格式）
     parameter_mappings = config.parameter_mappings or {}
+    parameter_filter_fields = get_parameter_filter_fields(parameter_mappings) if isinstance(parameter_mappings, dict) else set()
+    if parameter_filter_fields:
+        base_conditions = remove_filter_conditions_for_fields(base_conditions, parameter_filter_fields)
+        mql["filters"] = base_conditions
 
     if parameter_mappings and isinstance(parameter_mappings, dict):
         # 先收集所有时间范围参数，按base_field_name分组
@@ -780,6 +887,8 @@ async def get_custom_api_docs(
         "configId": config.id,
         "name": config.name,
         "api": config.generated_api,
+        "targetFormatExample": config.target_format_example,
+        "apiParameters": config._parse_api_parameters(),
         "status": config.status
     }
 
@@ -1250,15 +1359,26 @@ async def call_external_api(
         "metrics": mql_template.get("metrics", []),
         "metricDefinitions": mql_template.get("metricDefinitions", {}),
         "dimensions": mql_template.get("dimensions", []),
+        "fields": mql_template.get("fields", []),
         "filters": base_conditions,
         "timeConstraint": mql_template.get("timeConstraint", "true"),
+        "orderBy": mql_template.get("orderBy", []),
+        "distinct": mql_template.get("distinct", False),
         "limit": mql_template.get("limit", 1000),
         "queryResultType": mql_template.get("queryResultType", "DATA")
     }
+    if mql_template.get("view_id"):
+        mql["view_id"] = mql_template["view_id"]
+    if mql_template.get("metadata"):
+        mql["metadata"] = mql_template["metadata"]
     
     # 3. 使用parameter_mappings生成动态过滤条件
     parameter_mappings = config.parameter_mappings or {}
-    
+    parameter_filter_fields = get_parameter_filter_fields(parameter_mappings) if isinstance(parameter_mappings, dict) else set()
+    if parameter_filter_fields:
+        base_conditions = remove_filter_conditions_for_fields(base_conditions, parameter_filter_fields)
+        mql["filters"] = base_conditions
+
     if parameter_mappings and isinstance(parameter_mappings, dict):
         time_range_params = {}
         regular_params = []
