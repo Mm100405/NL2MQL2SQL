@@ -93,6 +93,13 @@
             placeholder="数据库名称"
           />
         </a-form-item>
+        <a-form-item v-if="['postgresql', 'highgo'].includes(form.type)" field="connection_config.schema" label="Schema（可选）">
+          <a-input
+            v-model="form.connection_config.schema"
+            placeholder="不填时瀚高默认使用数据库名"
+            allow-clear
+          />
+        </a-form-item>
       </a-form>
     </a-modal>
   </div>
@@ -130,6 +137,7 @@ const form = reactive({
     host: 'localhost',
     port: 5432,
     database: '',
+    schema: '',
     username: '',
     password: ''
   }
@@ -341,6 +349,9 @@ async function handleDelete(id: string) {
 
 watch(() => form.type, () => {
   normalizePortByType()
+  if (!['postgresql', 'highgo'].includes(form.type)) {
+    form.connection_config.schema = ''
+  }
 })
 
 onMounted(() => {

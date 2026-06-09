@@ -1,13 +1,40 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List
-from sqlalchemy import text
-from sqlalchemy.engine import Engine
-from sqlalchemy.exc import NoSuchModuleError
-from sqlalchemy import create_engine
+import re
 import urllib.parse
 
+from sqlalchemy import create_engine, text
+from sqlalchemy.dialects import registry
+from sqlalchemy.dialects.postgresql.psycopg2 import PGDialect_psycopg2
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import NoSuchModuleError
+
 from app.models.datasource import DataSource, DataSourceType
+
+
+class HighGoDialect_psycopg2(PGDialect_psycopg2):
+    name = "highgo"
+    supports_statement_cache = True
+
+    def _get_server_version_info(self, connection):
+        for statement in ("SHOW server_version", "SELECT current_setting('server_version')"):
+            try:
+                version = connection.exec_driver_sql(statement).scalar() or ""
+            except Exception:
+                continue
+            match = re.search(r"(\d+)(?:\.(\d+))?(?:\.(\d+))?", version)
+            if match:
+                return tuple(int(part) for part in match.groups() if part is not None)
+
+        version = connection.exec_driver_sql("select pg_catalog.version()").scalar() or ""
+        highgo_match = re.search(r"Release\s+(\d+)(?:\.(\d+))?(?:\.(\d+))?", version, re.IGNORECASE)
+        if highgo_match:
+            return tuple(int(part) for part in highgo_match.groups() if part is not None)
+        return super()._get_server_version_info(connection)
+
+
+registry.register("highgo.psycopg2", __name__, "HighGoDialect_psycopg2")
 
 
 def normalize_datasource_type(datasource_type: str) -> str:
@@ -31,7 +58,10 @@ def build_connection_string(datasource_type: str, connection_config: Dict[str, A
     datasource_type = normalize_datasource_type(datasource_type)
 
     if config.get("url"):
-        return config["url"]
+        url = str(config["url"])
+        if datasource_type == DataSourceType.highgo.value:
+            return re.sub(r"^postgresql(?:\+psycopg2)?://", "highgo+psycopg2://", url, count=1)
+        return url
 
     host = config.get("host", "localhost")
     port = config.get("port") or get_default_port(datasource_type)
@@ -42,7 +72,7 @@ def build_connection_string(datasource_type: str, connection_config: Dict[str, A
     if datasource_type == DataSourceType.postgresql.value:
         return f"postgresql://{username}:{password}@{host}:{port}/{database}"
     if datasource_type == DataSourceType.highgo.value:
-        return f"postgresql+psycopg2://{username}:{password}@{host}:{port}/{database}"
+        return f"highgo+psycopg2://{username}:{password}@{host}:{port}/{database}"
     if datasource_type == DataSourceType.mysql.value:
         return f"mysql+pymysql://{username}:{password}@{host}:{port}/{database}"
     if datasource_type == DataSourceType.clickhouse.value:
@@ -54,9 +84,15 @@ def build_connection_string(datasource_type: str, connection_config: Dict[str, A
 
 
 def create_datasource_engine(datasource_type: str, connection_config: Dict[str, Any]) -> Engine:
+    datasource_type = normalize_datasource_type(datasource_type)
     connection_string = build_connection_string(datasource_type, connection_config)
+    connect_args: Dict[str, Any] = {}
+    if datasource_type in (DataSourceType.postgresql.value, DataSourceType.highgo.value):
+        connect_args["connect_timeout"] = int((connection_config or {}).get("connect_timeout") or 10)
+    elif datasource_type == DataSourceType.mysql.value:
+        connect_args["connect_timeout"] = int((connection_config or {}).get("connect_timeout") or 10)
     try:
-        return create_engine(connection_string)
+        return create_engine(connection_string, connect_args=connect_args, pool_pre_ping=True)
     except NoSuchModuleError as exc:
         normalized = normalize_datasource_type(datasource_type)
         if normalized == DataSourceType.dameng.value:
@@ -78,18 +114,31 @@ def quote_identifier(identifier: str, datasource_type: str) -> str:
     return f'"{escaped}"'
 
 
+def get_metadata_schema_filter(datasource_type: str, connection_config: Dict[str, Any]) -> str:
+    datasource_type = normalize_datasource_type(datasource_type)
+    config = connection_config or {}
+    schema = str(config.get("schema") or "").strip()
+    if schema:
+        return schema
+    if datasource_type == DataSourceType.highgo.value:
+        return str(config.get("database") or "").strip()
+    return ""
+
+
 def fetch_tables_and_columns(datasource_type: str, connection_config: Dict[str, Any]) -> List[Dict[str, Any]]:
     datasource_type = normalize_datasource_type(datasource_type)
 
     if datasource_type in (DataSourceType.postgresql.value, DataSourceType.highgo.value):
+        schema_filter = get_metadata_schema_filter(datasource_type, connection_config)
         engine = create_datasource_engine(datasource_type, connection_config)
         with engine.connect() as conn:
             rows = conn.execute(text("""
                 SELECT table_name, table_schema
                 FROM information_schema.tables
                 WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+                  AND (:schema_filter = '' OR table_schema = :schema_filter)
                 ORDER BY table_schema, table_name
-            """)).fetchall()
+            """), {"schema_filter": schema_filter}).fetchall()
             tables = []
             for table_name, schema_name in rows:
                 columns_result = conn.execute(text("""

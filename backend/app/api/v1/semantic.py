@@ -1,18 +1,148 @@
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
+from threading import Lock
+from typing import Any, Dict, List, Optional
+from uuid import uuid4
+
 from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import func
 from sqlalchemy.orm import Session
-from typing import List, Optional
 from pydantic import BaseModel
 
-from app.database import get_db
+from app.database import SessionLocal, get_db
 from app.models.datasource import DataSource
 from app.models.dataset import Dataset
 from app.models.metric import Metric
 from app.models.dimension import Dimension
 from app.models.relation import DataRelation
 from app.models.view import View
-from app.services.datasource_utils import fetch_tables_and_columns, get_datasource_connection_config, normalize_datasource_type, test_connection
+from app.services.datasource_utils import fetch_tables_and_columns, get_datasource_connection_config, get_metadata_schema_filter, normalize_datasource_type, test_connection
 
 router = APIRouter()
+
+DATASOURCE_OPERATION_TIMEOUT = 30
+SYNC_TASK_MAX_WORKERS = 2
+SYNC_TASK_RETENTION = 100
+sync_task_executor = ThreadPoolExecutor(max_workers=SYNC_TASK_MAX_WORKERS)
+sync_tasks: Dict[str, Dict[str, Any]] = {}
+sync_task_lock = Lock()
+
+
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def serialize_sync_task(task_id: str, task: Dict[str, Any]) -> Dict[str, Any]:
+    return {"task_id": task_id, **task}
+
+
+def update_sync_task(task_id: str, **updates: Any) -> None:
+    with sync_task_lock:
+        task = sync_tasks.get(task_id)
+        if task:
+            task.update(updates)
+
+
+def get_sync_task(task_id: str) -> Optional[Dict[str, Any]]:
+    with sync_task_lock:
+        task = sync_tasks.get(task_id)
+        if not task:
+            return None
+        return serialize_sync_task(task_id, task.copy())
+
+
+def get_active_sync_task(datasource_id: str) -> Optional[Dict[str, Any]]:
+    with sync_task_lock:
+        for task_id, task in sync_tasks.items():
+            if task.get("datasource_id") == datasource_id and task.get("status") in {"queued", "running"}:
+                return serialize_sync_task(task_id, task.copy())
+    return None
+
+
+def prune_sync_tasks() -> None:
+    with sync_task_lock:
+        if len(sync_tasks) <= SYNC_TASK_RETENTION:
+            return
+        removable = sorted(
+            (
+                (task_id, task)
+                for task_id, task in sync_tasks.items()
+                if task.get("status") in {"success", "failed"}
+            ),
+            key=lambda item: item[1].get("updated_at") or "",
+        )
+        for task_id, _ in removable[: len(sync_tasks) - SYNC_TASK_RETENTION]:
+            sync_tasks.pop(task_id, None)
+
+
+def sync_physical_tables_to_db(datasource_id: str) -> int:
+    db = SessionLocal()
+    try:
+        datasource = db.query(DataSource).filter(DataSource.id == datasource_id).first()
+        if not datasource:
+            raise ValueError("DataSource not found")
+
+        tables = fetch_tables_and_columns(datasource.type, get_datasource_connection_config(datasource))
+        sync_count = 0
+        for table_data in tables:
+            existing = db.query(Dataset).filter(
+                Dataset.datasource_id == datasource_id,
+                Dataset.physical_name == table_data["physical_name"],
+                Dataset.schema_name == table_data["schema_name"]
+            ).first()
+
+            if existing:
+                existing.name = table_data["name"]
+                existing.schema_name = table_data["schema_name"]
+                existing.columns = table_data["columns"]
+            else:
+                db.add(Dataset(
+                    datasource_id=datasource_id,
+                    name=table_data["name"],
+                    physical_name=table_data["physical_name"],
+                    schema_name=table_data["schema_name"],
+                    columns=table_data["columns"],
+                    description=""
+                ))
+            sync_count += 1
+
+        db.commit()
+        return sync_count
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def run_sync_task(task_id: str, datasource_id: str) -> None:
+    update_sync_task(task_id, status="running", started_at=utc_now_iso(), updated_at=utc_now_iso())
+    try:
+        count = sync_physical_tables_to_db(datasource_id)
+        update_sync_task(
+            task_id,
+            status="success",
+            count=count,
+            message=f"Successfully synced {count} tables",
+            finished_at=utc_now_iso(),
+            updated_at=utc_now_iso(),
+        )
+    except Exception as exc:
+        update_sync_task(
+            task_id,
+            status="failed",
+            error=str(exc),
+            message=f"Failed to sync tables: {str(exc)}",
+            finished_at=utc_now_iso(),
+            updated_at=utc_now_iso(),
+        )
+    finally:
+        prune_sync_tasks()
+
+
+async def run_datasource_operation(func, *args):
+    return await asyncio.wait_for(asyncio.to_thread(func, *args), timeout=DATASOURCE_OPERATION_TIMEOUT)
 
 
 # ============ Schemas ============
@@ -162,7 +292,7 @@ async def test_datasource_connection(id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="DataSource not found")
 
     try:
-        test_connection(source.type, get_datasource_connection_config(source))
+        await run_datasource_operation(test_connection, source.type, get_datasource_connection_config(source))
         source.status = "active"
         db.commit()
         return {"success": True, "message": "Connection successful"}
@@ -181,64 +311,135 @@ class ConnectionConfigTest(BaseModel):
 async def test_connection_config(data: ConnectionConfigTest):
     """测试连接配置，不需要先创建数据源"""
     try:
-        test_connection(data.type, data.connection_config)
+        await run_datasource_operation(test_connection, data.type, data.connection_config)
         return {"success": True, "message": "Connection successful"}
     except Exception as e:
         return {"success": False, "message": f"Connection failed: {str(e)}"}
 
 
 @router.post("/datasources/{datasource_id}/sync")
-async def sync_physical_tables(datasource_id: str, db: Session = Depends(get_db)):
-    """从数据源同步所有物理表到数据库"""
+def sync_physical_tables(datasource_id: str, db: Session = Depends(get_db)):
+    """创建物理表后台同步任务"""
     datasource = db.query(DataSource).filter(DataSource.id == datasource_id).first()
     if not datasource:
         raise HTTPException(status_code=404, detail="DataSource not found")
 
-    try:
-        tables = fetch_tables_and_columns(datasource.type, get_datasource_connection_config(datasource))
+    active_task = get_active_sync_task(datasource_id)
+    if active_task:
+        return active_task
 
-        sync_count = 0
-        for table_data in tables:
-            existing = db.query(Dataset).filter(
-                Dataset.datasource_id == datasource_id,
-                Dataset.physical_name == table_data["physical_name"]
-            ).first()
-
-            if existing:
-                existing.name = table_data["name"]
-                existing.schema_name = table_data["schema_name"]
-                existing.columns = table_data["columns"]
-                sync_count += 1
-            else:
-                new_dataset = Dataset(
-                    datasource_id=datasource_id,
-                    name=table_data["name"],
-                    physical_name=table_data["physical_name"],
-                    schema_name=table_data["schema_name"],
-                    columns=table_data["columns"],
-                    description=""
-                )
-                db.add(new_dataset)
-                sync_count += 1
-
-        db.commit()
-        return {"message": f"Successfully synced {sync_count} tables", "count": sync_count}
-
-    except Exception as e:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"Failed to sync tables: {str(e)}")
+    task_id = str(uuid4())
+    now = utc_now_iso()
+    task = {
+        "datasource_id": datasource_id,
+        "status": "queued",
+        "count": 0,
+        "message": "Sync task queued",
+        "error": None,
+        "created_at": now,
+        "started_at": None,
+        "finished_at": None,
+        "updated_at": now,
+    }
+    with sync_task_lock:
+        sync_tasks[task_id] = task
+    sync_task_executor.submit(run_sync_task, task_id, datasource_id)
+    return serialize_sync_task(task_id, task)
 
 
+@router.get("/datasources/sync-tasks/{task_id}")
+def get_physical_table_sync_task(task_id: str):
+    task = get_sync_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Sync task not found")
+    return task
+
+
+
+
+def dataset_to_list_item(dataset: Dataset) -> Dict[str, Any]:
+    columns = dataset.columns or []
+    return {
+        "id": dataset.id,
+        "datasource_id": dataset.datasource_id,
+        "name": dataset.name,
+        "physical_name": dataset.physical_name,
+        "schema_name": dataset.schema_name,
+        "columns": [],
+        "column_count": len(columns) if isinstance(columns, list) else 0,
+        "description": dataset.description,
+        "created_at": dataset.created_at.isoformat() if dataset.created_at else None,
+        "updated_at": dataset.updated_at.isoformat() if dataset.updated_at else None,
+    }
 
 
 # ============ Dataset Routes ============
 @router.get("/datasets")
-def get_datasets(datasource_id: Optional[str] = None, db: Session = Depends(get_db)):
-    query = db.query(Dataset)
+def get_datasets(
+    datasource_id: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 20,
+    search: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    page = max(page, 1)
+    page_size = min(max(page_size, 1), 100)
+    filters = []
     if datasource_id:
-        query = query.filter(Dataset.datasource_id == datasource_id)
-    datasets = query.all()
-    return [d.to_dict() for d in datasets]
+        filters.append(Dataset.datasource_id == datasource_id)
+        datasource = db.query(DataSource).filter(DataSource.id == datasource_id).first()
+        if datasource:
+            schema_filter = get_metadata_schema_filter(datasource.type, get_datasource_connection_config(datasource))
+            if schema_filter:
+                filters.append(Dataset.schema_name == schema_filter)
+    if search:
+        pattern = f"%{search}%"
+        filters.append(
+            (Dataset.name.like(pattern)) |
+            (Dataset.physical_name.like(pattern)) |
+            (Dataset.description.like(pattern))
+        )
+
+    total_query = db.query(func.count(Dataset.id))
+    query = db.query(
+        Dataset.id,
+        Dataset.datasource_id,
+        Dataset.name,
+        Dataset.physical_name,
+        Dataset.schema_name,
+        func.coalesce(func.json_length(Dataset.columns), 0).label("column_count"),
+        Dataset.description,
+        Dataset.created_at,
+        Dataset.updated_at,
+    )
+    if filters:
+        total_query = total_query.filter(*filters)
+        query = query.filter(*filters)
+
+    total = total_query.scalar() or 0
+    rows = query.order_by(Dataset.name.asc()).offset((page - 1) * page_size).limit(page_size).all()
+    items = [
+        {
+            "id": row.id,
+            "datasource_id": row.datasource_id,
+            "name": row.name,
+            "physical_name": row.physical_name,
+            "schema_name": row.schema_name,
+            "columns": [],
+            "column_count": row.column_count or 0,
+            "description": row.description,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        }
+        for row in rows
+    ]
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total + page_size - 1) // page_size,
+    }
 
 
 @router.get("/datasets/{id}")
@@ -295,7 +496,7 @@ async def sync_datasets_from_source(request: dict, db: Session = Depends(get_db)
         raise HTTPException(status_code=404, detail="DataSource not found")
 
     try:
-        tables = fetch_tables_and_columns(datasource.type, get_datasource_connection_config(datasource))
+        tables = await run_datasource_operation(fetch_tables_and_columns, datasource.type, get_datasource_connection_config(datasource))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to sync tables: {str(e)}")
 

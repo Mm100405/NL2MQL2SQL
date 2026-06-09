@@ -76,13 +76,22 @@
         <!-- 物理表选择 -->
         <template v-if="form.source_type === 'physical'">
           <a-form-item label="数据源" required>
-            <a-select v-model="selectedDatasourceId" placeholder="选择数据源" @change="form.dataset_id = ''">
+            <a-select v-model="selectedDatasourceId" placeholder="选择数据源" @change="handleDatasourceChange">
               <a-option v-for="ds in datasources" :key="ds.id" :value="ds.id">{{ ds.name }}</a-option>
             </a-select>
           </a-form-item>
 
           <a-form-item field="dataset_id" label="物理表" required>
-            <a-select v-model="form.dataset_id" placeholder="选择物理表" :disabled="!selectedDatasourceId">
+            <a-select
+              v-model="form.dataset_id"
+              placeholder="选择物理表，可输入表名搜索"
+              :disabled="!selectedDatasourceId"
+              allow-search
+              allow-clear
+              :loading="datasetLoading"
+              @search="searchDatasets"
+              @change="handleDatasetChange"
+            >
               <a-option v-for="dt in filteredDatasets" :key="dt.id" :value="dt.id">
                 {{ dt.name }} ({{ dt.physical_name }})
               </a-option>
@@ -170,7 +179,7 @@
 import { ref, reactive, computed, onMounted } from 'vue'
 import { Message } from '@arco-design/web-vue'
 import type { FormInstance } from '@arco-design/web-vue'
-import { getDimensions, getDatasets, createDimension, updateDimension, deleteDimension, getDataSources } from '@/api/semantic'
+import { getDimensions, getDatasets, getDataset, createDimension, updateDimension, deleteDimension, getDataSources } from '@/api/semantic'
 import { getSystemSetting } from '@/api/settings'
 import { getViews } from '@/api/views'
 import type { Dimension, Dataset, DimensionType, DataSource, CommonColumnInfo } from '@/api/types'
@@ -184,6 +193,7 @@ const editingId = ref('')
 const formRef = ref<FormInstance>()
 const dimensions = ref<Dimension[]>([])
 const datasets = ref<Dataset[]>([])
+const datasetLoading = ref(false)
 const datasources = ref<DataSource[]>([])
 const views = ref<View[]>([])
 const timeFormatOptions = ref<any[]>([])
@@ -267,6 +277,66 @@ function getTypeLabel(type: string) {
   return labels[type] || type
 }
 
+async function loadDatasets(datasourceId?: string, search?: string) {
+  if (!datasourceId) return
+  datasetLoading.value = true
+  try {
+    const result = await getDatasets({ datasource_id: datasourceId, page: 1, page_size: 100, search: search || undefined })
+    const existing = new Map(datasets.value.map(d => [d.id, d]))
+    result.items.forEach(item => existing.set(item.id, item))
+    datasets.value = Array.from(existing.values())
+  } catch (error) {
+    Message.error('加载物理表失败')
+  } finally {
+    datasetLoading.value = false
+  }
+}
+
+async function handleDatasourceChange(datasourceId: string) {
+  form.dataset_id = ''
+  form.physical_column = ''
+  if (datasourceId) {
+    await loadDatasets(datasourceId)
+  }
+}
+
+async function searchDatasets(keyword: string) {
+  if (selectedDatasourceId.value) {
+    await loadDatasets(selectedDatasourceId.value, keyword)
+  }
+}
+
+async function ensureDatasetLoaded(datasetId: string) {
+  let dataset = datasets.value.find(d => d.id === datasetId)
+  if (!dataset) {
+    dataset = await getDataset(datasetId)
+    datasets.value = [...datasets.value, dataset]
+  }
+  return dataset
+}
+
+async function ensureDatasetColumns(datasetId: string) {
+  const dataset = await ensureDatasetLoaded(datasetId)
+  if (dataset.columns?.length) return
+  const detail = await getDataset(datasetId)
+  const index = datasets.value.findIndex(d => d.id === datasetId)
+  if (index === -1) {
+    datasets.value = [...datasets.value, detail]
+  } else {
+    datasets.value[index] = detail
+  }
+}
+
+async function handleDatasetChange(datasetId: string) {
+  form.physical_column = ''
+  if (!datasetId) return
+  try {
+    await ensureDatasetColumns(datasetId)
+  } catch (error) {
+    Message.error('加载物理表字段失败')
+  }
+}
+
 // 根据选择的字段自动推断数据类型
 function handleColumnChange(columnName: string) {
   if (!columnName) return
@@ -288,15 +358,13 @@ function handleColumnChange(columnName: string) {
 async function fetchData() {
   loading.value = true
   try {
-    const [dims, ds, setting, dsSources, allViews] = await Promise.all([
+    const [dims, setting, dsSources, allViews] = await Promise.all([
       getDimensions(),
-      getDatasets(),
       getSystemSetting('time_formats').catch(() => ({ value: [] })),
       getDataSources(),
       getViews()
     ])
     dimensions.value = dims
-    datasets.value = ds
     datasources.value = dsSources
     views.value = allViews
     timeFormatOptions.value = (setting as any).value || []
@@ -320,7 +388,7 @@ function showCreateModal() {
   modalVisible.value = true
 }
 
-function handleEdit(record: Dimension) {
+async function handleEdit(record: Dimension) {
   isEdit.value = true
   editingId.value = record.id
   
@@ -343,10 +411,10 @@ function handleEdit(record: Dimension) {
   
   // 设置数据源ID（如果是物理表）
   if (sourceType === 'physical' && record.dataset_id) {
-    const dataset = datasets.value.find(d => d.id === record.dataset_id)
-    if (dataset) {
-      selectedDatasourceId.value = dataset.datasource_id
-    }
+    const dataset = await ensureDatasetLoaded(record.dataset_id)
+    selectedDatasourceId.value = dataset.datasource_id
+    await loadDatasets(dataset.datasource_id)
+    await ensureDatasetColumns(record.dataset_id)
   } else {
     selectedDatasourceId.value = ''
   }

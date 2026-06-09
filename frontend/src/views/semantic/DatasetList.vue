@@ -44,7 +44,7 @@
                   {{ getStatusText(ds.status) }}
                 </a-tag>
               </a-tooltip>
-              <span class="datasource-count">{{ getDatasourceCount(ds.id) }} 个表</span>
+              <span class="datasource-count">{{ selectedDatasource === ds.id ? `${datasetTotal} 个表` : '' }}</span>
             </div>
           </div>
           <a-empty v-if="filteredDataSources.length === 0" description="暂无数据源" size="small" />
@@ -67,9 +67,9 @@
                 <template #icon><icon-plus /></template>
                 新增
               </a-button>
-              <a-button @click="syncTables" :loading="loading">
+              <a-button @click="syncTables" :loading="syncingTables" :disabled="syncingTables">
                 <template #icon><icon-sync /></template>
-                同步物理表
+                {{ syncingTables ? '同步中' : '同步物理表' }}
               </a-button>
             </a-space>
           </template>
@@ -187,12 +187,14 @@ import {
   IconClockCircle,
   IconExclamationCircle
 } from '@arco-design/web-vue/es/icon'
-import { getDatasets, getDataSources, deleteDataset, createDataset, updateDataset, syncDatasetFromSource, syncPhysicalTables } from '@/api/semantic'
-import type { Dataset, DataSource, ColumnInfo } from '@/api/types'
+import { getDatasets, getDataset, getDataSources, deleteDataset, createDataset, updateDataset, syncDatasetFromSource, syncPhysicalTables, getPhysicalTableSyncTask } from '@/api/semantic'
+import type { Dataset, DataSource, ColumnInfo, PhysicalTableSyncTask } from '@/api/types'
 
 const loading = ref(false)
 const syncing = ref(false)
+const syncingTables = ref(false)
 const datasets = ref<Dataset[]>([])
+const datasetTotal = ref(0)
 const dataSources = ref<DataSource[]>([])
 const selectedDatasource = ref('')
 const searchKeyword = ref('')
@@ -203,28 +205,14 @@ const currentDataset = ref<Dataset | null>(null)
 const editingDataset = ref<Dataset | null>(null)
 
 // 分页配置
-const pagination = computed(() => {
-  let filtered = datasets.value.filter(d => d.datasource_id === selectedDatasource.value)
-
-  // 根据搜索关键词过滤
-  if (searchKeyword.value) {
-    const keyword = searchKeyword.value.toLowerCase()
-    filtered = filtered.filter(d =>
-      d.name.toLowerCase().includes(keyword) ||
-      d.physical_name.toLowerCase().includes(keyword) ||
-      d.description?.toLowerCase().includes(keyword)
-    )
-  }
-
-  return {
-    current: paginationState.current,
-    pageSize: paginationState.pageSize,
-    total: filtered.length,
-    showTotal: true,
-    showPageSize: true,
-    pageSizeOptions: [7, 14, 20, 50]
-  }
-})
+const pagination = computed(() => ({
+  current: paginationState.value.current,
+  pageSize: paginationState.value.pageSize,
+  total: datasetTotal.value,
+  showTotal: true,
+  showPageSize: true,
+  pageSizeOptions: [7, 14, 20, 50]
+}))
 
 const paginationState = ref({
   current: 1,
@@ -256,10 +244,8 @@ const columns = [
     width: 100,
     align: 'center',
     render: ({ record }: { record: Dataset }) => {
-      if (record && record.columns && Array.isArray(record.columns)) {
-        return h(Tag, {}, { default: () => `${record.columns.length} 列` })
-      }
-      return h(Tag, {}, { default: () => '0 列' })
+      const count = record.column_count ?? record.columns?.length ?? 0
+      return h(Tag, {}, { default: () => `${count} 列` })
     }
   },
   { title: '描述', dataIndex: 'description', ellipsis: true, width: 250 },
@@ -332,30 +318,7 @@ const filteredDataSources = computed(() => {
   return dataSources.value.filter(ds => ds.status === statusFilter.value)
 })
 
-// 过滤后的数据集（需要分页）
-const filteredDatasets = computed(() => {
-  let result = datasets.value.filter(d => d.datasource_id === selectedDatasource.value)
-
-  // 根据搜索关键词过滤
-  if (searchKeyword.value) {
-    const keyword = searchKeyword.value.toLowerCase()
-    result = result.filter(d =>
-      d.name.toLowerCase().includes(keyword) ||
-      d.physical_name.toLowerCase().includes(keyword) ||
-      d.description?.toLowerCase().includes(keyword)
-    )
-  }
-
-  // 手动分页：根据当前页和每页条数截取数据
-  const start = (paginationState.value.current - 1) * paginationState.value.pageSize
-  const end = start + paginationState.value.pageSize
-  return result.slice(start, end)
-})
-
-// 获取数据源下的表数量
-function getDatasourceCount(datasourceId: string) {
-  return datasets.value.filter(d => d.datasource_id === datasourceId).length
-}
+const filteredDatasets = computed(() => datasets.value)
 
 // 获取数据源状态颜色
 function getStatusColor(status: string) {
@@ -403,38 +366,59 @@ async function selectDatasource(datasourceId: string) {
   paginationState.value.current = 1
   searchKeyword.value = ''
 
-  // 切换数据源时自动同步物理表
   if (datasourceId) {
-    await syncTables()
+    await loadDatasets()
   }
 }
 
 // 搜索处理
-function handleSearch() {
+async function handleSearch() {
   paginationState.value.current = 1
+  await loadDatasets()
 }
 
 // 分页变化处理
-function onPageChange(current: number) {
+async function onPageChange(current: number) {
   paginationState.value.current = current
+  await loadDatasets()
 }
 
-function onPageSizeChange(pageSize: number) {
+async function onPageSizeChange(pageSize: number) {
   paginationState.value.pageSize = pageSize
   paginationState.value.current = 1
+  await loadDatasets()
+}
+
+async function loadDatasets() {
+  if (!selectedDatasource.value) {
+    datasets.value = []
+    datasetTotal.value = 0
+    return
+  }
+  loading.value = true
+  try {
+    const result = await getDatasets({
+      datasource_id: selectedDatasource.value,
+      page: paginationState.value.current,
+      page_size: paginationState.value.pageSize,
+      search: searchKeyword.value || undefined
+    })
+    datasets.value = result.items
+    datasetTotal.value = result.total
+  } catch (error) {
+    console.error('Failed to fetch datasets:', error)
+    Message.error('加载物理表失败')
+  } finally {
+    loading.value = false
+  }
 }
 
 async function fetchData() {
   loading.value = true
   try {
-    const [datasetsResult, sources] = await Promise.all([
-      getDatasets(),
-      getDataSources()
-    ])
-    datasets.value = datasetsResult
+    const sources = await getDataSources()
     dataSources.value = sources
 
-    // 如果已选择数据源，保持选中；否则选择第一个数据源
     if (selectedDatasource.value) {
       if (!sources.find(ds => ds.id === selectedDatasource.value)) {
         selectedDatasource.value = sources.length > 0 ? sources[0].id : ''
@@ -445,10 +429,15 @@ async function fetchData() {
   } catch (error) {
     console.error('Failed to fetch data:', error)
     datasets.value = []
+    datasetTotal.value = 0
     dataSources.value = []
     selectedDatasource.value = ''
   } finally {
     loading.value = false
+  }
+
+  if (selectedDatasource.value) {
+    await loadDatasets()
   }
 }
 
@@ -476,21 +465,26 @@ function showCreateModal() {
   modalVisible.value = true
 }
 
-function handleEdit(record: Dataset) {
+async function handleEdit(record: Dataset) {
   if (!record) {
     console.error('Record is undefined in handleEdit')
     return
   }
-  editingDataset.value = record
-  formData.value = {
-    datasource_id: record.datasource_id || '',
-    name: record.name,
-    physical_name: record.physical_name,
-    schema_name: record.schema_name || 'public',
-    description: record.description || '',
-    columns: record.columns || []
+  try {
+    const detail = await getDataset(record.id)
+    editingDataset.value = detail
+    formData.value = {
+      datasource_id: detail.datasource_id || '',
+      name: detail.name,
+      physical_name: detail.physical_name,
+      schema_name: detail.schema_name || 'public',
+      description: detail.description || '',
+      columns: detail.columns || []
+    }
+    modalVisible.value = true
+  } catch (error) {
+    Message.error('加载物理表详情失败')
   }
-  modalVisible.value = true
 }
 
 function handleCancel() {
@@ -561,13 +555,17 @@ function removeColumn(index: number) {
   formData.value.columns.splice(index, 1)
 }
 
-function handleViewColumns(record: Dataset) {
+async function handleViewColumns(record: Dataset) {
   if (!record) {
     console.error('Record is undefined in handleViewColumns')
     return
   }
-  currentDataset.value = record
-  drawerVisible.value = true
+  try {
+    currentDataset.value = await getDataset(record.id)
+    drawerVisible.value = true
+  } catch (error) {
+    Message.error('加载字段失败')
+  }
 }
 
 async function handleDelete(id: string) {
@@ -584,33 +582,53 @@ async function handleDelete(id: string) {
   }
 }
 
+function wait(ms: number) {
+  return new Promise(resolve => window.setTimeout(resolve, ms))
+}
+
+async function pollSyncTask(taskId: string) {
+  let task: PhysicalTableSyncTask | null = null
+  for (let i = 0; i < 120; i++) {
+    await wait(2000)
+    task = await getPhysicalTableSyncTask(taskId)
+    if (task.status === 'success') {
+      Message.success(`同步完成，发现 ${task.count} 个表`)
+      await loadDatasets()
+      return
+    }
+    if (task.status === 'failed') {
+      Message.error(task.error || task.message || '同步失败')
+      return
+    }
+  }
+  Message.warning('同步仍在后台执行，请稍后刷新列表查看结果')
+}
+
 async function syncTables() {
   if (!selectedDatasource.value) {
     Message.warning('请先选择数据源')
     return
   }
+  if (syncingTables.value) {
+    return
+  }
 
-  loading.value = true
+  syncingTables.value = true
   try {
-    const result = await syncPhysicalTables(selectedDatasource.value)
-    Message.success(`同步成功，发现 ${result.count} 个表`)
-    // 重新加载数据集，不再调用 fetchData 避免循环
-    datasets.value = await getDatasets()
+    const task = await syncPhysicalTables(selectedDatasource.value)
+    Message.info(task.status === 'running' ? '物理表同步正在执行' : '物理表同步已开始')
+    await pollSyncTask(task.task_id)
   } catch (error: any) {
     const errorMsg = error?.response?.data?.detail || error?.message || '同步失败'
     Message.error(errorMsg)
     console.error('Sync tables error:', error)
   } finally {
-    loading.value = false
+    syncingTables.value = false
   }
 }
 
 onMounted(async () => {
   await fetchData()
-  // 进入页面后自动同步默认数据源的物理表
-  if (selectedDatasource.value) {
-    await syncTables()
-  }
 })
 </script>
 

@@ -5,7 +5,8 @@ import type {
   Metric,
   Dimension,
   DataRelation,
-  PaginatedResponse
+  PaginatedResponse,
+  PhysicalTableSyncTask
 } from './types'
 
 // ============ 数据源管理 ============
@@ -41,7 +42,7 @@ export function testConnectionConfig(data: {
 }
 
 // ============ 数据集管理 ============
-export function getDatasets(params?: { datasource_id?: string }): Promise<Dataset[]> {
+export function getDatasets(params?: { datasource_id?: string; page?: number; page_size?: number; search?: string }): Promise<PaginatedResponse<Dataset>> {
   return request.get('/semantic/datasets', { params })
 }
 
@@ -65,8 +66,12 @@ export function syncDatasetFromSource(datasourceId: string): Promise<Dataset[]> 
   return request.post('/semantic/datasets/sync', { datasource_id: datasourceId })
 }
 
-export function syncPhysicalTables(datasourceId: string): Promise<{ message: string; count: number }> {
+export function syncPhysicalTables(datasourceId: string): Promise<PhysicalTableSyncTask> {
   return request.post(`/semantic/datasources/${datasourceId}/sync`)
+}
+
+export function getPhysicalTableSyncTask(taskId: string): Promise<PhysicalTableSyncTask> {
+  return request.get(`/semantic/datasources/sync-tasks/${taskId}`)
 }
 
 // ============ 指标管理 ============

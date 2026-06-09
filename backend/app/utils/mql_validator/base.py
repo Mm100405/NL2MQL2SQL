@@ -153,6 +153,8 @@ class ValidationContext:
             }
             if d.dimension_type == "time":
                 self.time_dimensions.add(d.name)
+                if d.display_name:
+                    self.time_dimensions.add(d.display_name)
 
         # 加载可过滤字段和可返回明细字段（从 View 中）
         view_query = self.db.query(View)

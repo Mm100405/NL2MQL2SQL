@@ -91,13 +91,22 @@
               <!-- 物理表选择 -->
               <template v-if="form.source_type === 'physical'">
                 <a-form-item label="数据源" required>
-                  <a-select v-model="selectedDatasourceId" placeholder="选择数据源" @change="form.dataset_id = ''">
+                  <a-select v-model="selectedDatasourceId" placeholder="选择数据源" @change="handleDatasourceChange">
                     <a-option v-for="ds in datasources" :key="ds.id" :value="ds.id">{{ ds.name }}</a-option>
                   </a-select>
                 </a-form-item>
 
                 <a-form-item field="dataset_id" label="物理表" required>
-                  <a-select v-model="form.dataset_id" placeholder="选择物理表" :disabled="!selectedDatasourceId">
+                  <a-select
+                    v-model="form.dataset_id"
+                    placeholder="选择物理表，可输入表名搜索"
+                    :disabled="!selectedDatasourceId"
+                    allow-search
+                    allow-clear
+                    :loading="datasetLoading"
+                    @search="searchDatasets"
+                    @change="handleDatasetChange"
+                  >
                     <a-option v-for="dt in filteredDatasets" :key="dt.id" :value="dt.id">
                       {{ dt.name }} ({{ dt.physical_name }})
                     </a-option>
@@ -282,7 +291,7 @@ import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
 import type { FormInstance } from '@arco-design/web-vue'
-import { getMetrics, getDatasets, createMetric, updateMetric, deleteMetric, getDimensions, getDataSources } from '@/api/semantic'
+import { getMetrics, getDatasets, getDataset, createMetric, updateMetric, deleteMetric, getDimensions, getDataSources } from '@/api/semantic'
 import { getViews } from '@/api/views'
 import type { Metric, Dataset, DataSource, CommonColumnInfo } from '@/api/types'
 import type { View } from '@/api/views'
@@ -296,6 +305,7 @@ const editingId = ref('')
 const formRef = ref<FormInstance>()
 const metrics = ref<Metric[]>([])
 const datasets = ref<Dataset[]>([])
+const datasetLoading = ref(false)
 const datasources = ref<DataSource[]>([])
 const views = ref<View[]>([])
 const filterType = ref('')
@@ -456,6 +466,68 @@ function getTypeLabel(type: string) {
   return labels[type] || type
 }
 
+async function loadDatasets(datasourceId?: string, search?: string) {
+  if (!datasourceId) return
+  datasetLoading.value = true
+  try {
+    const result = await getDatasets({ datasource_id: datasourceId, page: 1, page_size: 100, search: search || undefined })
+    const existing = new Map(datasets.value.map(d => [d.id, d]))
+    result.items.forEach(item => existing.set(item.id, item))
+    datasets.value = Array.from(existing.values())
+  } catch (error) {
+    Message.error('加载物理表失败')
+  } finally {
+    datasetLoading.value = false
+  }
+}
+
+async function handleDatasourceChange(datasourceId: string) {
+  form.dataset_id = ''
+  form.measure_column = ''
+  form.date_column_id = ''
+  if (datasourceId) {
+    await loadDatasets(datasourceId)
+  }
+}
+
+async function searchDatasets(keyword: string) {
+  if (selectedDatasourceId.value) {
+    await loadDatasets(selectedDatasourceId.value, keyword)
+  }
+}
+
+async function ensureDatasetLoaded(datasetId: string) {
+  let dataset = datasets.value.find(d => d.id === datasetId)
+  if (!dataset) {
+    dataset = await getDataset(datasetId)
+    datasets.value = [...datasets.value, dataset]
+  }
+  return dataset
+}
+
+async function ensureDatasetColumns(datasetId: string) {
+  const dataset = await ensureDatasetLoaded(datasetId)
+  if (dataset.columns?.length) return
+  const detail = await getDataset(datasetId)
+  const index = datasets.value.findIndex(d => d.id === datasetId)
+  if (index === -1) {
+    datasets.value = [...datasets.value, detail]
+  } else {
+    datasets.value[index] = detail
+  }
+}
+
+async function handleDatasetChange(datasetId: string) {
+  form.measure_column = ''
+  form.date_column_id = ''
+  if (!datasetId) return
+  try {
+    await ensureDatasetColumns(datasetId)
+  } catch (error) {
+    Message.error('加载物理表字段失败')
+  }
+}
+
 function addFilter() {
   form.filters.push({ field: '', operator: '=', value: '' })
 }
@@ -467,15 +539,13 @@ function removeFilter(index: number) {
 async function fetchData() {
   loading.value = true
   try {
-    const [m, ds, allDims, dsSources, allViews] = await Promise.all([
+    const [m, allDims, dsSources, allViews] = await Promise.all([
       getMetrics(),
-      getDatasets(),
       getDimensions(),
       getDataSources(),
       getViews()
     ])
     metrics.value = m
-    datasets.value = ds
     datasources.value = dsSources
     views.value = allViews
     
@@ -510,7 +580,7 @@ function showCreateModal() {
   modalVisible.value = true
 }
 
-function handleEdit(record: Metric) {
+async function handleEdit(record: Metric) {
   isEdit.value = true
   editingId.value = record.id
   
@@ -542,10 +612,10 @@ function handleEdit(record: Metric) {
   
   // 设置数据源ID（如果是物理表）
   if (sourceType === 'physical' && record.dataset_id) {
-    const dataset = datasets.value.find(d => d.id === record.dataset_id)
-    if (dataset) {
-      selectedDatasourceId.value = dataset.datasource_id
-    }
+    const dataset = await ensureDatasetLoaded(record.dataset_id)
+    selectedDatasourceId.value = dataset.datasource_id
+    await loadDatasets(dataset.datasource_id)
+    await ensureDatasetColumns(record.dataset_id)
   } else {
     selectedDatasourceId.value = ''
   }

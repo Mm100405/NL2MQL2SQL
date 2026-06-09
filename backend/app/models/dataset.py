@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, JSON, DateTime, ForeignKey
+from sqlalchemy import Column, String, Text, JSON, DateTime, ForeignKey, Index
 from sqlalchemy.orm import relationship
 from datetime import datetime
 import uuid
@@ -11,6 +11,9 @@ class Dataset(Base):
     物理表模型 - 代表数据源中的实际表
     """
     __tablename__ = "datasets"
+    __table_args__ = (
+        Index("idx_datasets_datasource_name", "datasource_id", "name"),
+    )
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     datasource_id = Column(String(36), ForeignKey("datasources.id"), nullable=False)

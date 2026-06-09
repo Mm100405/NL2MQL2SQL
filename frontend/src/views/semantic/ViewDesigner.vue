@@ -67,16 +67,18 @@
             </a-space>
           </div>
           <div class="table-search">
-            <a-input 
-              v-model="tableSearchKeyword" 
-              placeholder="搜索表名..." 
+            <a-input-search
+              v-model="tableSearchKeyword"
+              placeholder="搜索表名..."
               size="small"
               allow-clear
+              :loading="tableLoading"
+              @search="handleTableSearch"
             >
               <template #prefix>
                 <icon-search />
               </template>
-            </a-input>
+            </a-input-search>
           </div>
           <div class="table-list">
             <div
@@ -440,7 +442,7 @@ import TableNode from '@/components/semantic/TableNode.vue'
 import ColumnSelectDialog from '@/components/semantic/ColumnSelectDialog.vue'
 import JoinConfigPanel from '@/components/semantic/JoinConfigPanel.vue'
 import type { JoinConfig } from '@/components/semantic/JoinConfigPanel.vue'
-import { getDataSources, getDatasets } from '@/api/semantic'
+import { getDataSources, getDatasets, getDataset } from '@/api/semantic'
 import { getView, createView, updateView, previewView, generateViewSQL, getCategoryStats, getCategories, setDefaultView } from '@/api/views'
 import { getDictionaries } from '@/api/dictionaries'
 import type { Dataset, DataSource } from '@/api/types'
@@ -472,6 +474,7 @@ const datasources = ref<DataSource[]>([])
 const selectedDatasource = ref('')
 const categories = ref<Array<{ category_id: string | null; category_name: string; view_count?: number }>>([])
 const tables = ref<Dataset[]>([])
+const tableLoading = ref(false)
 const tableSearchKeyword = ref('')
 const viewType = ref<'joined' | 'sql'>('joined')
 const customSql = ref('')
@@ -651,11 +654,26 @@ const selectedJoinType = ref<'INNER' | 'LEFT' | 'RIGHT' | 'FULL' | 'CROSS'>('INN
 provide('connectingColumn', connectingColumn)
 
 // 过滤后的表列表
-const filteredTables = computed(() => {
-  if (!tableSearchKeyword.value.trim()) return tables.value
-  const keyword = tableSearchKeyword.value.toLowerCase()
-  return tables.value.filter(t => t.name.toLowerCase().includes(keyword))
-})
+const filteredTables = computed(() => tables.value)
+
+function matchesTableName(dataset: Dataset, tableName: string) {
+  const names = [dataset.name, dataset.physical_name].filter(Boolean).map(name => name.toLowerCase())
+  const searchName = tableName.toLowerCase()
+  return names.some(name =>
+    name === searchName ||
+    name.endsWith(`.${searchName}`) ||
+    searchName.endsWith(`.${name}`)
+  )
+}
+
+async function findTableByName(tableName: string) {
+  let dataset = tables.value.find(t => matchesTableName(t, tableName))
+  if (dataset) return dataset
+
+  await loadTables(tableName)
+  dataset = tables.value.find(t => matchesTableName(t, tableName))
+  return dataset
+}
 
 // 监听nodes变化,支持字段选择更新
 watch(() => nodes.value.map(n => n.data.selectedColumns), () => {
@@ -782,18 +800,57 @@ async function loadCategories() {
 }
 
 // 加载表列表
-async function loadTables() {
+async function loadTables(search?: string) {
   if (!selectedDatasource.value) return
+  tableLoading.value = true
   try {
-    // 直接通过参数过滤，避免加载所有数据
-    tables.value = await getDatasets({ datasource_id: selectedDatasource.value })
+    const keyword = search?.trim()
+    const result = await getDatasets({ datasource_id: selectedDatasource.value, page: 1, page_size: 100, search: keyword || undefined })
+    if (keyword) {
+      tables.value = result.items
+    } else {
+      const existing = new Map(tables.value.map(t => [t.id, t]))
+      result.items.forEach(item => existing.set(item.id, item))
+      tables.value = Array.from(existing.values())
+    }
   } catch (e) {
     console.error('Failed to load tables:', e)
+  } finally {
+    tableLoading.value = false
   }
+}
+
+async function handleTableSearch(keyword: string) {
+  tableSearchKeyword.value = keyword
+  await loadTables(keyword)
+}
+
+async function ensureTableLoaded(tableId: string) {
+  let table = tables.value.find(t => t.id === tableId)
+  if (!table) {
+    table = await getDataset(tableId)
+    tables.value = [...tables.value, table]
+  }
+  return table
+}
+
+async function ensureTableColumns(tableId: string) {
+  const table = await ensureTableLoaded(tableId)
+  if (table.columns?.length) return table
+  const detail = await getDataset(tableId)
+  const index = tables.value.findIndex(t => t.id === tableId)
+  if (index === -1) {
+    tables.value = [...tables.value, detail]
+  } else {
+    tables.value[index] = detail
+  }
+  return detail
 }
 
 // 监听数据源变化
 watch(selectedDatasource, () => {
+  tables.value = []
+  tableSearchKeyword.value = ''
   loadTables()
   loadCategories()
 })
@@ -821,7 +878,7 @@ async function loadView() {
       const joinConfig = view.join_config
       const nodePositions: Record<string, { x: number; y: number }> = {}
       for (const t of joinConfig.tables || []) {
-        const dataset = tables.value.find(d => d.id === t.id)
+        const dataset = await ensureTableColumns(t.id)
         if (dataset) {
           const position = t.position || { x: 100, y: 100 }
           nodePositions[t.alias] = position
@@ -960,12 +1017,19 @@ function onTableDragStart(event: DragEvent, table: Dataset) {
 }
 
 // 画布放置
-function onCanvasDrop(event: DragEvent) {
+async function onCanvasDrop(event: DragEvent) {
   const tableId = event.dataTransfer?.getData('table-id')
   if (!tableId) return
 
-  const table = tables.value.find(t => t.id === tableId)
+  let table = tables.value.find(t => t.id === tableId)
   if (!table) return
+
+  try {
+    table = await ensureTableColumns(tableId)
+  } catch (error) {
+    Message.error('加载物理表字段失败')
+    return
+  }
 
   // 检查是否已添加
   const exists = nodes.value.some(n => n.data.datasetId === tableId)
@@ -1909,14 +1973,8 @@ async function parseSQLToCanvas() {
     console.log(`查找表: ${table.name}`)
     
     // 查找匹配的Dataset (支持大小写不敏感和带schema的表名)
-    const dataset = tables.value.find(t => {
-      const tName = t.name.toLowerCase()
-      const searchName = table.name.toLowerCase()
-      // 支持 schema.table 格式
-      return tName === searchName || 
-             tName.endsWith(`.${searchName}`) ||
-             searchName.endsWith(`.${tName}`)
-    })
+    const datasetMatch = await findTableByName(table.name)
+    const dataset = datasetMatch ? await ensureTableColumns(datasetMatch.id) : undefined
     
     if (!dataset) {
       console.warn(`未找到表: ${table.name}`)

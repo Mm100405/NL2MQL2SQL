@@ -166,14 +166,23 @@
           <a-row :gutter="16">
             <a-col :span="12">
               <a-form-item label="数据源" required>
-                <a-select v-model="selectedDatasourceId" placeholder="选择数据源" @change="form.auto_source_dataset_id = ''">
+                <a-select v-model="selectedDatasourceId" placeholder="选择数据源" @change="handleDatasourceChange">
                   <a-option v-for="ds in datasources" :key="ds.id" :value="ds.id">{{ ds.name }}</a-option>
                 </a-select>
               </a-form-item>
             </a-col>
             <a-col :span="12">
               <a-form-item label="物理表" required>
-                <a-select v-model="form.auto_source_dataset_id" placeholder="选择物理表" :disabled="!selectedDatasourceId" allow-search>
+                <a-select
+                  v-model="form.auto_source_dataset_id"
+                  placeholder="选择物理表，可输入表名搜索"
+                  :disabled="!selectedDatasourceId"
+                  allow-search
+                  allow-clear
+                  :loading="datasetLoading"
+                  @search="searchDatasets"
+                  @change="handleAutoDatasetChange"
+                >
                   <a-option v-for="dt in filteredDatasets" :key="dt.id" :value="dt.id">
                     {{ dt.name }} ({{ dt.physical_name }})
                   </a-option>
@@ -382,7 +391,7 @@ import {
   type Dictionary,
   type DictMapping
 } from '@/api/dictionaries'
-import { getDataSources, getDatasets } from '@/api/semantic'
+import { getDataSources, getDatasets, getDataset } from '@/api/semantic'
 import { getViews } from '@/api/views'
 import type { DataSource, Dataset, CommonColumnInfo } from '@/api/types'
 import type { View } from '@/api/views'
@@ -398,6 +407,7 @@ const formRef = ref<FormInstance>()
 const dictionaries = ref<Dictionary[]>([])
 const datasources = ref<DataSource[]>([])
 const datasets = ref<Dataset[]>([])
+const datasetLoading = ref(false)
 const views = ref<View[]>([])
 const filterSourceType = ref('')
 
@@ -538,18 +548,76 @@ function removeDictMapping(index: number) {
   form.mappings.splice(index, 1)
 }
 
+async function loadDatasets(datasourceId?: string, search?: string) {
+  if (!datasourceId) return
+  datasetLoading.value = true
+  try {
+    const result = await getDatasets({ datasource_id: datasourceId, page: 1, page_size: 100, search: search || undefined })
+    const existing = new Map(datasets.value.map(d => [d.id, d]))
+    result.items.forEach(item => existing.set(item.id, item))
+    datasets.value = Array.from(existing.values())
+  } catch (error) {
+    Message.error('加载物理表失败')
+  } finally {
+    datasetLoading.value = false
+  }
+}
+
+async function handleDatasourceChange(datasourceId: string) {
+  form.auto_source_dataset_id = ''
+  form.auto_source_column = ''
+  if (datasourceId) {
+    await loadDatasets(datasourceId)
+  }
+}
+
+async function searchDatasets(keyword: string) {
+  if (selectedDatasourceId.value) {
+    await loadDatasets(selectedDatasourceId.value, keyword)
+  }
+}
+
+async function ensureDatasetLoaded(datasetId: string) {
+  let dataset = datasets.value.find(d => d.id === datasetId)
+  if (!dataset) {
+    dataset = await getDataset(datasetId)
+    datasets.value = [...datasets.value, dataset]
+  }
+  return dataset
+}
+
+async function ensureDatasetColumns(datasetId: string) {
+  const dataset = await ensureDatasetLoaded(datasetId)
+  if (dataset.columns?.length) return
+  const detail = await getDataset(datasetId)
+  const index = datasets.value.findIndex(d => d.id === datasetId)
+  if (index === -1) {
+    datasets.value = [...datasets.value, detail]
+  } else {
+    datasets.value[index] = detail
+  }
+}
+
+async function handleAutoDatasetChange(datasetId: string) {
+  form.auto_source_column = ''
+  if (!datasetId) return
+  try {
+    await ensureDatasetColumns(datasetId)
+  } catch (error) {
+    Message.error('加载物理表字段失败')
+  }
+}
+
 async function fetchData() {
   loading.value = true
   try {
-    const [dictRes, dsRes, ds, allViews] = await Promise.all([
+    const [dictRes, dsRes, allViews] = await Promise.all([
       getDictionaries(),
       getDataSources(),
-      getDatasets(),
       getViews()
     ])
     dictionaries.value = dictRes
     datasources.value = dsRes
-    datasets.value = ds
     views.value = allViews
   } catch (error) {
     console.error('Failed to fetch data:', error)
@@ -564,7 +632,7 @@ function showCreateModal() {
   modalVisible.value = true
 }
 
-function handleEdit(record: Dictionary) {
+async function handleEdit(record: Dictionary) {
   isEdit.value = true
   editingId.value = record.id
 
@@ -587,10 +655,10 @@ function handleEdit(record: Dictionary) {
 
   // 设置数据源ID（如果是自动生成类型）
   if (record.source_type === 'auto' && record.auto_source_dataset_id) {
-    const dataset = datasets.value.find(d => d.id === record.auto_source_dataset_id)
-    if (dataset) {
-      selectedDatasourceId.value = dataset.datasource_id
-    }
+    const dataset = await ensureDatasetLoaded(record.auto_source_dataset_id)
+    selectedDatasourceId.value = dataset.datasource_id
+    await loadDatasets(dataset.datasource_id)
+    await ensureDatasetColumns(record.auto_source_dataset_id)
   }
 
   modalVisible.value = true

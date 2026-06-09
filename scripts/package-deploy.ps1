@@ -24,6 +24,7 @@ $excludeDirNames = @(
     ".git",
     ".claude",
     ".codebuddy",
+    ".codegraph",
     ".idea",
     ".vscode",
     ".vs",
@@ -92,7 +93,9 @@ $excludeFilePatterns = @(
     "coverage.xml",
     "*.egg",
     "*.egg-info",
-    "MANIFEST"
+    "MANIFEST",
+    "server-*.txt",
+    "server-*.sh"
 )
 
 if (Test-Path $OutputPath) {

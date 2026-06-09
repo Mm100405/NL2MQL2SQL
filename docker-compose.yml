@@ -45,7 +45,7 @@ services:
       DEBUG: ${DEBUG:-False}
       SECRET_KEY: ${SECRET_KEY:-your-secret-key-change-in-production}
       ENCRYPTION_KEY: ${ENCRYPTION_KEY:-your-encryption-key-32bytes-long!}
-      DISABLE_FASTAPI_THREADPOOL: ${DISABLE_FASTAPI_THREADPOOL:-true}
+      DISABLE_FASTAPI_THREADPOOL: ${DISABLE_FASTAPI_THREADPOOL:-false}
     ports:
       - "${BACKEND_PORT:-18011}:8011"
     volumes:

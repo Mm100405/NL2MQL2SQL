@@ -14,6 +14,7 @@ from app.models.dimension import Dimension
 from app.models.dataset import Dataset
 from app.models.view import View
 from app.models.datasource import DataSource
+from app.services.mql_translator.dialect import get_dialect_name
 
 
 @dataclass
@@ -114,6 +115,7 @@ class SemanticContext:
         # 反向索引（用于 display_name -> name 查找）
         self._display_name_to_metric: Dict[str, str] = {}
         self._display_name_to_dimension: Dict[str, str] = {}
+        self._dimension_id_to_name: Dict[str, str] = {}
         # View.columns 字段索引：字段展示名/逻辑名/别名/源列名 -> (view_id, column_info)
         self._view_columns_index: Dict[str, Tuple[str, Dict[str, Any]]] = {}
 
@@ -162,6 +164,7 @@ class SemanticContext:
             )
             self._dimensions[d.name] = ref
             self._display_name_to_dimension[ref.display_name] = d.name
+            self._dimension_id_to_name[d.id] = d.name
 
         # 加载视图
         for v in self.db.query(View).all():
@@ -425,14 +428,7 @@ class SemanticContext:
         """获取 SQL 方言"""
         if datasource_id and datasource_id in self._datasources:
             ds = self._datasources[datasource_id]
-            datasource_type = (ds.type or "mysql").lower()
-            if datasource_type == "highgo":
-                return "postgresql"
-            if datasource_type in ("dameng", "dm"):
-                return "oracle"
-            if datasource_type in ("pg", "postgres"):
-                return "postgresql"
-            return datasource_type
+            return get_dialect_name(ds.normalized_type)
         return "mysql"
 
     def get_datasource(self, datasource_id: str) -> Optional[DataSource]:
@@ -482,7 +478,8 @@ class SemanticContext:
             return None
 
         # 查找对应的维度
-        return self._dimensions.get(default_date_id)
+        dimension_name = self._dimension_id_to_name.get(default_date_id, default_date_id)
+        return self._dimensions.get(dimension_name)
 
     def get_time_dimensions(self, view_id: str) -> List[FieldRef]:
         """

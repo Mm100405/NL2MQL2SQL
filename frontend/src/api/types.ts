@@ -48,8 +48,22 @@ export interface Dataset {
   physical_name: string
   schema_name?: string
   columns: ColumnInfo[]
+  column_count?: number
   description?: string
   created_at: string
+  updated_at: string
+}
+
+export interface PhysicalTableSyncTask {
+  task_id: string
+  datasource_id: string
+  status: 'queued' | 'running' | 'success' | 'failed'
+  count: number
+  message: string
+  error?: string | null
+  created_at: string
+  started_at?: string | null
+  finished_at?: string | null
   updated_at: string
 }
 

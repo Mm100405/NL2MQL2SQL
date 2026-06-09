@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
+from sqlglot import exp
 
 from app.database import get_db
 from app.models.dataset import Dataset
@@ -20,6 +21,7 @@ from app.models.model_config import ModelConfig
 from app.models.view import View, ViewType
 from app.models.view_category import ViewCategory
 from app.services.llm_client import call_llm
+from app.services.mql_translator.dialect import get_dialect_name
 from app.utils.encryption import decrypt_api_key
 
 router = APIRouter()
@@ -340,10 +342,21 @@ def _build_view_columns(dataset: Dataset, max_fields: int) -> List[Dict[str, Any
     ]
 
 
-def _build_custom_sql(dataset: Dataset, columns: List[Dict[str, Any]]) -> str:
-    selected = ", ".join(col["name"] for col in columns)
-    table_name = dataset.physical_name
-    return f"SELECT {selected}\nFROM {table_name}"
+def _build_custom_sql(dataset: Dataset, columns: List[Dict[str, Any]], datasource: DataSource) -> str:
+    dialect = get_dialect_name(datasource.normalized_type)
+    select_expressions = [
+        exp.alias_(
+            exp.Column(this=exp.Identifier(this=col["name"], quoted=True)),
+            col["name"],
+            quoted=True,
+        )
+        for col in columns
+        if col.get("name")
+    ]
+    table = exp.Table(this=exp.Identifier(this=dataset.physical_name, quoted=True))
+    if dataset.schema_name:
+        table.set("db", exp.Identifier(this=dataset.schema_name, quoted=True))
+    return exp.select(*select_expressions).from_(table).sql(dialect=dialect)
 
 
 def _default_time_column(columns: List[Dict[str, Any]]) -> Optional[str]:
@@ -478,7 +491,8 @@ def _build_rule_draft(dataset: Dataset, datasource: DataSource, request: Semanti
             "name": view_name,
             "display_name": f"{subject_name}视图",
             "view_type": ViewType.SQL,
-            "custom_sql": _build_custom_sql(dataset, view_columns),
+            "base_table_id": dataset.id,
+            "custom_sql": _build_custom_sql(dataset, view_columns, datasource),
             "columns": view_columns,
             "default_time_column": default_time,
             "description": f"由 AI 语义建模助手基于 {dataset.physical_name} 生成，面向“{request.business_goal}”场景。",
@@ -614,6 +628,7 @@ def _publish_view(db: Session, datasource_id: str, draft: Dict[str, Any]) -> Vie
         category_id=category_id,
         category_name=category_name,
         view_type=ViewType.SQL,
+        base_table_id=view_data.get("base_table_id"),
         custom_sql=view_data.get("custom_sql"),
         columns=view_data.get("columns") or [],
         description=view_data.get("description"),
