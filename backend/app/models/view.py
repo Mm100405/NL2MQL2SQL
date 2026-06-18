@@ -105,7 +105,10 @@ class View(Base):
         if self.view_type == ViewType.SINGLE_TABLE:
             if self.base_table_id and self.base_table_id in datasets:
                 table = datasets[self.base_table_id]
-                return f"{table.physical_name}"
+                table_name = table.physical_name
+                if getattr(table, "schema_name", None):
+                    table_name = f"{table.schema_name}.{table_name}"
+                return table_name
             return "(SELECT 1) AS empty_view"
             
         elif self.view_type == ViewType.JOINED:
@@ -137,7 +140,11 @@ class View(Base):
             dataset_id = t.get("id")
             alias = t.get("alias", f"t{len(table_map)}")
             if dataset_id in datasets:
-                table_map[alias] = datasets[dataset_id].physical_name
+                dataset = datasets[dataset_id]
+                table_name = dataset.physical_name
+                if getattr(dataset, "schema_name", None):
+                    table_name = f"{dataset.schema_name}.{table_name}"
+                table_map[alias] = table_name
         
         if not table_map:
             return "(SELECT 1) AS empty_view"

@@ -421,10 +421,10 @@ async function fetchData() {
 
     if (selectedDatasource.value) {
       if (!sources.find(ds => ds.id === selectedDatasource.value)) {
-        selectedDatasource.value = sources.length > 0 ? sources[0].id : ''
+        selectedDatasource.value = sources[0]?.id || ''
       }
     } else {
-      selectedDatasource.value = sources.length > 0 ? sources[0].id : ''
+      selectedDatasource.value = sources[0]?.id || ''
     }
   } catch (error) {
     console.error('Failed to fetch data:', error)

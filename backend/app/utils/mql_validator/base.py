@@ -116,8 +116,24 @@ class ValidationContext:
 
         metric_query = self.db.query(Metric)
         if self.view_id:
-            metric_query = metric_query.filter(Metric.view_id == self.view_id)
-        for m in metric_query.all():
+            direct_metrics = metric_query.filter(Metric.view_id == self.view_id).all()
+            view_metric_ids = {m.id for m in direct_metrics}
+            metrics = list(direct_metrics)
+            seen_metric_ids = {m.id for m in metrics}
+            while view_metric_ids:
+                derived_metrics = metric_query.filter(Metric.is_semantic_enabled == True, Metric.base_metric_id.in_(view_metric_ids)).all()
+                new_ids = set()
+                for metric in derived_metrics:
+                    if metric.id not in seen_metric_ids:
+                        metrics.append(metric)
+                        seen_metric_ids.add(metric.id)
+                        new_ids.add(metric.id)
+                if not new_ids:
+                    break
+                view_metric_ids = new_ids
+        else:
+            metrics = metric_query.all()
+        for m in metrics:
             self.metric_names.add(m.name)
             if m.display_name:
                 self.metric_display_names.add(m.display_name)

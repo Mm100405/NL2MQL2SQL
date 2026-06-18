@@ -13,6 +13,7 @@ class Dataset(Base):
     __tablename__ = "datasets"
     __table_args__ = (
         Index("idx_datasets_datasource_name", "datasource_id", "name"),
+        Index("uq_datasets_datasource_schema_physical", "datasource_id", "schema_name", "physical_name", unique=True),
     )
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))

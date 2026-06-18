@@ -48,7 +48,7 @@ export function parseSQL(sql: string): ParsedSQL | null {
 
     // 解析SELECT子句
     const selectMatch = cleanSQL.match(/SELECT\s+(.*?)\s+FROM/i)
-    const columns = selectMatch 
+    const columns = selectMatch?.[1]
       ? selectMatch[1].split(',').map(c => c.trim())
       : []
 
@@ -56,7 +56,7 @@ export function parseSQL(sql: string): ParsedSQL | null {
     const fromMatch = cleanSQL.match(/FROM\s+(.*?)(?:\s+WHERE|\s+GROUP|\s+ORDER|\s+LIMIT|$)/i)
     if (!fromMatch) return null
 
-    const fromClause = fromMatch[1]
+    const fromClause = fromMatch[1] || ''
     const tables: ParsedTable[] = []
     const joins: ParsedJoin[] = []
 
@@ -64,8 +64,8 @@ export function parseSQL(sql: string): ParsedSQL | null {
     const firstTableMatch = fromClause.match(/^(\w+)(?:\s+AS\s+)?(\w+)?/i)
     if (firstTableMatch) {
       tables.push({
-        name: firstTableMatch[1],
-        alias: firstTableMatch[2] || firstTableMatch[1],
+        name: firstTableMatch[1] || '',
+        alias: firstTableMatch[2] || firstTableMatch[1] || '',
         position: { x: 100, y: 100 }
       })
     }
@@ -77,9 +77,9 @@ export function parseSQL(sql: string): ParsedSQL | null {
     let joinIndex = 0
     while ((joinMatch = joinRegex.exec(fromClause)) !== null) {
       const joinType = joinMatch[1]?.toUpperCase() || 'INNER'
-      const tableName = joinMatch[2]
+      const tableName = joinMatch[2] || ''
       const tableAlias = joinMatch[3] || tableName
-      const onClause = joinMatch[4]
+      const onClause = joinMatch[4] || ''
 
       tables.push({
         name: tableName,
@@ -99,7 +99,7 @@ export function parseSQL(sql: string): ParsedSQL | null {
         const nullMatch = trimmed.match(/(\S+)\s+IS\s+(NOT\s+)?NULL/i)
         if (nullMatch) {
           filters.push({
-            column: nullMatch[1],
+            column: nullMatch[1] || '',
             operator: nullMatch[2] ? 'IS NOT NULL' : 'IS NULL',
             value: ''
           })
@@ -109,9 +109,9 @@ export function parseSQL(sql: string): ParsedSQL | null {
         // 处理其他条件
         const condMatch = trimmed.match(/(\S+)\s*(=|!=|>|<|>=|<=|LIKE|IN)\s*(.+)/i)
         if (condMatch) {
-          const leftPart = condMatch[1]
-          const operator = condMatch[2]
-          const rightPart = condMatch[3].trim()
+          const leftPart = condMatch[1] || ''
+          const operator = condMatch[2] || '='
+          const rightPart = (condMatch[3] || '').trim()
           
           // 判断右侧是否为常量值（字符串、数字等）
           // 常量值：带引号的字符串、纯数字、IN 列表等
@@ -138,8 +138,8 @@ export function parseSQL(sql: string): ParsedSQL | null {
           } else {
             // 列与列比较 -> 连接条件
             // 提取列名（去掉表别名）
-            const leftColName = leftPart.includes('.') ? leftPart.split('.')[1] : leftPart
-            const rightColName = rightPart.includes('.') ? rightPart.split('.')[1] : rightPart
+            const leftColName = leftPart.includes('.') ? (leftPart.split('.')[1] || '') : leftPart
+            const rightColName = rightPart.includes('.') ? (rightPart.split('.')[1] || '') : rightPart
             conditions.push({
               left_column: leftColName,
               operator,
@@ -150,7 +150,7 @@ export function parseSQL(sql: string): ParsedSQL | null {
       }
 
       joins.push({
-        leftTable: tables[joinIndex].alias,
+        leftTable: tables[joinIndex]?.alias || '',
         rightTable: tableAlias,
         joinType,
         conditions,
@@ -164,13 +164,13 @@ export function parseSQL(sql: string): ParsedSQL | null {
     const whereConditions: ParsedSQL['whereConditions'] = []
     const whereMatch = cleanSQL.match(/WHERE\s+(.*?)(?:\s+GROUP|\s+ORDER|\s+LIMIT|$)/i)
     if (whereMatch) {
-      const whereParts = whereMatch[1].split(/\s+AND\s+/i)
+      const whereParts = (whereMatch[1] || '').split(/\s+AND\s+/i)
       for (const part of whereParts) {
         // 处理 IS NULL / IS NOT NULL
         let condMatch = part.trim().match(/(\S+)\s+IS\s+(NOT\s+)?NULL/i)
         if (condMatch) {
           whereConditions.push({
-            column: condMatch[1],
+            column: condMatch[1] || '',
             operator: condMatch[2] ? 'IS NOT NULL' : 'IS NULL',
             value: ''
           })
@@ -181,9 +181,9 @@ export function parseSQL(sql: string): ParsedSQL | null {
         condMatch = part.trim().match(/(\S+)\s*(=|!=|>|<|>=|<=|LIKE|IN)\s*'?([^']*)'?/)
         if (condMatch) {
           whereConditions.push({
-            column: condMatch[1],
-            operator: condMatch[2],
-            value: condMatch[3]
+            column: condMatch[1] || '',
+            operator: condMatch[2] || '=',
+            value: condMatch[3] || ''
           })
         }
       }
@@ -218,7 +218,8 @@ export function generateSQL(
   const selectClause = columns.length > 0 ? columns.join(', ') : '*'
 
   // FROM子句
-  let fromClause = `${tables[0].name} AS ${tables[0].alias}`
+  const firstTable = tables[0]
+  let fromClause = firstTable ? `${firstTable.name} AS ${firstTable.alias}` : ''
 
   // JOIN子句
   for (const join of joins) {

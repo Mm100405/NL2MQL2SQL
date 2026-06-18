@@ -105,13 +105,13 @@
                 size="small"
               >
                 <template #value="{ rowIndex }">
-                  <a-input v-model="form.mappings[rowIndex].value" placeholder="实际值" />
+                  <a-input v-if="form.mappings[rowIndex]" v-model="form.mappings[rowIndex]!.value" placeholder="实际值" />
                 </template>
                 <template #label="{ rowIndex }">
-                  <a-input v-model="form.mappings[rowIndex].label" placeholder="展示标签" />
+                  <a-input v-if="form.mappings[rowIndex]" v-model="form.mappings[rowIndex]!.label" placeholder="展示标签" />
                 </template>
                 <template #synonyms="{ rowIndex }">
-                  <a-input-tag v-model="form.mappings[rowIndex].synonyms" placeholder="同义词" />
+                  <a-input-tag v-if="form.mappings[rowIndex]" v-model="form.mappings[rowIndex]!.synonyms" placeholder="同义词" />
                 </template>
                 <template #actions="{ rowIndex }">
                   <a-button type="text" status="danger" size="small" @click="removeDictMapping(rowIndex)">

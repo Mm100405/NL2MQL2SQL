@@ -19,7 +19,7 @@ export function generateMQL(data: QueryRequest): Promise<NL2MQLResponse> {
 }
 
 // MQL转SQL
-export function mql2sql(mql: string): Promise<MQL2SQLResponse> {
+export function mql2sql(mql: string | Record<string, any>): Promise<MQL2SQLResponse> {
   return request.post('/query/mql2sql', { mql })
 }
 

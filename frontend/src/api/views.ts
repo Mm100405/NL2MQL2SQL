@@ -7,6 +7,10 @@ export interface ViewColumn {
   source_column?: string
   alias?: string
   type?: string
+  display_name?: string
+  source_comment?: string
+  filterable?: boolean
+  value_config?: any
   description?: string
 }
 
@@ -21,12 +25,14 @@ export interface JoinConfig {
   right_table: string
   join_type: 'INNER' | 'LEFT' | 'RIGHT' | 'FULL'
   conditions: JoinCondition[]
+  filters?: any[]
 }
 
 export interface TableConfig {
   id: string
   alias: string
   position?: { x: number; y: number }
+  selectedColumns?: string[]
 }
 
 export interface ViewJoinConfig {

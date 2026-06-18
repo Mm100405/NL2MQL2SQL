@@ -22,11 +22,19 @@ try:
 except ImportError:
     POSTGRES_AVAILABLE = False
 
-from deepagents.backends import StoreBackend
-from deepagents.backends.utils import create_file_data
+# deepagents 依赖与 langgraph 版本强绑定，仅在实际加载/创建外部 Skill Agent 时懒加载。
 
 
 logger = logging.getLogger(__name__)
+
+
+def create_file_data(content: str) -> Dict[str, Any]:
+    return {"content": content}
+
+
+def create_store_backend(runtime):
+    from deepagents.backends import StoreBackend
+    return StoreBackend(runtime)
 
 
 class SkillInfo:
@@ -85,7 +93,7 @@ class SkillRegistry:
         self.store = store or InMemoryStore()
         
         # Backend 工厂
-        self.backend_factory = backend_factory or (lambda rt: StoreBackend(rt))
+        self.backend_factory = backend_factory or create_store_backend
         
         # Skill 信息缓存（内存）
         self._skills_info: Dict[str, SkillInfo] = {}

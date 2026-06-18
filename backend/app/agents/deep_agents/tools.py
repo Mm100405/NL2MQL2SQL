@@ -162,11 +162,26 @@ def retrieve_metadata(
 
             view_id = context.get("view_id") if context else None
 
-            # 检索指标
-            metrics_query = db_session.query(Metric)
+            # 检索指标：指定视图时，纳入该视图直接可召回指标，以及基于该视图基础指标派生出的可召回指标
+            metrics_query = db_session.query(Metric).filter(Metric.is_semantic_enabled == True)
             if view_id:
-                metrics_query = metrics_query.filter(Metric.view_id == view_id)
-            metrics = metrics_query.all()
+                direct_metrics = metrics_query.filter(Metric.view_id == view_id).all()
+                view_metric_ids = {m.id for m in db_session.query(Metric).filter(Metric.view_id == view_id).all()}
+                metrics = list(direct_metrics)
+                seen_metric_ids = {m.id for m in metrics}
+                while view_metric_ids:
+                    derived_metrics = metrics_query.filter(Metric.base_metric_id.in_(view_metric_ids)).all()
+                    new_ids = set()
+                    for metric in derived_metrics:
+                        if metric.id not in seen_metric_ids:
+                            metrics.append(metric)
+                            seen_metric_ids.add(metric.id)
+                            new_ids.add(metric.id)
+                    if not new_ids:
+                        break
+                    view_metric_ids = new_ids
+            else:
+                metrics = metrics_query.all()
             metrics_list = [
                 {
                     "name": m.name,
@@ -176,6 +191,7 @@ def retrieve_metadata(
                     "description": m.description or "",
                     "view_id": m.view_id,
                     "synonyms": m.synonyms or [],
+                    "is_semantic_enabled": m.is_semantic_enabled,
                 }
                 for m in metrics
             ]

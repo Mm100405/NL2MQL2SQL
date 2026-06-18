@@ -213,13 +213,13 @@ class FilterValidator(BaseMQLValidator):
                     suggestion=f"请为字段 '{field}' 提供过滤值"
                 ))
 
-            if op in ("IN", "NOT IN") and not isinstance(value, list):
+            if op in ("IN", "NOT IN") and not isinstance(value, (list, str)):
                 result.add_error(self.error(
                     "INVALID_FILTER_TYPE",
-                    f"操作符 '{op}' 的 value 必须是数组",
+                    f"操作符 '{op}' 的 value 必须是数组或逗号分隔字符串",
                     "filters",
                     value=type(value).__name__,
-                    suggestion=f"IN/NOT IN 的 value 应为列表，如 [\"值1\", \"值2\"]"
+                    suggestion=f"IN/NOT IN 的 value 应为列表或逗号分隔字符串，如 [\"值1\", \"值2\"] 或 \"值1,值2\""
                 ))
 
         else:

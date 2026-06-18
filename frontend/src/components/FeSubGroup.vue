@@ -16,9 +16,12 @@
       <!-- 叶子条件 -->
       <div v-if="item.type === 'condition'" class="fe-row">
         <a-select v-model="item.field" placeholder="字段" style="width: 160px" allow-clear>
-          <a-option v-for="d in dimensions" :key="d.id || d.physical_column" :value="d.physical_column">{{ d.display_name || d.name }}</a-option>
+          <a-option v-for="d in dimensions" :key="`${d.source_table || ''}.${d.source_column || d.physical_column || d.name || d.id}`" :value="d.name || d.physical_column">
+              {{ d.display_name || d.name || d.physical_column }}
+              <span v-if="d.source_table || d.source_column" style="color: var(--color-text-3)">（{{ d.source_table }}.{{ d.source_column || d.physical_column || d.name }}）</span>
+            </a-option>
         </a-select>
-        <a-select v-model="item.op" style="width: 90px">
+        <a-select v-model="item.op" style="width: 90px" @change="handleOperatorChange(item)">
           <a-option value="=">=</a-option>
           <a-option value="!=">!=</a-option>
           <a-option value=">">></a-option>
@@ -28,8 +31,11 @@
           <a-option value="LIKE">LIKE</a-option>
           <a-option value="IN">IN</a-option>
           <a-option value="NOT IN">NOT IN</a-option>
+          <a-option value="IS NULL">IS NULL</a-option>
+          <a-option value="IS NOT NULL">IS NOT NULL</a-option>
         </a-select>
-        <a-input v-model="item.value" placeholder="值" style="flex: 1" />
+        <a-input-tag v-if="isListOperator(item.op)" :model-value="getListValue(item)" placeholder="输入后回车添加，或粘贴逗号分隔值" style="flex: 1" @update:model-value="(value: string[]) => setListValue(item, value)" @paste="(event: ClipboardEvent) => handleListPaste(event, item)" />
+        <a-input v-else-if="!isNullOperator(item.op)" v-model="item.value" placeholder="值" style="flex: 1" />
         <a-button type="text" status="danger" size="mini" @click="group.items.splice(idx, 1)">
           <template #icon><icon-close /></template>
         </a-button>
@@ -65,7 +71,7 @@ interface FeCondition {
   type: 'condition'
   field: string
   op: string
-  value: string
+  value: string | string[]
 }
 
 interface FeSubGroup {
@@ -82,7 +88,47 @@ export default defineComponent({
     depth: { type: Number, default: 0 },
     selfIndex: { type: Number, default: 0 }
   },
-  emits: ['removeItem']
+  emits: ['removeItem'],
+  methods: {
+    isNullOperator(op: string) {
+      return ['IS NULL', 'IS NOT NULL'].includes((op || '').toUpperCase())
+    },
+    isListOperator(op: string) {
+      return ['IN', 'NOT IN'].includes((op || '').toUpperCase())
+    },
+    parseListValue(value: any) {
+      if (Array.isArray(value)) return value
+      if (typeof value !== 'string') return value === undefined || value === null || value === '' ? [] : [value]
+      return value.split(',').map(item => item.trim()).filter(Boolean)
+    },
+    getListValue(condition: FeCondition) {
+      const values = this.parseListValue(condition.value)
+      if (!Array.isArray(condition.value)) condition.value = values as any
+      return values
+    },
+    setListValue(condition: FeCondition, value: string[]) {
+      condition.value = value
+    },
+    handleOperatorChange(condition: FeCondition) {
+      if (this.isListOperator(condition.op)) {
+        condition.value = this.parseListValue(condition.value) as any
+      } else if (Array.isArray(condition.value)) {
+        condition.value = condition.value.join(',')
+      }
+      if (this.isNullOperator(condition.op)) {
+        condition.value = ''
+      }
+    },
+    handleListPaste(event: ClipboardEvent, condition: FeCondition) {
+      const text = event.clipboardData?.getData('text') || ''
+      if (!text.includes(',')) return
+      event.preventDefault()
+      condition.value = Array.from(new Set([
+        ...this.parseListValue(condition.value),
+        ...this.parseListValue(text)
+      ])) as any
+    }
+  }
 })
 </script>
 

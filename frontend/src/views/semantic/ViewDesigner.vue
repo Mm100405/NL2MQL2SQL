@@ -155,7 +155,7 @@
           </template>
           <Background pattern-color="#aaa" :gap="16" style="pointer-events: none !important;" />
           <Controls class="custom-controls" />
-          <MiniMap class="custom-minimap" pannable zoomable node-size="10" node-stroke-width="0" node-border-radius="2" />
+          <MiniMap class="custom-minimap" pannable zoomable :node-size="10" :node-stroke-width="0" :node-border-radius="2" />
           
           <!-- 自定义整理布局按钮 -->
           <div class="layout-button">
@@ -256,28 +256,29 @@
                   size="small"
                 >
                   <template #selected="{ rowIndex }">
-                    <a-checkbox v-model="columnConfigs[rowIndex].selected" />
+                    <a-checkbox v-if="columnConfigs[rowIndex]" v-model="columnConfigs[rowIndex]!.selected" />
                   </template>
                   <template #name="{ rowIndex }">
-                    <span style="font-family: monospace">{{ columnConfigs[rowIndex].name }}</span>
+                    <span v-if="columnConfigs[rowIndex]" style="font-family: monospace">{{ columnConfigs[rowIndex]!.name }}</span>
                   </template>
                   <template #display_name="{ rowIndex }">
-                    <a-input v-model="columnConfigs[rowIndex].display_name" placeholder="展示名称" size="small" allow-clear />
+                    <a-input v-if="columnConfigs[rowIndex]" v-model="columnConfigs[rowIndex]!.display_name" placeholder="展示名称" size="small" allow-clear />
                   </template>
                   <template #source_comment="{ rowIndex }">
-                    <span :title="columnConfigs[rowIndex].source_comment" style="color: var(--color-text-3); font-size: 12px">
-                      {{ columnConfigs[rowIndex].source_comment || '-' }}
+                    <span v-if="columnConfigs[rowIndex]" :title="columnConfigs[rowIndex]!.source_comment" style="color: var(--color-text-3); font-size: 12px">
+                      {{ columnConfigs[rowIndex]!.source_comment || '-' }}
                     </span>
                   </template>
                   <template #description="{ rowIndex }">
-                    <a-input v-model="columnConfigs[rowIndex].description" placeholder="自定义说明" size="small" allow-clear />
+                    <a-input v-if="columnConfigs[rowIndex]" v-model="columnConfigs[rowIndex]!.description" placeholder="自定义说明" size="small" allow-clear />
                   </template>
                   <template #filterable="{ rowIndex }">
-                    <a-switch v-model="columnConfigs[rowIndex].filterable" size="small" />
+                    <a-switch v-if="columnConfigs[rowIndex]" v-model="columnConfigs[rowIndex]!.filterable" size="small" />
                   </template>
                   <template #value_config_type="{ rowIndex }">
                     <a-select
-                      v-model="columnConfigs[rowIndex].value_config_type"
+                      v-if="columnConfigs[rowIndex]"
+                      v-model="columnConfigs[rowIndex]!.value_config_type"
                       placeholder="值域"
                       size="small"
                       style="width: 100px"
@@ -289,9 +290,9 @@
                     </a-select>
                   </template>
                   <template #value_config="{ rowIndex }">
-                    <template v-if="columnConfigs[rowIndex].value_config_type === 'enum'">
+                    <template v-if="columnConfigs[rowIndex]?.value_config_type === 'enum'">
                       <a-select
-                        v-model="columnConfigs[rowIndex].enum_values"
+                        v-model="columnConfigs[rowIndex]!.enum_values"
                         multiple
                         placeholder="枚举值"
                         size="small"
@@ -299,9 +300,9 @@
                         allow-create
                       />
                     </template>
-                    <template v-else-if="columnConfigs[rowIndex].value_config_type === 'dict'">
+                    <template v-else-if="columnConfigs[rowIndex]?.value_config_type === 'dict'">
                       <a-select
-                        v-model="columnConfigs[rowIndex].dict_id"
+                        v-model="columnConfigs[rowIndex]!.dict_id"
                         placeholder="选择字典"
                         size="small"
                         style="width: 160px"
@@ -421,7 +422,7 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted, markRaw, provide, nextTick, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { VueFlow, useVueFlow } from '@vue-flow/core'
+import { VueFlow, useVueFlow, MarkerType } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
@@ -542,7 +543,7 @@ const MIN_COLUMN_WIDTH = 80   // 最小列宽
 const columnWidths = ref<Record<string, number>>({})  // 存储自定义列宽
 
 // 视图字段
-const viewColumns = ref<Array<{ name: string; type: string; selected: boolean; source_table?: string }>>([])
+const viewColumns = ref<Array<{ name: string; type: string; selected: boolean; source_table?: string; source_column?: string; source_comment?: string; display_name?: string; description?: string; filterable?: boolean; value_config?: any }>>([])
 
 // 字典列表
 const dictionaries = ref<any[]>([])
@@ -566,6 +567,7 @@ interface ColumnConfig {
   type: string
   selected: boolean
   source_table?: string
+  source_column?: string
   source_comment?: string  // 物理表字段注释
   display_name?: string
   description?: string  // 自定义说明
@@ -577,18 +579,38 @@ interface ColumnConfig {
 
 const columnConfigs = ref<ColumnConfig[]>([])
 
+const columnSourceKey = (col: { name: string; source_table?: string; source_column?: string }) => `${col.source_table || ''}.${col.source_column || col.name}`
+
+function buildUniqueColumnName(alias: string | undefined, columnName: string, usedNames: Set<string>) {
+  if (!usedNames.has(columnName)) {
+    usedNames.add(columnName)
+    return columnName
+  }
+
+  const base = alias ? `${alias}_${columnName}` : columnName
+  let candidate = base
+  let index = 2
+  while (usedNames.has(candidate)) {
+    candidate = `${base}_${index}`
+    index += 1
+  }
+  usedNames.add(candidate)
+  return candidate
+}
+
 // 监听 viewColumns 变化，更新 columnConfigs
 watch(viewColumns, (newCols) => {
   console.log('[watch viewColumns] triggered, newCols:', JSON.stringify(newCols))
   // 保留已有的配置
   const existingConfigs = new Map(columnConfigs.value.map(c => [c.name, c]))
+  const existingConfigsBySource = new Map(columnConfigs.value.map(c => [columnSourceKey(c), c]))
   console.log('[watch viewColumns] existingConfigs size:', existingConfigs.size)
-  
+
   columnConfigs.value = newCols.map(col => {
-    const existing = existingConfigs.get(col.name)
+    const existing = existingConfigs.get(col.name) || existingConfigsBySource.get(columnSourceKey(col))
     
     // 从 viewColumns 中的字段数据解析值域配置
-    let valueConfigType = ''
+    let valueConfigType: '' | 'enum' | 'dict' = ''
     let enumValues: string[] = []
     let dictId = ''
     
@@ -617,6 +639,7 @@ watch(viewColumns, (newCols) => {
       type: col.type,
       selected: col.selected,
       source_table: col.source_table,
+      source_column: col.source_column,
       source_comment: (col as any).source_comment || (col as any).comment || '',
       // 展示名称：优先使用用户已编辑的值
       display_name: useExistingDisplayName ? existing!.display_name : ((col as any).display_name || ''),
@@ -624,8 +647,7 @@ watch(viewColumns, (newCols) => {
       description: useExistingDesc ? existing!.description : ((col as any).description || ''),
       filterable: existing?.filterable !== undefined ? existing.filterable : ((col as any).filterable ?? true),
       // 值域配置：优先使用用户已编辑的值，否则使用解析出的值
-      value_config_type: (existing?.value_config_type && existing.value_config_type !== '') 
-        ? existing.value_config_type : valueConfigType,
+      value_config_type: existing?.value_config_type || valueConfigType,
       enum_values: (existing?.enum_values?.length) ? existing.enum_values : enumValues,
       dict_id: (existing?.dict_id && existing.dict_id !== '') ? existing.dict_id : dictId
     }
@@ -637,6 +659,7 @@ watch(viewColumns, (newCols) => {
 // 处理值域类型变化
 function handleValueConfigTypeChange(rowIndex: number) {
   const config = columnConfigs.value[rowIndex]
+  if (!config) return
   if (config.value_config_type === 'enum') {
     config.enum_values = []
   } else if (config.value_config_type === 'dict') {
@@ -703,18 +726,23 @@ const generatedSql = computed(() => {
   // 构建SELECT子句
   const selectedCols = viewColumns.value.filter(c => c.selected)
   const selectClause = selectedCols.length > 0
-    ? selectedCols.map(c => c.source_table ? `${c.source_table}.${c.name}` : c.name).join(', ')
+    ? selectedCols.map(c => {
+      const sourceColumn = c.source_column || c.name
+      return c.source_table ? `${c.source_table}.${sourceColumn} AS ${c.name}` : sourceColumn
+    }).join(', ')
     : '*'
   
   // 构建FROM子句
+  const firstNode = nodes.value[0]
+  if (!firstNode) {
+    return '-- 请拖拽表到画布'
+  }
   if (nodes.value.length === 1) {
-    const firstNode = nodes.value[0]
     return `SELECT ${selectClause}\nFROM ${firstNode.data.label} AS ${firstNode.data.alias}`
   }
-  
+
   // 多表JOIN
   let fromClause = ''
-  const firstNode = nodes.value[0]
   fromClause = `${firstNode.data.label} AS ${firstNode.data.alias}`
   
   // 收集所有WHERE条件
@@ -760,7 +788,7 @@ async function loadDatasources() {
   try {
     datasources.value = await getDataSources()
     if (datasources.value.length > 0 && !selectedDatasource.value) {
-      selectedDatasource.value = datasources.value[0].id
+      selectedDatasource.value = datasources.value[0]?.id || ''
     }
   } catch (e) {
     console.error('Failed to load datasources:', e)
@@ -952,7 +980,7 @@ async function loadView() {
             strokeWidth: 3
           },
           markerEnd: {
-            type: 'arrowclosed',
+            type: MarkerType.ArrowClosed,
             color: '#165dff'
           }
         })
@@ -985,6 +1013,7 @@ async function loadView() {
           type: c.type,
           selected: true,
           source_table: c.source_table,
+          source_column: c.source_column,
           source_comment: (c.source_comment || '') as string,
           display_name: (c.display_name || '') as string,
           description: (c.description || '') as string,
@@ -1304,7 +1333,7 @@ function handleJoinTypeConfirm() {
         strokeWidth: 3
       },
       markerEnd: {
-        type: 'arrowclosed',
+        type: MarkerType.ArrowClosed,
         color: '#165dff'
       }
     }
@@ -1346,8 +1375,10 @@ function handleDeleteNode(nodeId: string) {
         // handleId格式: ${nodeId}-${side}-${index}
         const parts = handleId.split('-')
         if (parts.length < 3) return null
-        const index = parseInt(parts[parts.length - 1])
+        const indexPart = parts[parts.length - 1]
         const side = parts[parts.length - 2]
+        if (indexPart === undefined || side === undefined) return null
+        const index = parseInt(indexPart)
         const nodeId = parts.slice(0, parts.length - 2).join('-')
         return { nodeId, side, index }
       }
@@ -1415,12 +1446,14 @@ function deleteSingleEdge(edgeId: string) {
   }
 
   // 解析连接点ID，获取节点ID、侧和索引
-  const parseHandle = (handleId: string) => {
+  const parseHandle = (handleId: string): { nodeId: string; side: string; index: number } | null => {
     // handleId格式: ${nodeId}-${side}-${index}
     const parts = handleId.split('-')
     if (parts.length < 3) return null
-    const index = parseInt(parts[parts.length - 1])
+    const indexPart = parts[parts.length - 1]
     const side = parts[parts.length - 2]
+    if (indexPart === undefined || side === undefined) return null
+    const index = parseInt(indexPart)
     const nodeId = parts.slice(0, parts.length - 2).join('-')
     return { nodeId, side, index }
   }
@@ -1599,16 +1632,26 @@ function removeCondition(index: number) {
 // 更新视图字段
 function updateViewColumns() {
   const cols: typeof viewColumns.value = []
+  const usedNames = new Set<string>()
+  const existingBySource = new Map(viewColumns.value.map(c => [columnSourceKey(c), c]))
+
   for (const node of nodes.value) {
     const selectedCols = node.data.selectedColumns || node.data.columns?.map((c: any) => c.name) || []
     for (const col of node.data.columns || []) {
       if (selectedCols.includes(col.name)) {
+        const sourceKey = `${node.data.alias}.${col.name}`
+        const existing = existingBySource.get(sourceKey)
+        const uniqueName = existing?.name && !usedNames.has(existing.name)
+          ? (usedNames.add(existing.name), existing.name)
+          : buildUniqueColumnName(node.data.alias, col.name, usedNames)
+
         cols.push({
-          name: col.name,
+          name: uniqueName,
           type: col.type,
           source_table: node.data.alias,
-          source_comment: col.comment || '',  // 物理表字段说明
-          selected: true
+          source_column: col.name,
+          source_comment: col.comment || '',
+          selected: existing?.selected ?? true
         })
       }
     }
@@ -1644,12 +1687,16 @@ async function handleSave() {
       view_type: viewType.value,
       category_id: formData.value.category_id,
       category_name: categoryName,
-      columns: viewColumns.value.filter(c => c.selected).map(c => {
-        const config = columnConfigs.value.find(cc => cc.name === c.name)
+      columns: viewColumns.value.filter(c => {
+        const config = columnConfigs.value.find(cc => cc.name === c.name) || columnConfigs.value.find(cc => columnSourceKey(cc) === columnSourceKey(c))
+        return config?.selected ?? c.selected
+      }).map(c => {
+        const config = columnConfigs.value.find(cc => cc.name === c.name) || columnConfigs.value.find(cc => columnSourceKey(cc) === columnSourceKey(c))
         const colData: any = {
           name: c.name,
           type: c.type,
           source_table: c.source_table,
+          source_column: c.source_column || c.name,
           source_comment: c.source_comment  // 物理表字段说明
         }
         // 添加字段配置
@@ -1788,7 +1835,8 @@ function getColumnWidth(columnName: string, data: any[][]): number {
   const maxLength = Math.max(
     columnName.length,
     ...data.slice(0, 50).map(row => {
-      const value = row[data[0].indexOf(columnName)]
+      const firstRow = data[0]
+      const value = firstRow ? row[firstRow.indexOf(columnName)] : undefined
       return String(value || '').length
     })
   )
@@ -1952,6 +2000,7 @@ async function parseSQLToCanvas() {
     if (parts.length === 2) {
       const alias = parts[0]
       const columnName = parts[1]
+      if (!alias || !columnName) continue
       if (!tableColumns.has(alias)) {
         tableColumns.set(alias, new Set())
       }
@@ -1969,7 +2018,8 @@ async function parseSQLToCanvas() {
   
   for (let i = 0; i < parsed.tables.length; i++) {
     const table = parsed.tables[i]
-    
+    if (!table) continue
+
     console.log(`查找表: ${table.name}`)
     
     // 查找匹配的Dataset (支持大小写不敏感和带schema的表名)
@@ -2076,7 +2126,7 @@ async function parseSQLToCanvas() {
           strokeWidth: 3
         },
         markerEnd: {
-          type: 'arrowclosed',
+          type: MarkerType.ArrowClosed,
           color: '#165dff'
         }
       })
@@ -2121,7 +2171,7 @@ onMounted(async () => {
   } else {
     // 新建模式：加载第一个数据源的表
     if (datasources.value.length > 0 && !selectedDatasource.value) {
-      selectedDatasource.value = datasources.value[0].id
+      selectedDatasource.value = datasources.value[0]?.id || ''
     }
     await loadTables()
   }

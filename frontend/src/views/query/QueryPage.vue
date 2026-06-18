@@ -383,7 +383,7 @@ import type { Metric, Dimension } from '@/api/types'
 import type { MQLFilterCondition, MQLFilterGroup } from '@/api/types'
 import FilterTree from '@/components/FilterTree.vue'
 import FilterEditor from '@/components/FilterEditor.vue'
-import type { FeGroup, FeCondition } from '@/components/FilterEditor.vue'
+import type { FeGroup, FeCondition, FeSubGroup } from '@/components/FilterEditor.vue'
 
 const settingsStore = useSettingsStore()
 const route = useRoute()
@@ -2043,7 +2043,7 @@ async function handleAdjust() {
   if (validGroups.length === 0) {
     newMql.filters = {}
   } else if (validGroups.length === 1) {
-    newMql.filters = { operator: validGroups[0].operator, conditions: validGroups[0].conditions }
+    newMql.filters = { operator: validGroups[0]!.operator, conditions: validGroups[0]!.conditions }
   } else {
     newMql.filters = { operator: rootOp, conditions: validGroups }
   }

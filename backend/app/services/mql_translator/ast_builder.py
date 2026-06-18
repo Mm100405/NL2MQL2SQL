@@ -660,39 +660,32 @@ class MQLASTBuilder:
 
         return base_expr.as_(metric_alias)
 
-    def _build_base_metric_expr(self, metric_ref) -> exp.Expression:
-        """构建基础指标表达式"""
+    def _build_base_metric_expr(self, metric_ref, extra_filters: Optional[Any] = None) -> exp.Expression:
+        """构建基础指标表达式，支持指标固定过滤的条件聚合"""
         if metric_ref.metric_type == "basic":
             if metric_ref.calculation_method == "expression" and metric_ref.calculation_formula:
-                # 使用公式
                 return self.expr_parser.parse(metric_ref.calculation_formula)
+
+            col = metric_ref.measure_column
+            if metric_ref.source_view_id:
+                col = self.semantic.get_view_column_expression(
+                    metric_ref.source_view_id, col
+                )
+
+            if "." in col:
+                parts = col.split(".", 1)
+                col_node = exp.column(parts[1], table=parts[0])
             else:
-                # 使用聚合
-                col = metric_ref.measure_column
-                if metric_ref.source_view_id:
-                    col = self.semantic.get_view_column_expression(
-                        metric_ref.source_view_id, col
-                    )
+                col_node = exp.column(col)
 
-                # 拆分 table.column 格式
-                if "." in col:
-                    parts = col.split(".", 1)
-                    col_node = exp.column(parts[1], table=parts[0])
-                else:
-                    col_node = exp.column(col)
-
-                agg = self._get_agg_func(metric_ref.aggregation)
-                return agg(this=col_node)
+            metric_filters = self._merge_filter_specs(metric_ref.filters, extra_filters)
+            predicate = self._build_filters_expression(metric_filters)
+            return self._build_aggregate_expr(metric_ref.aggregation, col_node, predicate)
 
         elif metric_ref.metric_type == "derived":
-            # 需要找到基础指标
-            base_metric = None
-            for m in self.semantic.metrics.values():
-                if hasattr(m, 'id') and m.id == metric_ref.base_metric_id:
-                    base_metric = m
-                    break
+            base_metric = self.semantic.resolve_metric_by_id(metric_ref.base_metric_id) if metric_ref.base_metric_id else None
             if base_metric:
-                return self._build_base_metric_expr(base_metric)
+                return self._build_base_metric_expr(base_metric, metric_ref.filters)
             return exp.Literal.number(0)
 
         elif metric_ref.metric_type == "composite":
@@ -700,6 +693,93 @@ class MQLASTBuilder:
             return self.expr_parser.parse(formula)
 
         return exp.Literal.number(0)
+
+    def _merge_filter_specs(self, *filter_specs: Any) -> Optional[Dict[str, Any]]:
+        conditions = []
+        for spec in filter_specs:
+            normalized = self._normalize_filter_spec(spec)
+            if not normalized:
+                continue
+            if normalized.get("conditions"):
+                conditions.append(normalized)
+            elif normalized.get("field"):
+                conditions.append(normalized)
+        if not conditions:
+            return None
+        if len(conditions) == 1:
+            return conditions[0]
+        return {"operator": "AND", "conditions": conditions}
+
+    def _normalize_filter_spec(self, spec: Any) -> Optional[Dict[str, Any]]:
+        if not spec:
+            return None
+        if isinstance(spec, dict):
+            if "type" in spec:
+                return self._normalize_filter_item(spec)
+            if "items" in spec:
+                items = [self._normalize_filter_item(item) for item in spec.get("items") or []]
+                conditions = [item for item in items if item]
+                return {"operator": spec.get("operator", "AND"), "conditions": conditions}
+            if "conditions" in spec or "field" in spec:
+                return spec
+            return None
+        if isinstance(spec, list):
+            conditions = []
+            for item in spec:
+                normalized = self._normalize_filter_spec(item)
+                if normalized:
+                    conditions.append(normalized)
+            if not conditions:
+                return None
+            if len(conditions) == 1:
+                return conditions[0]
+            return {"operator": "AND", "conditions": conditions}
+        return None
+
+    def _normalize_filter_item(self, item: Any) -> Optional[Dict[str, Any]]:
+        if not isinstance(item, dict):
+            return None
+        if item.get("type") == "condition":
+            field = item.get("field")
+            op = item.get("op") or item.get("operator") or "="
+            value = item.get("value")
+            if not field or ((op or "").upper() not in ("IS NULL", "IS NOT NULL") and value in (None, "")):
+                return None
+            condition = {"field": field, "op": op}
+            if (op or "").upper() not in ("IS NULL", "IS NOT NULL"):
+                condition["value"] = value
+            return condition
+        if item.get("type") == "subgroup":
+            children = [self._normalize_filter_item(child) for child in item.get("items") or []]
+            conditions = [child for child in children if child]
+            return {"operator": item.get("operator", "AND"), "conditions": conditions}
+        return self._normalize_filter_spec(item)
+
+    def _build_filters_expression(self, filters: Any) -> Optional[exp.Expression]:
+        normalized = self._normalize_filter_spec(filters)
+        if not normalized:
+            return None
+        return self._build_structured_filter(normalized, is_where=True, skip_formatting=True)
+
+    def _build_aggregate_expr(
+        self,
+        aggregation: str,
+        col_node: exp.Expression,
+        predicate: Optional[exp.Expression] = None,
+    ) -> exp.Expression:
+        agg_type = (aggregation or "SUM").upper()
+        value_node = col_node
+        if predicate is not None:
+            true_value = exp.Literal.number(1) if agg_type == "COUNT" else col_node
+            value_node = exp.Case(ifs=[exp.If(this=predicate, true=true_value)])
+
+        if agg_type == "COUNT_DISTINCT":
+            return exp.Count(this=exp.Distinct(expressions=[value_node]))
+        if agg_type == "COUNT":
+            return exp.Count(this=value_node)
+
+        agg = self._get_agg_func(agg_type)
+        return agg(this=value_node)
 
     def _get_agg_func(self, agg_type: str):
         """获取聚合函数"""
@@ -793,6 +873,12 @@ class MQLASTBuilder:
             return self._build_cte_from(from_cte)
 
         if not self._used_view:
+            dataset = self.semantic.get_used_dataset()
+            if dataset:
+                table_name = dataset.physical_name
+                if dataset.schema_name:
+                    table_name = f"{dataset.schema_name}.{table_name}"
+                return exp.From(this=exp.Table(this=exp.Identifier(this=table_name))), []
             return None, []
 
         view = self._used_view
@@ -982,7 +1068,7 @@ class MQLASTBuilder:
                     )
                 )
 
-            join_on = exp.And(expressions=on_parts) if len(on_parts) > 1 else on_parts[0] if on_parts else exp.true()
+            join_on = self._combine_conditions(on_parts, "AND") if on_parts else exp.true()
 
             join_node = exp.Join(
                 this=exp.Table(
@@ -1009,7 +1095,7 @@ class MQLASTBuilder:
         # 叶子条件
         if "field" in condition:
             field = condition["field"]
-            op = condition.get("op", "=").upper()
+            op = (condition.get("op") or condition.get("operator") or "=").upper()
             value = condition.get("value")
 
             # 用表达式解析器解析字段引用 [field_name]
@@ -1019,7 +1105,12 @@ class MQLASTBuilder:
             if op == "LIKE":
                 return exp.Like(this=field_col, expression=exp.Literal.string(value))
             elif op in ("IN", "NOT IN"):
-                values = value if isinstance(value, list) else [value]
+                if isinstance(value, list):
+                    values = value
+                elif isinstance(value, str):
+                    values = [item.strip() for item in value.split(",") if item.strip()]
+                else:
+                    values = [value]
                 in_expr = exp.In(
                     this=field_col,
                     expressions=[exp.Literal.string(v) for v in values]
@@ -1080,9 +1171,9 @@ class MQLASTBuilder:
         if len(exprs) == 1:
             result = exprs[0]
         elif operator == "OR":
-            result = exp.Or(expressions=exprs)
+            result = self._combine_conditions(exprs, "OR")
         else:
-            result = exp.And(expressions=exprs)
+            result = self._combine_conditions(exprs, "AND")
 
         # 关键修复：如果父操作符是 OR，且当前是 AND，需要给整个 AND 表达式加括号
         # 确保生成的 SQL 是 (A AND B) OR (C AND D) 而不是 A AND B OR C AND D
@@ -1129,7 +1220,7 @@ class MQLASTBuilder:
                     return None
                 if len(conditions) == 1:
                     return conditions[0]
-                return exp.And(expressions=conditions)
+                return self._combine_conditions(conditions, "AND")
 
         # === 处理 filters（新逻辑：支持时间字段过滤） ===
         filters = mql.get("filters", [])
@@ -1176,8 +1267,19 @@ class MQLASTBuilder:
 
         if len(conditions) == 1:
             return conditions[0]
+        return self._combine_conditions(conditions, "AND")
 
-        return exp.And(expressions=conditions)
+    def _combine_conditions(self, conditions: List[exp.Expression], operator: str = "AND") -> Optional[exp.Expression]:
+        exprs = [condition for condition in conditions if condition is not None]
+        if not exprs:
+            return None
+        result = exprs[0]
+        for expr in exprs[1:]:
+            if operator.upper() == "OR":
+                result = exp.Or(this=result, expression=expr)
+            else:
+                result = exp.And(this=result, expression=expr)
+        return result
 
     def _check_has_time_filter_in_structured(self, filter_obj: Dict[str, Any]) -> bool:
         """检查结构化 filter 中是否包含时间字段过滤"""
@@ -1237,7 +1339,7 @@ class MQLASTBuilder:
                         conditions.append(c)
             if not conditions:
                 return None
-            return exp.And(expressions=conditions) if len(conditions) > 1 else conditions[0]
+            return self._combine_conditions(conditions, "AND") if len(conditions) > 1 else conditions[0]
 
         return None
 

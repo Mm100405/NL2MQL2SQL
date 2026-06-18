@@ -76,36 +76,69 @@ def prune_sync_tasks() -> None:
             sync_tasks.pop(task_id, None)
 
 
-def sync_physical_tables_to_db(datasource_id: str) -> int:
+def sync_physical_tables_to_db(datasource_id: str, task_id: Optional[str] = None) -> int:
     db = SessionLocal()
     try:
         datasource = db.query(DataSource).filter(DataSource.id == datasource_id).first()
         if not datasource:
             raise ValueError("DataSource not found")
 
+        if task_id:
+            update_sync_task(
+                task_id,
+                message="Fetching physical table metadata",
+                updated_at=utc_now_iso(),
+            )
+
         tables = fetch_tables_and_columns(datasource.type, get_datasource_connection_config(datasource))
-        sync_count = 0
+        unique_tables: Dict[tuple[str, str], Dict[str, Any]] = {}
         for table_data in tables:
-            existing = db.query(Dataset).filter(
-                Dataset.datasource_id == datasource_id,
-                Dataset.physical_name == table_data["physical_name"],
-                Dataset.schema_name == table_data["schema_name"]
-            ).first()
+            key = (table_data["schema_name"], table_data["physical_name"])
+            unique_tables[key] = table_data
+
+        if task_id:
+            update_sync_task(
+                task_id,
+                count=0,
+                message=f"Fetched {len(unique_tables)} physical tables, saving metadata",
+                updated_at=utc_now_iso(),
+            )
+
+        existing_rows = db.query(Dataset).filter(Dataset.datasource_id == datasource_id).all()
+        existing_by_key = {
+            (row.schema_name, row.physical_name): row
+            for row in existing_rows
+        }
+
+        sync_count = 0
+        for table_data in unique_tables.values():
+            key = (table_data["schema_name"], table_data["physical_name"])
+            existing = existing_by_key.get(key)
 
             if existing:
                 existing.name = table_data["name"]
                 existing.schema_name = table_data["schema_name"]
                 existing.columns = table_data["columns"]
             else:
-                db.add(Dataset(
+                existing = Dataset(
                     datasource_id=datasource_id,
                     name=table_data["name"],
                     physical_name=table_data["physical_name"],
                     schema_name=table_data["schema_name"],
                     columns=table_data["columns"],
                     description=""
-                ))
+                )
+                db.add(existing)
+                existing_by_key[key] = existing
             sync_count += 1
+
+            if task_id and sync_count % 500 == 0:
+                update_sync_task(
+                    task_id,
+                    count=sync_count,
+                    message=f"Saved {sync_count}/{len(unique_tables)} physical tables",
+                    updated_at=utc_now_iso(),
+                )
 
         db.commit()
         return sync_count
@@ -117,9 +150,15 @@ def sync_physical_tables_to_db(datasource_id: str) -> int:
 
 
 def run_sync_task(task_id: str, datasource_id: str) -> None:
-    update_sync_task(task_id, status="running", started_at=utc_now_iso(), updated_at=utc_now_iso())
+    update_sync_task(
+        task_id,
+        status="running",
+        message="Sync task running",
+        started_at=utc_now_iso(),
+        updated_at=utc_now_iso(),
+    )
     try:
-        count = sync_physical_tables_to_db(datasource_id)
+        count = sync_physical_tables_to_db(datasource_id, task_id)
         update_sync_task(
             task_id,
             status="success",
@@ -184,7 +223,8 @@ class MetricCreate(BaseModel):
     derivation_type: Optional[str] = "none"
     time_constraint: Optional[str] = None  # ⚠️ DEPRECATED: 使用 filters 代替
     analysis_dimensions: Optional[List[str]] = None
-    filters: Optional[List[dict]] = None
+    filters: Optional[Any] = None
+    is_semantic_enabled: bool = True
     synonyms: Optional[List[str]] = None
     unit: Optional[str] = None
     description: Optional[str] = None
@@ -512,12 +552,19 @@ async def sync_datasets_from_source(request: dict, db: Session = Depends(get_db)
 
 # ============ Metric Routes ============
 @router.get("/metrics")
-def get_metrics(metric_type: Optional[str] = None, dataset_id: Optional[str] = None, db: Session = Depends(get_db)):
+def get_metrics(
+    metric_type: Optional[str] = None,
+    dataset_id: Optional[str] = None,
+    semantic_enabled: Optional[bool] = None,
+    db: Session = Depends(get_db)
+):
     query = db.query(Metric)
     if metric_type:
         query = query.filter(Metric.metric_type == metric_type)
     if dataset_id:
         query = query.filter(Metric.dataset_id == dataset_id)
+    if semantic_enabled is not None:
+        query = query.filter(Metric.is_semantic_enabled == semantic_enabled)
     metrics = query.all()
     return [m.to_dict() for m in metrics]
 

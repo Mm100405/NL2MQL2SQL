@@ -392,7 +392,19 @@ async def translation_node(state: DeepAgentState) -> Dict[str, Any]:
             "steps": steps,
             "current_step": "translation"
         }
-    
+
+    query_result_type = str(mql.get("queryResultType", "DATA") or "DATA").upper()
+    if query_result_type != "DETAIL" and not mql.get("metrics") and not mql.get("dimensions"):
+        steps = state.get("steps", [])
+        error = "MQL 未包含指标或维度，无法生成有效 SQL"
+        steps.append({"step": "translation", "status": "failed", "detail": error})
+        return {
+            "sql": "",
+            "steps": steps,
+            "current_step": "translation",
+            "error": error
+        }
+
     logger.info(f"[TranslationNode] 转换为 SQL")
     
     # 调用 SQL 转换工具

@@ -81,6 +81,9 @@ export interface CommonColumnInfo {
   type?: string
   comment?: string
   description?: string
+  display_name?: string
+  source_table?: string
+  source_column?: string
 }
 
 // 指标类型
@@ -108,7 +111,8 @@ export interface Metric {
   derivation_type?: string
   time_constraint?: string
   analysis_dimensions?: string[]
-  filters?: MetricFilter[]
+  filters?: any
+  is_semantic_enabled?: boolean
   synonyms?: string[]
   unit?: string
   format?: string
@@ -252,6 +256,7 @@ export interface ModelConfig {
   model_name: string
   api_key?: string
   api_base?: string
+  base_url?: string
   is_active: boolean
   is_default: boolean
   config_params?: {
@@ -319,6 +324,7 @@ export interface FullQueryResponse {
   query_id: string
   view_id?: string  // 绑定到这次查询的视图ID
   viewType?: 'table' | 'chart'
+  dataFormatApiName?: string
   dataFormatConfigId?: string  // 数据格式配置ID（查询成功后生成）
   
   // Agent流式接口新增字段

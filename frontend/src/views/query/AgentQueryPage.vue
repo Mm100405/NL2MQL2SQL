@@ -252,11 +252,11 @@
               </div>
 
               <!-- 洞察展示面板 -->
-              <div v-if="msg.queryResult?.insights?.length > 0" class="insights-panel">
+              <div v-if="(msg.queryResult?.insights?.length || 0) > 0" class="insights-panel">
                 <div class="insights-header" @click="insightsExpanded = !insightsExpanded">
                   <div class="insights-title">
                     <icon-light /> 洞察分析
-                    <a-badge v-if="msg.queryResult?.insights?.length > 0" :count="msg.queryResult?.insights?.length" :max-count="99" />
+                    <a-badge v-if="(msg.queryResult?.insights?.length || 0) > 0" :count="msg.queryResult?.insights?.length || 0" :max-count="99" />
                   </div>
                   <a-button type="text" size="mini">
                     <template #icon>
@@ -2476,7 +2476,9 @@ function getParsedTimeRange(mql: any, queryId: string) {
   const timeConditions = extractTimeConditions(mql?.filters || {})
 
   if (timeConditions.length > 0) {
-    const field = timeConditions[0].field
+    const firstCondition = timeConditions[0]
+    if (!firstCondition) return null
+    const field = firstCondition.field
     return timeRanges[field] || null
   }
 
@@ -2499,6 +2501,7 @@ function formatTimeRange(mql: any) {
       // 查找时间字段的显示名称
       let timeFieldName = ''
       const firstTimeCond = timeConditions[0]
+      if (!firstTimeCond) return ''
       const dim = findDimension(firstTimeCond.field)
       if (dim) {
         timeFieldName = dim.display_name || dim.name

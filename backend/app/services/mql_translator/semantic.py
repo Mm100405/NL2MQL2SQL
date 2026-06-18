@@ -5,7 +5,7 @@ semantic.py - 语义上下文层
 提供统一的字段查找接口，供 expression_parser 和 ast_builder 使用。
 """
 
-from typing import Dict, List, Optional, Any, Tuple, Tuple
+from typing import Dict, List, Optional, Any, Tuple
 from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
@@ -32,6 +32,7 @@ class FieldRef:
 @dataclass
 class MetricRef:
     """指标引用"""
+    id: str                       # 指标ID
     name: str                     # 逻辑名称
     display_name: str              # 展示名称
     metric_type: str               # basic/derived/composite
@@ -42,7 +43,9 @@ class MetricRef:
     derivation_type: str           # none/yoy/mom/yoy_growth/mom_growth
     base_metric_id: Optional[str] = None  # 基础指标ID（派生类型）
     source_view_id: Optional[str] = None   # 所属视图ID
-    filters: Optional[List[Dict]] = None   # 默认过滤条件
+    source_dataset_id: Optional[str] = None  # 所属物理表ID
+    filters: Optional[Any] = None   # 默认过滤条件
+    is_semantic_enabled: bool = True  # 是否参与自然语言问数召回
 
 
 @dataclass
@@ -106,10 +109,12 @@ class SemanticContext:
 
         # 元数据缓存
         self._metrics: Dict[str, MetricRef] = {}
+        self._metric_id_to_name: Dict[str, str] = {}
         self._dimensions: Dict[str, FieldRef] = {}
         self._views: Dict[str, ViewRef] = {}
         self._datasets: Dict[str, DatasetRef] = {}
         self._datasources: Dict[str, DataSource] = {}
+        self._used_dataset_id: Optional[str] = None
         self._time_formats: TimeFormatConfig = TimeFormatConfig()
 
         # 反向索引（用于 display_name -> name 查找）
@@ -136,6 +141,7 @@ class SemanticContext:
         # 加载指标
         for m in self.db.query(Metric).all():
             ref = MetricRef(
+                id=m.id,
                 name=m.name,
                 display_name=m.display_name or m.name,
                 metric_type=m.metric_type,
@@ -146,10 +152,14 @@ class SemanticContext:
                 derivation_type=m.derivation_type or "none",
                 base_metric_id=m.base_metric_id,
                 source_view_id=m.view_id,
+                source_dataset_id=m.dataset_id,
                 filters=m.filters,
+                is_semantic_enabled=getattr(m, "is_semantic_enabled", True),
             )
             self._metrics[m.name] = ref
-            self._display_name_to_metric[ref.display_name] = m.name
+            self._metric_id_to_name[m.id] = m.name
+            if ref.is_semantic_enabled:
+                self._display_name_to_metric[ref.display_name] = m.name
 
         # 加载维度
         for d in self.db.query(Dimension).all():
@@ -190,6 +200,10 @@ class SemanticContext:
                     col.get("alias"),
                     col.get("source_column"),
                 }
+                source_table = col.get("source_table")
+                source_column = col.get("source_column")
+                if source_table and source_column:
+                    index_keys.add(f"{source_table}.{source_column}")
                 for key in index_keys:
                     if key:
                         self._view_columns_index[key] = (v.id, col)
@@ -319,6 +333,18 @@ class SemanticContext:
 
         return None
 
+    def resolve_metric_by_id(self, metric_id: str) -> Optional[MetricRef]:
+        """根据指标ID获取指标引用"""
+        metric_name = self._metric_id_to_name.get(metric_id)
+        if not metric_name:
+            return None
+        return self._metrics.get(metric_name)
+
+    def get_used_dataset(self) -> Optional[DatasetRef]:
+        if not self._used_dataset_id:
+            return None
+        return self._datasets.get(self._used_dataset_id)
+
     def resolve_view(self, view_id: str) -> Optional[ViewRef]:
         """根据视图ID获取视图引用"""
         return self._views.get(view_id)
@@ -358,6 +384,29 @@ class SemanticContext:
 
         return column_name
 
+    def _resolve_metric_source(self, metric_ref: MetricRef, seen: Optional[set[str]] = None) -> Tuple[Optional[ViewRef], Optional[DatasetRef]]:
+        seen = seen or set()
+        if metric_ref.id in seen:
+            return None, None
+        seen.add(metric_ref.id)
+
+        if metric_ref.source_view_id:
+            view = self.resolve_view(metric_ref.source_view_id)
+            if view:
+                return view, None
+
+        if metric_ref.source_dataset_id:
+            dataset = self.resolve_dataset(metric_ref.source_dataset_id)
+            if dataset:
+                return None, dataset
+
+        if metric_ref.base_metric_id:
+            base_metric = self.resolve_metric_by_id(metric_ref.base_metric_id)
+            if base_metric:
+                return self._resolve_metric_source(base_metric, seen)
+
+        return None, None
+
     def get_used_view(self, mql: Dict[str, Any]) -> Tuple[Optional[ViewRef], Optional[str]]:
         """
         确定 MQL 使用的视图和数据源
@@ -366,6 +415,7 @@ class SemanticContext:
             (view_ref, datasource_id) 或 (None, None)
         """
         selected_view_id = mql.get("view_id") or (mql.get("metadata") or {}).get("view_id")
+        self._used_dataset_id = None
         if selected_view_id:
             view = self.resolve_view(selected_view_id)
             if view:
@@ -383,11 +433,12 @@ class SemanticContext:
             if not metric_ref:
                 continue
 
-            # 优先从 view_id 查找
-            if metric_ref.source_view_id:
-                view = self.resolve_view(metric_ref.source_view_id)
-                if view:
-                    return view, view.datasource_id
+            source_view, source_dataset = self._resolve_metric_source(metric_ref)
+            if source_view:
+                return source_view, source_view.datasource_id
+            if source_dataset:
+                self._used_dataset_id = source_dataset.id
+                return None, source_dataset.datasource_id
 
             # 从 dataset_id 查找
             # 需要遍历 datasets 找到关联的
@@ -418,7 +469,7 @@ class SemanticContext:
                     return view, view.datasource_id
 
         # 默认返回第一个视图
-        if self._views:
+        if self._views and (mql.get("dimensions") or mql.get("fields")):
             first_view = list(self._views.values())[0]
             return first_view, first_view.datasource_id
 

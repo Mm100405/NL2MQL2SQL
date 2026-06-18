@@ -39,6 +39,11 @@
           </a-tag>
           <span v-else style="color: var(--color-text-4)">未配置</span>
         </template>
+        <template #semantic_enabled="{ record }">
+          <a-tag :color="record.is_semantic_enabled === false ? 'gray' : 'green'">
+            {{ record.is_semantic_enabled === false ? '不召回' : '参与' }}
+          </a-tag>
+        </template>
         <template #actions="{ record }">
           <a-space :size="4">
             <a-button type="text" size="small" @click="handleViewLineage(record)">
@@ -150,7 +155,9 @@
                     <a-form-item field="measure_column" label="度量字段" required>
                       <a-select v-model="form.measure_column" placeholder="选择字段" allow-search allow-clear>
                         <a-option v-for="col in availableColumns" :key="col.name" :value="col.name">
-                          {{ col.name }} <span v-if="col.comment || col.description" style="color: var(--color-text-3)">（{{ col.comment || col.description }}）</span>
+                          {{ col.display_name || col.name }}
+                          <span v-if="col.source_table || col.source_column" style="color: var(--color-text-3)">（{{ col.source_table }}.{{ col.source_column || col.name }}）</span>
+                          <span v-else-if="col.comment || col.description" style="color: var(--color-text-3)">（{{ col.comment || col.description }}）</span>
                         </a-option>
                       </a-select>
                     </a-form-item>
@@ -173,7 +180,9 @@
                   <a-form-item label="指标日期标识">
                     <a-select v-model="form.date_column_id" placeholder="选择日期字段" allow-search allow-clear>
                       <a-option v-for="col in availableColumns.filter(c => c.type?.toLowerCase().includes('date') || c.type?.toLowerCase().includes('time'))" :key="col.name" :value="col.name">
-                        {{ col.name }} <span v-if="col.comment || col.description" style="color: var(--color-text-3)">（{{ col.comment || col.description }}）</span>
+                        {{ col.display_name || col.name }}
+                        <span v-if="col.source_table || col.source_column" style="color: var(--color-text-3)">（{{ col.source_table }}.{{ col.source_column || col.name }}）</span>
+                        <span v-else-if="col.comment || col.description" style="color: var(--color-text-3)">（{{ col.comment || col.description }}）</span>
                       </a-option>
                     </a-select>
                   </a-form-item>
@@ -205,18 +214,7 @@
               </a-form-item>
 
               <a-form-item label="业务限定">
-                <a-button type="outline" size="small" @click="addFilter"><template #icon><icon-plus /></template>添加筛选条件</a-button>
-                <div v-for="(f, i) in form.filters" :key="i" class="filter-item" style="margin-top: 8px; display: flex; gap: 8px">
-                   <a-input v-model="f.field" placeholder="字段" style="width: 100px" />
-                   <a-select v-model="f.operator" style="width: 80px">
-                     <a-option value="=">=</a-option>
-                     <a-option value=">">></a-option>
-                     <a-option value="<"><</a-option>
-                     <a-option value="IN">IN</a-option>
-                   </a-select>
-                   <a-input v-model="f.value" placeholder="值" style="flex: 1" />
-                   <a-button type="text" status="danger" @click="removeFilter(i)"><icon-delete /></a-button>
-                </div>
+                <FilterEditor v-model="filterGroups" :dimensions="filterFieldOptions" />
               </a-form-item>
 
               <a-form-item label="衍生方式">
@@ -278,6 +276,12 @@
               <a-form-item label="同义词">
                 <a-input-tag v-model="form.synonyms" placeholder="输入同义词回车" />
               </a-form-item>
+              <a-form-item label="参与自然语言问数召回">
+                <a-switch v-model="form.is_semantic_enabled" />
+                <div class="form-help" style="color: var(--color-text-3); font-size: 12px; margin-top: 4px;">
+                  关闭后仍可作为基础指标被派生指标引用，但不会直接出现在问数候选指标中。
+                </div>
+              </a-form-item>
             </div>
           </a-col>
         </a-row>
@@ -295,6 +299,8 @@ import { getMetrics, getDatasets, getDataset, createMetric, updateMetric, delete
 import { getViews } from '@/api/views'
 import type { Metric, Dataset, DataSource, CommonColumnInfo } from '@/api/types'
 import type { View } from '@/api/views'
+import FilterEditor from '@/components/FilterEditor.vue'
+import type { FeCondition, FeGroup, FeSubGroup } from '@/components/FilterEditor.vue'
 
 const router = useRouter()
 const loading = ref(false)
@@ -319,7 +325,7 @@ const selectedDatasourceId = ref('')
 const form = reactive({
   name: '',
   display_name: '',
-  metric_type: 'basic' as const,
+  metric_type: 'basic' as Metric['metric_type'],
   source_type: 'physical' as 'physical' | 'view',  // 数据来源类型
   dataset_id: '',
   view_id: '',  // 视图ID
@@ -336,8 +342,12 @@ const form = reactive({
   unit: '',
   synonyms: [] as string[],
   description: '',
-  filters: [] as any[]
+  filters: [] as any,
+  is_semantic_enabled: true
 })
+
+const emptyFilterGroups = (): FeGroup[] => ([{ operator: 'AND', items: [{ type: 'condition', field: '', op: '=', value: '' }] }])
+const filterGroups = ref<FeGroup[]>(emptyFilterGroups())
 
 const derivationTypes = [
   { label: '无', value: 'none' },
@@ -361,7 +371,11 @@ const availableColumns = computed((): CommonColumnInfo[] => {
     return (view?.columns || []).map(col => ({
       name: col.name,
       type: col.type,
-      comment: col.description
+      comment: col.source_comment,
+      description: col.description,
+      display_name: col.display_name || col.name,
+      source_table: col.source_table,
+      source_column: col.source_column
     }))
   }
   return []
@@ -409,13 +423,16 @@ const currentDatasetDimensions = computed(() => {
 })
 
 // Watch for changes to base metric or formula to auto-inherit
-watch(() => [form.base_metric_id, form.calculation_formula, form.metric_type], () => {
+watch(() => [form.base_metric_id, form.calculation_formula, form.metric_type], async () => {
+  if (form.metric_type === 'derived' && form.base_metric_id) {
+    await ensureBaseMetricSourceLoaded(form.base_metric_id)
+  }
+
   if (form.metric_type !== 'basic') {
     const inherited = currentDatasetDimensions.value.map(d => d.id)
     if (inherited.length > 0 && form.analysis_dimensions.length === 0) {
       form.analysis_dimensions = [...inherited]
     } else if (form.analysis_dimensions.length > 0) {
-      // Keep only those that are still valid
       const validIds = new Set(inherited)
       form.analysis_dimensions = form.analysis_dimensions.filter(id => validIds.has(id))
     }
@@ -433,6 +450,7 @@ const columns = [
   { title: '类型', slotName: 'metric_type', width: 100, align: 'center' },
   { title: '聚合', slotName: 'aggregation', width: 100, align: 'center' },
   { title: '分析维度', slotName: 'analysis_dimensions', ellipsis: true, width: 150 },
+  { title: '问数召回', slotName: 'semantic_enabled', width: 100, align: 'center' },
   { title: '单位', dataIndex: 'unit', width: 80 },
   { title: '操作', slotName: 'actions', width: 220, fixed: 'right' }
 ]
@@ -528,12 +546,158 @@ async function handleDatasetChange(datasetId: string) {
   }
 }
 
-function addFilter() {
-  form.filters.push({ field: '', operator: '=', value: '' })
+const filterFieldOptions = computed((): CommonColumnInfo[] => {
+  const byName = new Map<string, CommonColumnInfo>()
+
+  const pushColumn = (col: CommonColumnInfo) => {
+    const name = col.name || col.source_column
+    if (!name) return
+    byName.set(name, {
+      ...col,
+      name,
+      display_name: col.display_name || name
+    })
+  }
+
+  if (form.metric_type === 'basic') {
+    availableColumns.value.forEach(pushColumn)
+  }
+
+  if (form.metric_type === 'derived') {
+    const base = metrics.value.find(m => m.id === form.base_metric_id)
+    if (base?.dataset_id) {
+      const dataset = datasets.value.find(d => d.id === base.dataset_id)
+      ;(dataset?.columns || []).forEach(col => pushColumn({
+        name: col.name,
+        type: col.type,
+        comment: col.comment,
+        display_name: col.comment || col.name
+      }))
+    }
+    if (base?.view_id) {
+      const view = views.value.find(v => v.id === base.view_id)
+      ;(view?.columns || []).forEach(col => pushColumn({
+        name: col.name,
+        type: col.type,
+        description: col.description,
+        display_name: col.display_name || col.name,
+        source_table: col.source_table,
+        source_column: col.source_column
+      }))
+    }
+    currentDatasetDimensions.value.forEach(d => pushColumn({
+      name: d.name,
+      type: d.data_type,
+      display_name: d.display_name || d.name,
+      description: d.description,
+      source_column: d.physical_column
+    }))
+  }
+
+  return Array.from(byName.values())
+})
+
+function isNonEmptyValue(value: any) {
+  return value !== undefined && value !== null && !(typeof value === 'string' && value.trim() === '')
 }
 
-function removeFilter(index: number) {
-  form.filters.splice(index, 1)
+function isNullOperator(op: string) {
+  return ['IS NULL', 'IS NOT NULL'].includes((op || '').toUpperCase())
+}
+
+function isListOperator(op: string) {
+  return ['IN', 'NOT IN'].includes((op || '').toUpperCase())
+}
+
+function parseListValue(value: any) {
+  if (Array.isArray(value)) return value
+  if (typeof value !== 'string') return value === undefined || value === null || value === '' ? [] : [value]
+  return value
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean)
+}
+
+function buildFilterCondition(item: FeCondition | FeSubGroup): any | null {
+  if (item.type === 'condition') {
+    const op = item.op || '='
+    if (!item.field || (!isNullOperator(op) && !isNonEmptyValue(item.value))) return null
+    const condition: any = { field: item.field, op }
+    if (isListOperator(op)) {
+      condition.value = parseListValue(item.value)
+    } else if (!isNullOperator(op)) {
+      condition.value = item.value
+    }
+    return condition
+  }
+
+  const conditions = item.items
+    .map(child => buildFilterCondition(child))
+    .filter(Boolean)
+  if (!conditions.length) return null
+  return { operator: item.operator || 'AND', conditions }
+}
+
+function buildFiltersFromGroups(groups: FeGroup[]): any {
+  const validGroups = groups
+    .map(group => {
+      const conditions = group.items
+        .map(item => buildFilterCondition(item))
+        .filter(Boolean)
+      return conditions.length ? { operator: group.operator || 'AND', conditions } : null
+    })
+    .filter(Boolean)
+
+  if (!validGroups.length) return []
+  if (validGroups.length === 1) return validGroups[0]
+  return { operator: 'AND', conditions: validGroups }
+}
+
+function toFilterItem(node: any): FeCondition | FeSubGroup | null {
+  if (!node || typeof node !== 'object') return null
+  if ('field' in node) {
+    const op = node.op || node.operator || '='
+    const value = isListOperator(op) ? parseListValue(node.value) : Array.isArray(node.value) ? node.value.join(',') : node.value
+    return { type: 'condition', field: node.field || '', op, value: value ?? '' }
+  }
+  const children = (node.items || node.conditions || [])
+    .map((child: any) => toFilterItem(child))
+    .filter(Boolean) as Array<FeCondition | FeSubGroup>
+  if (!children.length) return null
+  return { type: 'subgroup', operator: node.operator || 'AND', items: children }
+}
+
+function filtersToGroups(filters: any): FeGroup[] {
+  if (!filters || (Array.isArray(filters) && filters.length === 0)) {
+    return emptyFilterGroups()
+  }
+
+  if (Array.isArray(filters)) {
+    const items = filters
+      .map(item => toFilterItem(item))
+      .filter(Boolean) as Array<FeCondition | FeSubGroup>
+    return items.length ? [{ operator: 'AND', items }] : emptyFilterGroups()
+  }
+
+  if (typeof filters === 'object') {
+    const children = filters.items || filters.conditions || []
+    const items = children
+      .map((item: any) => toFilterItem(item))
+      .filter(Boolean) as Array<FeCondition | FeSubGroup>
+    return items.length ? [{ operator: filters.operator || 'AND', items }] : emptyFilterGroups()
+  }
+
+  return emptyFilterGroups()
+}
+
+async function ensureBaseMetricSourceLoaded(metricId: string) {
+  const base = metrics.value.find(m => m.id === metricId)
+  if (!base) return
+  if (base.dataset_id) {
+    const dataset = await ensureDatasetLoaded(base.dataset_id)
+    await loadDatasets(dataset.datasource_id)
+    await ensureDatasetColumns(base.dataset_id)
+  }
 }
 
 async function fetchData() {
@@ -607,8 +771,10 @@ async function handleEdit(record: Metric) {
     unit: record.unit || '',
     synonyms: record.synonyms || [],
     description: record.description || '',
-    filters: record.filters || []
+    filters: record.filters || [],
+    is_semantic_enabled: record.is_semantic_enabled !== false
   })
+  filterGroups.value = filtersToGroups(record.filters)
   
   // 设置数据源ID（如果是物理表）
   if (sourceType === 'physical' && record.dataset_id) {
@@ -627,13 +793,18 @@ async function handleSubmit() {
   const valid = await formRef.value?.validate()
   if (valid) return
 
+  const payload = {
+    ...form,
+    filters: form.metric_type === 'derived' ? buildFiltersFromGroups(filterGroups.value) : form.filters
+  }
+
   submitting.value = true
   try {
     if (isEdit.value) {
-      await updateMetric(editingId.value, form)
+      await updateMetric(editingId.value, payload)
       Message.success('更新成功')
     } else {
-      await createMetric(form)
+      await createMetric(payload)
       Message.success('创建成功')
     }
     modalVisible.value = false
@@ -666,8 +837,10 @@ function resetForm() {
     unit: '',
     synonyms: [],
     description: '',
-    filters: []
+    filters: [],
+    is_semantic_enabled: true
   })
+  filterGroups.value = emptyFilterGroups()
   selectedDatasourceId.value = ''
 }
 

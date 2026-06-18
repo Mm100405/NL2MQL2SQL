@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List
+from collections import defaultdict
+from typing import Any, Dict, List, Tuple
 import re
 import urllib.parse
 
@@ -133,35 +134,52 @@ def fetch_tables_and_columns(datasource_type: str, connection_config: Dict[str, 
         engine = create_datasource_engine(datasource_type, connection_config)
         with engine.connect() as conn:
             rows = conn.execute(text("""
-                SELECT table_name, table_schema
+                SELECT DISTINCT table_name, table_schema
                 FROM information_schema.tables
                 WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
                   AND (:schema_filter = '' OR table_schema = :schema_filter)
+                  AND table_type IN ('BASE TABLE', 'VIEW')
                 ORDER BY table_schema, table_name
             """), {"schema_filter": schema_filter}).fetchall()
-            tables = []
+
+            table_keys: List[Tuple[str, str]] = []
+            seen_tables = set()
             for table_name, schema_name in rows:
-                columns_result = conn.execute(text("""
-                    SELECT column_name, data_type, is_nullable
-                    FROM information_schema.columns
-                    WHERE table_name = :table_name AND table_schema = :schema_name
-                    ORDER BY ordinal_position
-                """), {"table_name": table_name, "schema_name": schema_name}).fetchall()
-                tables.append({
+                key = (schema_name, table_name)
+                if key not in seen_tables:
+                    seen_tables.add(key)
+                    table_keys.append(key)
+
+            columns_result = conn.execute(text("""
+                SELECT table_schema, table_name, column_name, data_type, is_nullable
+                FROM information_schema.columns
+                WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+                  AND (:schema_filter = '' OR table_schema = :schema_filter)
+                ORDER BY table_schema, table_name, ordinal_position
+            """), {"schema_filter": schema_filter}).fetchall()
+
+            columns_by_table: Dict[Tuple[str, str], List[Dict[str, Any]]] = defaultdict(list)
+            table_key_set = set(table_keys)
+            for schema_name, table_name, column_name, data_type, is_nullable in columns_result:
+                key = (schema_name, table_name)
+                if key not in table_key_set:
+                    continue
+                columns_by_table[key].append({
+                    "name": column_name,
+                    "type": data_type,
+                    "nullable": is_nullable == "YES",
+                    "comment": "",
+                })
+
+            return [
+                {
                     "name": table_name,
                     "physical_name": table_name,
                     "schema_name": schema_name,
-                    "columns": [
-                        {
-                            "name": col[0],
-                            "type": col[1],
-                            "nullable": col[2] == "YES",
-                            "comment": "",
-                        }
-                        for col in columns_result
-                    ],
-                })
-            return tables
+                    "columns": columns_by_table.get((schema_name, table_name), []),
+                }
+                for schema_name, table_name in table_keys
+            ]
 
     if datasource_type == DataSourceType.mysql.value:
         engine = create_datasource_engine(datasource_type, connection_config)

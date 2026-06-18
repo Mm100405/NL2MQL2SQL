@@ -169,7 +169,7 @@ const titleMap: Record<string, string> = {
 
 const currentPageTitle = computed(() => {
   const key = selectedKeys.value[0]
-  return titleMap[key] || '管理中心'
+  return key ? titleMap[key] || '管理中心' : '管理中心'
 })
 
 // 监听路由变化

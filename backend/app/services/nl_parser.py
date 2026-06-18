@@ -687,17 +687,32 @@ def _build_metadata_strings(
     """
     # 优先使用传入的 ORM 对象，避免重复查 DB
     if metrics_objs is None:
-        metrics_query = db.query(Metric)
+        metrics_query = db.query(Metric).filter(Metric.is_semantic_enabled == True)
         view_id = context.get("view_id") if context else None
         if view_id:
-            metrics_query = metrics_query.filter(Metric.view_id == view_id)
-        if context and context.get("suggested_metrics"):
-            from sqlalchemy import or_
-            metrics_query = metrics_query.filter(or_(
-                Metric.name.in_(context["suggested_metrics"]),
-                Metric.display_name.in_(context["suggested_metrics"])
-            ))
-        metrics = metrics_query.all()
+            direct_metrics = metrics_query.filter(Metric.view_id == view_id).all()
+            view_metric_ids = {m.id for m in db.query(Metric).filter(Metric.view_id == view_id).all()}
+            metrics = list(direct_metrics)
+            seen_metric_ids = {m.id for m in metrics}
+            while view_metric_ids:
+                derived_metrics = metrics_query.filter(Metric.base_metric_id.in_(view_metric_ids)).all()
+                new_ids = set()
+                for metric in derived_metrics:
+                    if metric.id not in seen_metric_ids:
+                        metrics.append(metric)
+                        seen_metric_ids.add(metric.id)
+                        new_ids.add(metric.id)
+                if not new_ids:
+                    break
+                view_metric_ids = new_ids
+        else:
+            if context and context.get("suggested_metrics"):
+                from sqlalchemy import or_
+                metrics_query = metrics_query.filter(or_(
+                    Metric.name.in_(context["suggested_metrics"]),
+                    Metric.display_name.in_(context["suggested_metrics"])
+                ))
+            metrics = metrics_query.all()
     else:
         metrics = metrics_objs
 

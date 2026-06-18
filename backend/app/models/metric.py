@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, JSON, DateTime, ForeignKey, Enum
+from sqlalchemy import Column, String, Text, JSON, DateTime, ForeignKey, Enum, Boolean
 from datetime import datetime
 import uuid
 import enum
@@ -61,6 +61,7 @@ class Metric(Base):
     time_constraint = Column(Text, nullable=True)  # ⚠️ DEPRECATED: 使用 filters 代替
     analysis_dimensions = Column(JSON, nullable=True)  # List of dimension IDs
     filters = Column(JSON, nullable=True)  # Default filters [{field, operator, value}]
+    is_semantic_enabled = Column(Boolean, nullable=False, default=True)  # 是否参与自然语言问数召回
     synonyms = Column(JSON, nullable=True)  # Alternative names for NL recognition
     unit = Column(String(50), nullable=True)  # e.g., "元", "个", "%"
     format = Column(String(50), nullable=True)  # Display format
@@ -87,6 +88,7 @@ class Metric(Base):
             "time_constraint": self.time_constraint,
             "analysis_dimensions": self.analysis_dimensions or [],
             "filters": self.filters or [],
+            "is_semantic_enabled": self.is_semantic_enabled,
             "synonyms": self.synonyms or [],
             "unit": self.unit,
             "format": self.format,

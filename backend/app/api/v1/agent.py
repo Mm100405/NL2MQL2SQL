@@ -322,7 +322,7 @@ async def agent_query_stream(
                     context=request_context,
                     max_retries=3,
                     step_callback=streaming_step_callback,
-                    use_skills=True  # 启用已加载的 Skills
+                    use_skills=False
                 )
             )
 

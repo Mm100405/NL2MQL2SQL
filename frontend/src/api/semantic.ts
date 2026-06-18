@@ -75,7 +75,7 @@ export function getPhysicalTableSyncTask(taskId: string): Promise<PhysicalTableS
 }
 
 // ============ 指标管理 ============
-export function getMetrics(params?: { metric_type?: string; dataset_id?: string }): Promise<Metric[]> {
+export function getMetrics(params?: { metric_type?: string; dataset_id?: string; semantic_enabled?: boolean }): Promise<Metric[]> {
   return request.get('/semantic/metrics', { params })
 }
 

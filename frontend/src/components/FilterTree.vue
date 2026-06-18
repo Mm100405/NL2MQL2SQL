@@ -1,8 +1,8 @@
 <template>
-  <span v-if="isLeaf" class="filter-tree">
-    <a-tag size="small" color="arcoblue">{{ formatField(node.field) }}</a-tag>
-    <span class="filter-op">{{ node.op }}</span>
-    <a-tag size="small" color="orangered">{{ String(node.value) }}</a-tag>
+  <span v-if="leafNode" class="filter-tree">
+    <a-tag size="small" color="arcoblue">{{ formatField(leafNode.field) }}</a-tag>
+    <span class="filter-op">{{ leafNode.op }}</span>
+    <a-tag size="small" color="orangered">{{ String(leafNode.value) }}</a-tag>
   </span>
   <span v-else-if="conditions.length > 0 && depth < 10" class="filter-tree">
     <span v-if="!isRoot" class="filter-bracket">(</span>
@@ -34,11 +34,11 @@ export default defineComponent({
     depth: { type: Number, default: 0 }
   },
   computed: {
-    isLeaf(): boolean {
-      return 'field' in this.node && !Array.isArray((this.node as MQLFilterGroup).conditions)
+    leafNode(): MQLFilterCondition | null {
+      return 'field' in this.node ? this.node as MQLFilterCondition : null
     },
-    conditions(): any[] {
-      return (this.node as MQLFilterGroup).conditions || []
+    conditions(): Array<MQLFilterCondition | MQLFilterGroup> {
+      return 'conditions' in this.node ? this.node.conditions || [] : []
     },
     connectorClass(): string {
       return `filter-connector-${((this.node as MQLFilterGroup).operator || 'and').toLowerCase()}`

@@ -292,7 +292,7 @@ const generationMethodText = computed(() => {
 async function loadDataSources() {
   dataSources.value = await getDataSources()
   if (!form.datasource_id && dataSources.value.length) {
-    form.datasource_id = dataSources.value[0].id
+    form.datasource_id = dataSources.value[0]?.id || ''
     await loadProfiles()
   }
 }

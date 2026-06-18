@@ -132,15 +132,15 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Message } from '@arco-design/web-vue'
-import { 
-  getViews, 
-  deleteView, 
-  previewView, 
-  generateViewSQL, 
-  getCategoryStats, 
+import {
+  getViews,
+  deleteView,
+  previewView as previewViewApi,
+  generateViewSQL,
+  getCategoryStats,
   getCategoryTree,
   createCategory,
-  type ViewCategory 
+  type ViewCategory
 } from '@/api/views'
 import { getDataSources } from '@/api/semantic'
 import type { View } from '@/api/views'
@@ -161,6 +161,13 @@ const previewSql = ref('')
 const previewColumns = ref<any[]>([])
 const previewData = ref<any[]>([])
 
+interface CategoryTreeNode {
+  key: string
+  title: string
+  count: number
+  children?: CategoryTreeNode[]
+}
+
 // 分类表单
 const categoryForm = ref({
   name: '',
@@ -180,7 +187,7 @@ const columns = [
 
 // 分类树数据
 const categoryTree = computed(() => {
-  const tree = [
+  const tree: CategoryTreeNode[] = [
     {
       key: 'all',
       title: '全部视图',
@@ -189,10 +196,12 @@ const categoryTree = computed(() => {
     }
   ]
 
+  const root = tree[0]!
+
   // 添加定义的分类
   categories.value.forEach(cat => {
     if (!cat.parent_id) {
-      tree[0].children.push({
+      root.children!.push({
         key: cat.id,
         title: cat.name,
         count: views.value.filter(v => v.category_id === cat.id).length,
@@ -204,7 +213,7 @@ const categoryTree = computed(() => {
   // 添加"未分类"节点
   const unclassifiedCount = views.value.filter(v => !v.category_id).length
   if (unclassifiedCount > 0) {
-    tree[0].children.push({
+    root.children!.push({
       key: 'null',
       title: '未分类',
       count: unclassifiedCount
@@ -336,14 +345,14 @@ async function handlePreview(record: View) {
     previewSql.value = sqlResult.sql
     
     // 获取数据
-    const result = await previewView(record.id, 100)
-    previewColumns.value = result.columns.map(c => ({
+    const result = await previewViewApi(record.id, { page_size: 100 })
+    previewColumns.value = result.columns.map((c: string) => ({
       title: c,
       dataIndex: c
     }))
-    previewData.value = result.data.map((row, idx) => {
+    previewData.value = result.data.map((row: any[], idx: number) => {
       const obj: Record<string, any> = { _key: idx }
-      result.columns.forEach((col, i) => {
+      result.columns.forEach((col: string, i: number) => {
         obj[col] = row[i]
       })
       return obj
